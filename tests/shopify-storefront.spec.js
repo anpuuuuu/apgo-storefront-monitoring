@@ -22,6 +22,9 @@ const BLOCKED_HOSTS = [
   'analytics.tiktok.com',
   'clarity.ms',
   'hotjar.com',
+  /* Layer-3 error beacons: the snippet already ignores APGO-HealthCheck UAs,
+     this is defense-in-depth so synthetic runs can never write error rows. */
+  'workers.dev',
 ];
 
 /* The page may navigate right after add-to-cart (cart drawer, follow-up
@@ -52,6 +55,14 @@ for (const site of shopifySites) {
       const resp = await page.goto(`${site.baseUrl}/`, { waitUntil: 'domcontentloaded' });
       expect(resp, 'no response from homepage').toBeTruthy();
       expect(resp.status(), 'homepage HTTP status').toBeLessThan(400);
+
+      /* Flip expectErrorMonitor in sites.json once the Layer-3 snippet is
+         live — then a missing/broken snippet (e.g. Shogun rewriting a
+         layout) fails the hourly run instead of going unnoticed. */
+      if (site.expectErrorMonitor) {
+        const em = await page.evaluate(() => window.__apgoEM === 1);
+        expect(em, 'Layer-3 error-monitor snippet missing or failed to init').toBe(true);
+      }
     });
 
     test('cart API accepts a known variant', async ({ request }) => {

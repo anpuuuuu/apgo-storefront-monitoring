@@ -1,0 +1,45 @@
+# Layer 1: uptime probe. Nominal cadence is every 10 minutes, but GitHub cron
+# is best-effort — expect 10-15 min in practice, occasionally a skipped slot.
+# Off-peak minutes (:03, :13, ...) chosen because :00/:30 are the most delayed.
+name: Uptime
+
+on:
+  schedule:
+    - cron: '3-59/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_fail:
+        description: '强制模拟失败(测试 Telegram 告警链路,不打真站)'
+        type: boolean
+        default: false
+  push:
+    branches: [main, 'claude/**']
+    paths:
+      - '.github/workflows/uptime.yml'
+      - 'monitoring/scripts/uptime-check.sh'
+      - 'monitoring/alerts-config.json'
+      - 'monitoring/sites.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe sites
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          FORCE_FAIL: ${{ inputs.force_fail || 'false' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash monitoring/scripts/uptime-check.sh

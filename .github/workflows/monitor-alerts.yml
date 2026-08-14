@@ -1,0 +1,73 @@
+# Layers 3+4: hourly digests. Two independent jobs — a Layer-3 failure never
+# blocks Layer 4 and vice versa. Both jobs skip cleanly (green, with a notice)
+# while their secrets are unset, so this can merge before setup finishes.
+# :19 chosen to stay clear of the :07 synthetic run and cron rush minutes.
+name: Error and metrics alerts
+
+on:
+  schedule:
+    - cron: '19 * * * *'
+  workflow_dispatch:
+    inputs:
+      validate_ga4:
+        description: '第4层门槛验证:只列出 GA4 realtime 事件名'
+        type: boolean
+        default: false
+      simulate_zero:
+        description: '第4层测试:模拟加购为0走一遍告警逻辑'
+        type: boolean
+        default: false
+      min_sessions_override:
+        description: '第3层测试:临时压低告警门槛(如 1)'
+        type: string
+        default: ''
+  push:
+    branches: [main, 'claude/**']
+    paths:
+      - '.github/workflows/monitor-alerts.yml'
+      - 'monitoring/scripts/js-error-alert.mjs'
+      - 'monitoring/scripts/ga4-anomaly.mjs'
+      - 'monitoring/alerts-config.json'
+
+permissions:
+  contents: read
+
+jobs:
+  js-error-alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Digest JS errors
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MIN_SESSIONS_OVERRIDE: ${{ inputs.min_sessions_override }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node monitoring/scripts/js-error-alert.mjs
+
+  ga4-anomaly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check add_to_cart anomaly
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VALIDATE_GA4: ${{ inputs.validate_ga4 || 'false' }}
+          SIMULATE_ZERO: ${{ inputs.simulate_zero || 'false' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node monitoring/scripts/ga4-anomaly.mjs

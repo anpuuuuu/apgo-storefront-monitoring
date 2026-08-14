@@ -1,0 +1,43 @@
+# Deploys the Layer-3 error-beacon worker to Cloudflare. Runs on demand and
+# whenever the worker source changes on main. Skips cleanly (green, with a
+# notice) until Wade has added the CF secrets — see monitoring/docs/cloudflare-setup.md.
+name: Deploy error-monitor worker
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'monitoring/cloudflare/worker/**'
+      - '.github/workflows/deploy-worker.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        id: gate
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_API_TOKEN" ] || [ -z "$CF_ACCOUNT_ID" ]; then
+            echo "::notice::CF_API_TOKEN / CF_ACCOUNT_ID 未设定,跳过部署(设置步骤见 monitoring/docs/cloudflare-setup.md)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy worker
+        if: steps.gate.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: monitoring/cloudflare/worker

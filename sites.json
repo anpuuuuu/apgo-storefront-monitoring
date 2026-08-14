@@ -5,6 +5,7 @@
       "name": "APGO Malaysia (Shopify)",
       "type": "shopify",
       "enabled": true,
+      "expectErrorMonitor": false,
       "baseUrl": "https://apgo.my",
       "products": [
         {
