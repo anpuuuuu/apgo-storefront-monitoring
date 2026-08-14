@@ -1,0 +1,40 @@
+{
+  "sites": [
+    {
+      "id": "apgo-my",
+      "name": "APGO Malaysia (Shopify)",
+      "type": "shopify",
+      "enabled": true,
+      "baseUrl": "https://apgo.my",
+      "products": [
+        {
+          "handle": "apgo-atomic-car-nano-coating-standard",
+          "note": "Core coating product, v3 template, deep stock. May render a gift picker."
+        },
+        {
+          "handle": "apgo-pro-car-wash-towel-l-160cm-x-60cm",
+          "note": "Accessory, v3 template without gift picker — the exact page type of the Aug 2026 dead add-to-cart bug."
+        }
+      ],
+      "apiCheckVariantId": 46975928795290
+    },
+    {
+      "id": "apgo-tw",
+      "name": "APGO Taiwan (Shopify)",
+      "type": "shopify",
+      "enabled": false,
+      "baseUrl": "https://apgo.com.tw",
+      "products": [],
+      "apiCheckVariantId": null,
+      "note": "Placeholder. To enable: set enabled=true, add 1-2 long-lived product handles and a variant id."
+    },
+    {
+      "id": "laundry-subscription",
+      "name": "APGO Laundry Subscription (self-hosted)",
+      "type": "custom",
+      "enabled": false,
+      "baseUrl": "",
+      "note": "Placeholder. Needs its own spec file in tests/ covering the subscription flow, plus a /health endpoint check."
+    }
+  ]
+}
