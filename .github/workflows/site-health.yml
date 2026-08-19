@@ -31,7 +31,10 @@ jobs:
   check:
     name: Storefront checks
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25 not 15: on 2026-08-19 a slow runner spent 15 min just downloading
+    # Chromium and the job died at the cap; tests themselves also stretch
+    # to ~10 min worst-case now that cart checks retry blips with real gaps.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: monitoring
