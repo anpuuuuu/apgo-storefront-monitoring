@@ -25,7 +25,23 @@ async function main() {
     const walk = (suite, crumbs) => {
       for (const spec of suite.specs || []) {
         total += 1;
-        if (spec.ok === false) failed.push([...crumbs, spec.title].join(' › '));
+        if (spec.ok === false) {
+          const title = [...crumbs, spec.title].join(' › ');
+          /* First meaningful line of the final attempt's error, so the group
+             can triage (e.g. "Received: 503") without opening the run. */
+          let detail = '';
+          try {
+            const results = (spec.tests && spec.tests[0] && spec.tests[0].results) || [];
+            const last = results[results.length - 1];
+            const raw = ((last && last.error && last.error.message) || '').replace(
+              /\[[0-9;]*m/g,
+              ''
+            );
+            detail = raw.split('\n').find((l) => l.trim()) || '';
+            if (detail.length > 110) detail = `${detail.slice(0, 110)}…`;
+          } catch (_) {}
+          failed.push(detail ? `${title}\n   ↳ ${detail}` : title);
+        }
       }
       for (const child of suite.suites || []) walk(child, [...crumbs, child.title]);
     };
@@ -40,6 +56,7 @@ async function main() {
     ...(failed.length ? failed.map((f) => `❌ ${f}`) : ['(未能定位具体失败项，请看 run 日志)']),
     '',
     total ? `共 ${total} 项检查，${failed.length} 项未通过` : '',
+    '💡 若下一轮巡检自动恢复，多为平台短暂抖动，可不处理',
     SHORT_SHA ? `Commit: ${SHORT_SHA}` : '',
     RUN_URL ? `详情: ${RUN_URL}` : '',
   ].filter(Boolean);

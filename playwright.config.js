@@ -2,7 +2,9 @@ const { defineConfig } = require('@playwright/test');
 
 module.exports = defineConfig({
   testDir: './tests',
-  timeout: 90_000,
+  /* Generous: the cart checks retry writes with real gaps (see spec) so a
+     ~1-min Shopify blip doesn't page anyone; worst case needs ~2 min. */
+  timeout: 150_000,
   retries: 1,
   workers: 2,
   reporter: [['line'], ['json', { outputFile: 'results.json' }]],

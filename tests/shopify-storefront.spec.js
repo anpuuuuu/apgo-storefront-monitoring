@@ -67,10 +67,29 @@ for (const site of shopifySites) {
 
     test('cart API accepts a known variant', async ({ request }) => {
       test.skip(!site.apiCheckVariantId, 'no apiCheckVariantId configured for this site');
-      const add = await request.post(`${site.baseUrl}/cart/add.js`, {
-        data: { items: [{ id: site.apiCheckVariantId, quantity: 1 }] },
-      });
-      expect(add.status(), '/cart/add.js HTTP status').toBeLessThan(400);
+      /* Shopify's cart-write backend can 503 for ~a minute (seen 2026-08-19,
+         self-healed). Retry 5xx/network errors with real 20s gaps so only a
+         sustained outage alerts; a 4xx means a config problem (dead variant)
+         and fails immediately. */
+      let add = null;
+      let attempt;
+      for (attempt = 1; attempt <= 3; attempt++) {
+        if (attempt > 1) await new Promise((r) => setTimeout(r, 20_000));
+        try {
+          add = await request.post(`${site.baseUrl}/cart/add.js`, {
+            data: { items: [{ id: site.apiCheckVariantId, quantity: 1 }] },
+          });
+        } catch (_) {
+          add = null;
+          continue;
+        }
+        if (add.status() < 500) break;
+      }
+      expect(add, '/cart/add.js unreachable (network error on 3 attempts over ~40s)').toBeTruthy();
+      expect(
+        add.status(),
+        `/cart/add.js HTTP status (final of ${Math.min(attempt, 3)} attempt(s))`
+      ).toBeLessThan(400);
       const cart = await request.get(`${site.baseUrl}/cart.js`);
       expect(cart.ok(), '/cart.js readable').toBeTruthy();
       const json = await cart.json();
@@ -114,12 +133,31 @@ for (const site of shopifySites) {
 
         await addBtn.click();
 
-        await expect
-          .poll(() => cartItemCount(page), {
-            timeout: 20_000,
-            message: 'cart item_count did not increase after clicking Add to cart',
-          })
-          .toBeGreaterThan(0);
+        /* One in-test write retry: a ~1-min Shopify cart-write blip
+           (2026-08-19: POST /cart/add.js 503ed, self-healed) must not page
+           anyone. Still empty after 20s → pause 10s, click again, poll 20s
+           more; with Playwright's own retry this tolerates ~2 min of blip.
+           A second click can at worst add a duplicate line to a throwaway
+           session cart. */
+        let count = 0;
+        const pollCart = async (ms) => {
+          const deadline = Date.now() + ms;
+          while (Date.now() < deadline) {
+            count = await cartItemCount(page);
+            if (count > 0) return true;
+            await page.waitForTimeout(1_000);
+          }
+          return false;
+        };
+        if (!(await pollCart(20_000))) {
+          await page.waitForTimeout(10_000);
+          if (await addBtn.isVisible().catch(() => false)) await addBtn.click();
+          await pollCart(20_000);
+        }
+        expect(
+          count,
+          'cart item_count did not increase after clicking Add to cart (2 clicks ~30s apart)'
+        ).toBeGreaterThan(0);
       });
     }
   });

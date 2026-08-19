@@ -24,6 +24,16 @@
 
 对 `sites.json` 里每个 `enabled` 的 Shopify 站跑三项：首页可访问、Cart API（`POST /cart/add.js` → 验证 `item_count`）、**真浏览器加购**（处理赠品选择器 → 点按钮 → 验证购物车）。加购不扣库存、不产生订单；屏蔽 GA4/Meta/TikTok 等分析请求不污染数据；UA 带 `APGO-HealthCheck` 标记。失败时 Telegram 告警 + 上传 trace/截图 artifact（7 天）。
 
+### 第 2 层告警分诊速查
+
+| 告警里的失败项 | 多半是什么 | 要做什么 |
+|---|---|---|
+| `/cart/add.js HTTP status` 且详情是 5xx | Shopify 后端短暂抖动（检查已内建 ~40 秒重试，仍失败说明还在持续） | 等下一轮；连续 ≥2 轮失败才需要排查 |
+| `Sold out — replace this monitoring product` | 监控用的商品售罄/下架了 | 换 `sites.json` 里的 handle，不是站点故障 |
+| `cart item_count did not increase` | 前端加购真的坏了（8 月 bug 同类型），或写入接口持续故障 | 手机开商品页实测加购；再对照 cart API 项区分前端/后端 |
+
+（2026-08-19 曾发生 `/cart/add.js` 503 约 1 分钟后自愈的真实案例，当时的检查重试间隔太密导致告警；现已拉开重试间隔，同类抖动不再响铃。）
+
 ## 第 3 层：前端 JS 报错监控（自建，无 Sentry）
 
 - `snippets/apgo-error-monitor.liquid`（~2KB，`<head>` 最顶端）捕获 `window.onerror` + `unhandledrejection`
