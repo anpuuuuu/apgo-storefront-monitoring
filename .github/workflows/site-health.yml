@@ -55,7 +55,12 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('monitoring/package-lock.json') }}
 
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        # Ubuntu's azure apt mirror sometimes hangs with no timeout and eats
+        # the whole job (2026-08-19: two runs died this way). Give --with-deps
+        # 5 minutes, then fall back to browser-only: the runner image already
+        # ships Chromium's required libs; apt mostly adds CJK fonts, which
+        # only failure screenshots would miss.
+        run: timeout 300 npx playwright install --with-deps chromium || npx playwright install chromium
 
       - name: Run health checks
         run: npx playwright test
