@@ -25,15 +25,30 @@ for (const site of sites) {
         const fixture = site.fixtures.detergentPromo;
         const variants = Object.values(fixture.variants).slice(0, 3);
         await addItems(monitorPage, variants.map((id) => ({ id, quantity: 2 })));
-        await monitorPage.waitForTimeout(6_000);
+        // AIOD's gift manager runs on the storefront/cart page. Loading the
+        // cart before asserting allows its normal customer-facing automation
+        // to finish instead of inspecting the pre-app Cart API response.
+        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
+        await monitorPage.waitForTimeout(8_000);
         const cart = await cartJson(monitorPage);
+        console.log(JSON.stringify({
+          checkpoint: 'detergent-6-plus-3',
+          market: market.id,
+          currency: cart.currency,
+          items: cart.items.map((item) => ({
+            productId: item.product_id,
+            variantId: item.variant_id,
+            quantity: item.quantity,
+            finalLinePrice: item.final_line_price,
+            propertyKeys: Object.keys(item.properties || {}),
+          })),
+        }));
         const paidQuantity = cart.items.filter((item) => Number(item.product_id) === Number(fixture.productId) && item.final_line_price > 0)
           .reduce((sum, item) => sum + item.quantity, 0);
         expect(paidQuantity).toBe(fixture.minimumPaidQuantity);
         const giftQuantity = cart.items.filter((item) => item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key)))
           .reduce((sum, item) => sum + item.quantity, 0);
         expect(giftQuantity, 'AIOD 6+3 gift lines were not created').toBeGreaterThanOrEqual(fixture.expectedGiftQuantity);
-        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
         await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.detergentTabText })).toBeVisible();
         const lockedGift = monitorPage.locator('.cart-items__table-row[data-apgo-gift-line], .apgo-cart-item--gift').first();
         await expect(lockedGift).toBeVisible();

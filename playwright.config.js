@@ -17,7 +17,10 @@ module.exports = defineConfig({
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 APGO-HealthCheck',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
-    video: 'retain-on-failure',
+    // Traces already include screenshots and network timing. Full-page video
+    // made a single failed commerce run exceed 500 MB without adding useful
+    // evidence, so keep diagnostics focused and inexpensive.
+    video: 'off',
     actionTimeout: 15_000,
     navigationTimeout: 45_000,
   },
