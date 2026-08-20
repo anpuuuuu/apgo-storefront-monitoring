@@ -86,7 +86,13 @@ function siteUrl(baseUrl, pathname = '/') {
 async function setMarket(page, baseUrl, countryCode) {
   await page.goto(siteUrl(baseUrl), { waitUntil: 'domcontentloaded' });
   const result = await page.evaluate(async (country) => {
-    const form = new URLSearchParams({ country_code: country, return_to: '/' });
+    const form = new URLSearchParams({
+      form_type: 'localization',
+      utf8: '\u2713',
+      _method: 'PUT',
+      country_code: country,
+      return_to: '/',
+    });
     const response = await fetch('/localization', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
