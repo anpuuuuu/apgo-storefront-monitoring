@@ -1,9 +1,15 @@
 name: Monitoring self health
 
 on:
-  schedule:
-    - cron: '23 * * * *'
-    - cron: '43 0 * * *'
+  # SCHEDULE DISABLED 2026-08-20. The failure notifier is
+  # telegram-notify.js, which parses Playwright's results.json --
+  # a file this workflow never produces, so every failure surfaced as
+  # 'could not parse results.json: ENOENT' and hid the real cause.
+  # Run manually via workflow_dispatch; re-enable once it uses a
+  # notifier that does not depend on results.json.
+  # schedule:
+  # - cron: '23 * * * *'
+  # - cron: '43 0 * * *'
   workflow_dispatch:
     inputs:
       layer3_selftest:
