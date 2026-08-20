@@ -45,9 +45,10 @@ function key(date, country, device, group) {
   return `${date}|${country || 'Unknown'}|${device || 'unknown'}|${group || 'other_page'}`;
 }
 
-function buildStats(eventReport, itemReport, globalReport) {
+function buildStats(eventReport, itemReport, globalReport, commerceReport) {
   const detailed = new Map();
   const products = new Map();
+  const commerce = new Map();
   const dates = new Set();
   for (const row of eventReport.rows || []) {
     const [date, eventName, country, device, path] = (row.dimensionValues || []).map((value) => value.value || '');
@@ -86,7 +87,16 @@ function buildStats(eventReport, itemReport, globalReport) {
     total.revenue = Number(row.metricValues?.[2]?.value || total.revenue);
     global.set(date, total);
   }
-  return { detailed, products, global };
+  for (const row of commerceReport.rows || []) {
+    const [date, country, device] = (row.dimensionValues || []).map((value) => value.value || '');
+    const entryKey = key(date, country, device, 'commerce');
+    const total = emptyStats();
+    total.purchasers = Number(row.metricValues?.[0]?.value || 0);
+    total.transactions = Number(row.metricValues?.[1]?.value || 0);
+    total.revenue = Number(row.metricValues?.[2]?.value || 0);
+    commerce.set(entryKey, total);
+  }
+  return { detailed, products, global, commerce };
 }
 
 function rates(stats) {
@@ -111,6 +121,18 @@ function aggregateDetail(detailed, date, dimension, value) {
     for (const fieldName of Object.keys(total)) total[fieldName] += stats[fieldName] || 0;
   }
   return total;
+}
+
+function addCommerceMetrics(target, commerce, date, dimension, value) {
+  for (const [entryKey, stats] of commerce) {
+    const [rowDate, country, device] = entryKey.split('|');
+    const field = { country, device }[dimension];
+    if (rowDate !== date || field !== value) continue;
+    target.purchasers += stats.purchasers;
+    target.transactions += stats.transactions;
+    target.revenue += stats.revenue;
+  }
+  return target;
 }
 
 function sameWeekdayDates(allDates) {
@@ -143,7 +165,7 @@ function anomaliesFor(label, current, baseline) {
   return issues.length ? { label, issues, current: compact(current), baseline } : null;
 }
 
-const [eventReport, itemReport, globalReport] = await Promise.all([
+const [eventReport, itemReport, globalReport, commerceReport] = await Promise.all([
   ga('runReport', {
     dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
     dimensions: [
@@ -172,9 +194,15 @@ const [eventReport, itemReport, globalReport] = await Promise.all([
     metrics: [{ name: 'totalPurchasers' }, { name: 'transactions' }, { name: 'purchaseRevenue' }],
     limit: '1000',
   }),
+  ga('runReport', {
+    dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
+    dimensions: [{ name: 'date' }, { name: 'country' }, { name: 'deviceCategory' }],
+    metrics: [{ name: 'totalPurchasers' }, { name: 'transactions' }, { name: 'purchaseRevenue' }],
+    limit: '10000',
+  }),
 ]);
 
-const { detailed, products, global } = buildStats(eventReport, itemReport, globalReport);
+const { detailed, products, global, commerce } = buildStats(eventReport, itemReport, globalReport, commerceReport);
 const baselineDates = sameWeekdayDates([...global.keys()].sort());
 if (!global.has(targetDate) || baselineDates.length < 3) {
   throw new Error(`GA4 daily dataset incomplete: target=${targetDate}, weekday baseline samples=${baselineDates.length}`);
@@ -187,10 +215,16 @@ for (const [dimension, values] of Object.entries({
   group: ['campaign_page', 'product_page'],
 })) {
   for (const value of values) {
+    const current = aggregateDetail(detailed, targetDate, dimension, value);
+    const baselineSamples = baselineDates.map((date) => aggregateDetail(detailed, date, dimension, value));
+    if (dimension === 'country' || dimension === 'device') {
+      addCommerceMetrics(current, commerce, targetDate, dimension, value);
+      baselineDates.forEach((date, index) => addCommerceMetrics(baselineSamples[index], commerce, date, dimension, value));
+    }
     targets.push({
       label: `${dimension}:${value}`,
-      current: aggregateDetail(detailed, targetDate, dimension, value),
-      baseline: baselineFor(baselineDates.map((date) => aggregateDetail(detailed, date, dimension, value))),
+      current,
+      baseline: baselineFor(baselineSamples),
     });
   }
 }
@@ -204,33 +238,52 @@ for (const value of ['laundry_products', 'aurora_products', 'other_products']) {
 }
 
 const anomalies = targets.map((target) => anomaliesFor(target.label, target.current, target.baseline)).filter(Boolean);
+const dataQualityIssues = [];
+const overallCurrent = global.get(targetDate);
+if (overallCurrent.transactions > 0 && overallCurrent.revenue === 0) {
+  dataQualityIssues.push({
+    code: 'PURCHASE_REVENUE_MISSING',
+    message: `${overallCurrent.transactions} transactions were recorded, but GA4 purchaseRevenue is zero`,
+  });
+}
 const summary = {
   targetDate,
   stage,
   mode,
   baselineDates,
   generatedAt: new Date().toISOString(),
-  overall: compact(global.get(targetDate)),
+  overall: compact(overallCurrent),
   sevenDay: [...global.keys()].sort().slice(-7).map((date) => ({ date, ...compact(global.get(date)) })),
   segments: targets.slice(1).map((target) => ({ label: target.label, current: compact(target.current), baseline: target.baseline })),
   anomalies,
+  dataQualityIssues,
 };
 
 const stateKey = `ga4:daily:candidate:${targetDate}`;
 if (stage === 'primary') {
   await setState(stateKey, summary);
   if (anomalies.length) await logAlert('layer4', 'daily_candidate', summary);
+  if (dataQualityIssues.length) await logAlert('layer4', 'data_quality', summary);
 } else {
   const primary = await getState(stateKey);
   const confirmedLabels = new Set(anomalies.map((item) => item.label));
   const persistent = (primary?.anomalies || []).filter((item) => confirmedLabels.has(item.label));
   summary.persistent = persistent;
+  const primaryQualityCodes = new Set((primary?.dataQualityIssues || []).map((item) => item.code));
+  summary.persistentDataQualityIssues = dataQualityIssues.filter((item) => primaryQualityCodes.has(item.code));
   if (persistent.length) {
     const kind = mode === 'armed' ? 'business_alert' : 'would_alert';
     await logAlert('layer4', kind, summary);
     if (mode === 'armed') {
       const lines = persistent.slice(0, 8).map((item) => `${item.label}: ${item.issues.join(', ')}`);
       await telegram(`APGO GA4 daily funnel alert (${targetDate})\n${lines.join('\n')}\n${process.env.RUN_URL || ''}`);
+    }
+  }
+  if (summary.persistentDataQualityIssues.length) {
+    const kind = mode === 'armed' ? 'data_quality_alert' : 'would_alert';
+    await logAlert('layer4', kind, summary);
+    if (mode === 'armed') {
+      await telegram(`APGO GA4 data quality alert (${targetDate})\n${summary.persistentDataQualityIssues.map((item) => item.message).join('\n')}\n${process.env.RUN_URL || ''}`);
     }
   }
 }
