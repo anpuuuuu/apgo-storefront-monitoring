@@ -7,7 +7,7 @@
 | **1 拨测** | 网站活着吗（首页 + `/cart.js`） | ~10 分钟 | `uptime.yml` → `scripts/uptime-check.sh` | ✅ |
 | **2 合成监控** | 关键流程走得通吗（真浏览器加购） | 每小时 + 每次 theme 更新 | `site-health.yml` → Playwright | ✅ |
 | **3 前端报错** | 访客浏览器里 JS 报错即上报（未知坏法也抓得到） | 实时收集 + 每小时汇总 | theme snippet → Cloudflare Worker → `monitor-alerts.yml` | 🔧 等 CF token |
-| **4 业务指标** | 白天加购数异常为 0 就报警（最后兜底） | 每小时 | `monitor-alerts.yml` → GA4 API | 🔧 等 GA4 授权 |
+| **4 业务指标** | 白天加购数异常为 0 就报警（最后兜底） | 每小时 | `monitor-alerts.yml` → GA4 API | 🔧 等门槛验证 |
 
 背景：2026 年 8 月，theme 的一个 bug 让 v3 商品页的加购按钮**静默失效了 4 天**才被发现（修复见 `106eaf5`）。该 bug 没有抛出任何 JS 错误——所以第 2 层（真浏览器点按钮）是主力，第 3 层抓会报错的坏法，第 1 层管「整站挂了」的分钟级发现，第 4 层管「前面全漏掉但钱的信号不会骗人」。
 
@@ -53,15 +53,15 @@
 - 告警文案自带歧义提示：可能是网站坏了，也可能是 GA4 采集断了（都值得查）
 - 测试：Run workflow 勾 `validate_ga4`（列出实时事件名）或 `simulate_zero`（走一遍告警逻辑）
 
-## GitHub Secrets 总表
+## GitHub Secrets / Variables 总表
 
 | Secret | 用途 | 设置文档 |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 所有层的告警通道 | 本文末尾 |
 | `CF_API_TOKEN` / `CF_ACCOUNT_ID` | 第 1/3/4 层的状态存储 + Worker 部署 | `docs/cloudflare-setup.md` |
-| `GA4_PROPERTY_ID` / `GCP_SA_KEY` | 第 4 层读 GA4 | `docs/ga4-setup.md` |
+| Repository Variable `GA4_PROPERTY_ID` / `GCP_WIF_PROVIDER` | 第 4 层通过 GitHub OIDC 读取 GA4；不保存 JSON key | `docs/ga4-setup.md` |
 
-任何 secret 未设时对应功能**优雅跳过**（workflow 保持绿、日志有提示），不影响其他层。
+任何必要配置未设时对应功能**优雅跳过**，不影响其他层。
 
 ## 如何接入更多网站
 

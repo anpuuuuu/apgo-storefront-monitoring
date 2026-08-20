@@ -1,47 +1,58 @@
-# GA4 授权设置（第 4 层需要，约 30–45 分钟）
+# GA4 授权设置（GitHub OIDC，无 JSON key）
 
-第 4 层要读 GA4 的「加入购物车（add_to_cart）」事件数，跟历史基线比对，白天连续为 0 就报警。这需要给监控系统一个**只读** GA4 的机器人账号（服务账号）。步骤略繁琐但都是点按钮，跟着做即可；卡在任何一步直接把截图丢给 Claude。
+第 4 层读取 GA4 的 `add_to_cart` 事件数，与历史基线比对；白天连续为 0 时才进入告警判断。GitHub Actions 通过 Google Workload Identity Federation（WIF）取得短期只读凭证，仓库和电脑都不保存服务账号 JSON key。
 
-## 第 1 步：建 Google Cloud 项目（如果还没有）
+## 已建立的 Google Cloud 配置
 
-1. 打开 <https://console.cloud.google.com>，用管理 GA4 的那个 Google 账号登录
-2. 顶部项目下拉 → **New Project** → 名字填 `apgo-monitoring` → **Create**，然后切换到这个项目
+| 项目 | 值 |
+|---|---|
+| Google Cloud Project ID | `helical-canto-505209-j7` |
+| Project Number | `223821071753` |
+| 服务账号 | `codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com` |
+| Workload Identity Pool | `github-actions` |
+| OIDC Provider | `apgo-theme` |
+| 授权仓库 | `anpuuuuu/apgo-theme`（repository ID `1154313539`） |
+| GA4 Property ID | `547019474` |
 
-## 第 2 步：启用 Analytics Data API
+Provider 只接受 GitHub OIDC token 中 `repository_id == 1154313539` 的请求。服务账号只授予该 repository principal `roles/iam.workloadIdentityUser`，GitHub workflow 取得的 access token scope 也限制为 `analytics.readonly`。
 
-1. 打开 <https://console.cloud.google.com/apis/library>
-2. 搜索 **Google Analytics Data API** → 点进去 → **Enable**
+## GitHub Repository Variables
 
-## 第 3 步：创建服务账号 + 下载密钥
-
-1. 打开 <https://console.cloud.google.com/iam-admin/serviceaccounts>
-2. **Create service account** → 名字填 `apgo-ga4-reader` → **Create and continue** → 角色留空直接 **Done**（GA4 权限在第 4 步单独给）
-3. 点进刚建的服务账号 → **Keys** 页签 → **Add key → Create new key → JSON → Create**，浏览器会下载一个 `.json` 文件
-4. 顺便复制服务账号的邮箱地址（形如 `apgo-ga4-reader@apgo-monitoring.iam.gserviceaccount.com`）
-
-## 第 4 步：把服务账号加进 GA4
-
-1. 打开 <https://analytics.google.com> → 左下角 **Admin（管理）**
-2. 确认顶部选中的是 apgo.my 用的那个 property
-3. **Property Access Management（资源存取权管理）** → 右上 **+** → **Add users**
-4. 贴上第 3 步的服务账号邮箱 → 角色选 **Viewer（检视者）** → **Add**
-5. 顺便看一下 **Property Settings（资源设定）** 里的 **Reporting time zone**，确认是 **Malaysia (GMT+08:00)** —— 不是的话告诉 Claude，检测的时段逻辑要跟着调
-
-## 第 5 步：拿 Property ID
-
-还在 Admin 页：**Property Settings** 最上方的 **PROPERTY ID**（一串数字，如 `3421xxxxx`），复制。
-
-## 第 6 步：加进 GitHub secrets
-
-打开 <https://github.com/anpuuuuu/apgo-theme/settings/secrets/actions> → **New repository secret**，加两条：
+打开 [GitHub Actions variables](https://github.com/anpuuuuu/apgo-theme/settings/variables/actions)，确认存在：
 
 | Name | Value |
 |---|---|
-| `GA4_PROPERTY_ID` | 第 5 步的数字 ID |
-| `GCP_SA_KEY` | 用记事本打开第 3 步下载的 `.json`，**整个文件内容**复制贴入 |
+| `GA4_PROPERTY_ID` | `547019474` |
+| `GCP_WIF_PROVIDER` | `projects/223821071753/locations/global/workloadIdentityPools/github-actions/providers/apgo-theme` |
 
-贴完后把下载的 `.json` 文件删掉（它等于一把钥匙，不要留在下载文件夹）。
+它们是资源识别资料，不是凭证，因此使用 Repository Variables 而不是 Secrets。不要建立 `GCP_SA_KEY`。
 
-## 完成之后
+## GA4 权限
 
-说一声「GA4 弄好了」，Claude 会先跑一次**门槛验证**（确认 add_to_cart 事件真的出现在 GA4 实时接口里——Shopify 的某些接法不会出现，那样就得换方案），验证通过后第 4 层先以**观察模式**跑 1–2 周（只记录、不打扰），调好阈值再正式开启报警。
+在 GA4 的 **Admin → Property access management** 中，服务账号必须是当前 apgo.my Property 的 **Viewer**：
+
+`codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`
+
+如果 workflow 的 Google 认证成功、但 Analytics Data API 返回 `403 PERMISSION_DENIED`，先检查这里，而不是创建 JSON key。
+
+## Workflow 门槛验证
+
+1. 打开 [Error and metrics alerts workflow](https://github.com/anpuuuuu/apgo-theme/actions/workflows/monitor-alerts.yml)。
+2. 选择 **Run workflow**，开启 `validate_ga4` 后运行。
+3. 查看 `GA4 add_to_cart anomaly` job 的日志。
+4. 日志会列出 realtime event names，并明确说明有没有 `add_to_cart`。
+
+验证通过后，workflow 会按小时以 observe 模式运行。若 realtime API 没有 `add_to_cart`，停止使用“实时为零”逻辑，改用延迟的 `runReport` 日环比或自建前端事件计数，不能把“采集方式不同”误报成“网站无法加购”。
+
+## 常见故障
+
+- `Unable to exchange GitHub OIDC token`：检查 workflow 是否有 `permissions: id-token: write`，以及 `GCP_WIF_PROVIDER` 是否为上表的完整 provider 路径。
+- `iam.serviceAccounts.getAccessToken denied`：检查服务账号 IAM 是否仍有 repository ID `1154313539` 对应的 `roles/iam.workloadIdentityUser` binding。
+- Analytics API `403`：检查服务账号是否仍是 GA4 Property Viewer。
+- 新建或修改 WIF 后立刻失败：Google IAM 配置传播可能需要几分钟，稍后重跑。
+
+## 安全原则
+
+- 不下载、不传递、不提交服务账号 JSON key。
+- 不把 OAuth access token 写入日志或文件；它由 GitHub job 临时生成并在短时间内失效。
+- 需要更换仓库时，以新仓库的 immutable repository ID 建立新的 attribute binding，不使用可被改名或抢注的仓库名称作为唯一授权条件。

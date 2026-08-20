@@ -8,20 +8,20 @@
    layer SKIPS rather than alerting: a false "sales stopped" alarm is worse
    than a silent metrics gap, and downtime is already covered by layers 1/2.
 
-   Auth is a zero-dependency service-account JWT (RS256 via node:crypto)
-   exchanged for an access token. One-off modes:
+   Auth is a short-lived OAuth access token minted by GitHub OIDC through
+   Google Workload Identity Federation. No service-account JSON key is stored.
+   One-off modes:
    - VALIDATE_GA4=true  → list realtime event names, verdict on add_to_cart
                           (the gating check: if absent, this design pivots)
    - SIMULATE_ZERO=true → treat realtime count as 0 to test the alert path */
 import { readFileSync } from 'node:fs';
-import { createSign } from 'node:crypto';
 
 const cfg = JSON.parse(readFileSync(new URL('../alerts-config.json', import.meta.url), 'utf8'));
 const G = cfg.ga4;
 const DB = cfg.cloudflare.database_id;
 const ACC = process.env.CF_ACCOUNT_ID || '';
 const CF_TOKEN = process.env.CF_API_TOKEN || '';
-const SA_JSON = process.env.GCP_SA_KEY || '';
+const ACCESS_TOKEN = process.env.GOOGLE_OAUTH_ACCESS_TOKEN || '';
 const PROP = process.env.GA4_PROPERTY_ID || '';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
@@ -29,41 +29,9 @@ const RUN_URL = process.env.RUN_URL || '';
 const VALIDATE = process.env.VALIDATE_GA4 === 'true';
 const SIMULATE_ZERO = process.env.SIMULATE_ZERO === 'true';
 
-if (!SA_JSON || !PROP) {
-  console.log('::notice::GCP_SA_KEY/GA4_PROPERTY_ID 未设定,第 4 层跳过(设置步骤见 monitoring/docs/ga4-setup.md)');
+if (!ACCESS_TOKEN || !PROP) {
+  console.log('::notice::Google OIDC access token/GA4_PROPERTY_ID 未设定,第 4 层跳过(设置步骤见 monitoring/docs/ga4-setup.md)');
   process.exit(0);
-}
-
-const sa = JSON.parse(SA_JSON);
-
-async function accessToken() {
-  const now = Math.floor(Date.now() / 1000);
-  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-  const unsigned =
-    b64u({ alg: 'RS256', typ: 'JWT' }) +
-    '.' +
-    b64u({
-      iss: sa.client_email,
-      scope: 'https://www.googleapis.com/auth/analytics.readonly',
-      aud: 'https://oauth2.googleapis.com/token',
-      iat: now,
-      exp: now + 3600,
-    });
-  const signer = createSign('RSA-SHA256');
-  signer.update(unsigned);
-  const jwt = unsigned + '.' + signer.sign(sa.private_key, 'base64url');
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body:
-      'grant_type=' +
-      encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') +
-      '&assertion=' +
-      jwt,
-  });
-  const j = await res.json();
-  if (!j.access_token) throw new Error('Google token 交换失败: ' + JSON.stringify(j));
-  return j.access_token;
 }
 
 async function ga(method, body, token) {
@@ -176,7 +144,7 @@ function currentHourInTz() {
 }
 
 async function main() {
-  const token = await accessToken();
+  const token = ACCESS_TOKEN;
 
   if (VALIDATE) {
     const r = await ga(

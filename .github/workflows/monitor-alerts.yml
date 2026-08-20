@@ -1,6 +1,6 @@
 # Layers 3+4: hourly digests. Two independent jobs — a Layer-3 failure never
 # blocks Layer 4 and vice versa. Both jobs skip cleanly (green, with a notice)
-# while their secrets are unset, so this can merge before setup finishes.
+# while their required configuration is unset, so this can merge before setup finishes.
 # :19 chosen to stay clear of the :07 synthetic run and cron rush minutes.
 name: Error and metrics alerts
 
@@ -54,15 +54,29 @@ jobs:
   ga4-anomaly:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: ${{ vars.GCP_WIF_PROVIDER != '' && vars.GA4_PROPERTY_ID != '' }}
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Authenticate to Google Cloud
+        id: google-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: helical-canto-505209-j7
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
+          create_credentials_file: false
       - name: Check add_to_cart anomaly
         env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
