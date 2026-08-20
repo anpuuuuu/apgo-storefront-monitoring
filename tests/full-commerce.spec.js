@@ -21,38 +21,52 @@ for (const site of sites) {
         await expect(monitorPage.locator('body')).toContainText(market.priceMarker);
       });
 
-      await test.step('detergent mixed scent 6+3 and protected gift', async () => {
+      await test.step('detergent market tiers and protected gifts', async () => {
         const fixture = site.fixtures.detergentPromo;
         const variants = Object.values(fixture.variants).slice(0, 3);
-        await addItems(monitorPage, variants.map((id) => ({ id, quantity: 2 })));
-        // AIOD's gift manager runs on the storefront/cart page. Loading the
-        // cart before asserting allows its normal customer-facing automation
-        // to finish instead of inspecting the pre-app Cart API response.
-        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
-        await monitorPage.waitForTimeout(8_000);
-        const cart = await cartJson(monitorPage);
-        console.log(JSON.stringify({
-          checkpoint: 'detergent-6-plus-3',
-          market: market.id,
-          currency: cart.currency,
-          items: cart.items.map((item) => ({
-            productId: item.product_id,
-            variantId: item.variant_id,
-            quantity: item.quantity,
-            finalLinePrice: item.final_line_price,
-            propertyKeys: Object.keys(item.properties || {}),
-          })),
-        }));
-        const paidQuantity = cart.items.filter((item) => Number(item.product_id) === Number(fixture.productId) && item.final_line_price > 0)
-          .reduce((sum, item) => sum + item.quantity, 0);
-        expect(paidQuantity).toBe(fixture.minimumPaidQuantity);
-        const giftQuantity = cart.items.filter((item) => item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key)))
-          .reduce((sum, item) => sum + item.quantity, 0);
-        expect(giftQuantity, 'AIOD 6+3 gift lines were not created').toBeGreaterThanOrEqual(fixture.expectedGiftQuantity);
-        await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.detergentTabText })).toBeVisible();
-        const lockedGift = monitorPage.locator('.cart-items__table-row[data-apgo-gift-line], .apgo-cart-item--gift').first();
-        await expect(lockedGift).toBeVisible();
-        await expect(lockedGift.locator('[data-cart-item-select]')).toBeDisabled();
+        const tiers = market.detergentPromotionTiers || [];
+
+        for (const [tierIndex, tier] of tiers.entries()) {
+          const quantityPerVariant = tier.cartQuantity / variants.length;
+          expect(Number.isInteger(quantityPerVariant), 'Detergent fixture quantity must divide evenly across three scents').toBe(true);
+          await addItems(monitorPage, variants.map((id) => ({ id, quantity: quantityPerVariant })));
+          // AIOD's gift manager runs on the storefront/cart page. Loading the
+          // cart before asserting allows its normal customer-facing automation
+          // to finish instead of inspecting the pre-app Cart API response.
+          await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
+          await monitorPage.waitForTimeout(8_000);
+          const cart = await cartJson(monitorPage);
+          console.log(JSON.stringify({
+            checkpoint: `detergent-tier-${tier.cartQuantity}`,
+            market: market.id,
+            currency: cart.currency,
+            items: cart.items.map((item) => ({
+              productId: item.product_id,
+              variantId: item.variant_id,
+              quantity: item.quantity,
+              finalLinePrice: item.final_line_price,
+              propertyKeys: Object.keys(item.properties || {}),
+            })),
+          }));
+          const paidQuantity = cart.items.filter((item) => Number(item.product_id) === Number(fixture.productId) && item.final_line_price > 0)
+            .reduce((sum, item) => sum + item.quantity, 0);
+          expect(paidQuantity, `${market.id} ${tier.cartQuantity}-pack paid quantity`).toBe(tier.expectedPaidQuantity);
+          const giftQuantity = cart.items.filter((item) => Number(item.product_id) === Number(fixture.productId)
+              && (item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key))))
+            .reduce((sum, item) => sum + item.quantity, 0);
+          expect(giftQuantity, `${market.id} ${tier.cartQuantity}-pack gift quantity`).toBe(tier.expectedGiftQuantity);
+          await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.detergentTabText })).toBeVisible();
+
+          if (market.expectsProtectedDetergentGift) {
+            const lockedGift = monitorPage.locator('.cart-items__table-row[data-apgo-gift-line], .apgo-cart-item--gift').first();
+            await expect(lockedGift).toBeVisible();
+            await expect(lockedGift.locator('[data-cart-item-select]')).toBeDisabled();
+          }
+
+          if (tierIndex < tiers.length - 1) {
+            await clearCart(monitorPage);
+          }
+        }
 
         const checkout = monitorPage.locator('button[name="checkout"], a[href*="/checkout"]').first();
         await expect(checkout).toBeVisible();

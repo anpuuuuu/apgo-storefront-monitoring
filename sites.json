@@ -22,8 +22,27 @@
       "expectErrorMonitor": true,
       "baseUrl": "https://apgo.my",
       "markets": [
-        { "id": "MY", "countryCode": "MY", "currency": "MYR", "priceMarker": "RM" },
-        { "id": "SG", "countryCode": "SG", "currency": "SGD", "priceMarker": "$" }
+        {
+          "id": "MY",
+          "countryCode": "MY",
+          "currency": "MYR",
+          "priceMarker": "RM",
+          "detergentPromotionTiers": [
+            { "cartQuantity": 6, "expectedPaidQuantity": 4, "expectedGiftQuantity": 2 },
+            { "cartQuantity": 9, "expectedPaidQuantity": 6, "expectedGiftQuantity": 3 }
+          ],
+          "expectsProtectedDetergentGift": true
+        },
+        {
+          "id": "SG",
+          "countryCode": "SG",
+          "currency": "SGD",
+          "priceMarker": "$",
+          "detergentPromotionTiers": [
+            { "cartQuantity": 6, "expectedPaidQuantity": 6, "expectedGiftQuantity": 0 }
+          ],
+          "expectsProtectedDetergentGift": false
+        }
       ],
       "fixtures": {
         "apiCheckVariantId": 46975928795290,
@@ -48,8 +67,6 @@
         "detergentPromo": {
           "handle": "apgo-laundry-detergent-special-promotion-1",
           "productId": 9085513072794,
-          "minimumPaidQuantity": 6,
-          "expectedGiftQuantity": 3,
           "variants": {
             "Rose": 48952581488794,
             "Freesia": 48952581587098,
