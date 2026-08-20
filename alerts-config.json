@@ -1,26 +1,43 @@
 {
-  "_readme": "第 1/3/4 层监控的集中配置。阈值改这里,不用动代码。cloudflare.database_id 是 D1 库 apgo-monitoring 的 id(非机密);worker_url 在首次部署 worker 后填入真实地址。",
+  "_readme": "APGO monitoring thresholds. Secrets and account IDs stay in GitHub/Worker secrets; this file contains only non-sensitive behavior settings.",
   "cloudflare": {
     "database_id": "c75e84af-67df-4761-a559-2b0c1d904989",
     "worker_url": ""
   },
   "uptime": {
-    "recheck_delay_s": 30,
+    "failure_samples": 2,
+    "slow_samples": 3,
+    "slow_ms": 5000,
     "realert_minutes": 60
   },
   "js_errors": {
-    "window_minutes": 70,
-    "min_sessions": 3,
-    "new_signature_min": 2,
-    "realert_hours": 6,
-    "retention_days": 30
+    "window_minutes": 10,
+    "min_occurrences": 3,
+    "min_sessions": 2,
+    "critical_cart_immediate": true,
+    "realert_hours": 2,
+    "retention_days": 30,
+    "alert_retention_days": 90
   },
   "ga4": {
     "mode": "observe",
-    "min_hour_median": 3,
-    "consecutive_zeros": 2,
-    "realert_hours": 6,
+    "observe_since": "2026-08-20",
+    "timezone": "Asia/Kuala_Lumpur",
     "baseline_days": 28,
-    "timezone": "Asia/Kuala_Lumpur"
+    "realtime": {
+      "page_view_min_median": 10,
+      "add_to_cart_min_median": 3,
+      "begin_checkout_min_median": 2,
+      "begin_checkout_current_atc_min": 5,
+      "consecutive_zeros": 2,
+      "realert_hours": 6
+    },
+    "daily": {
+      "ratio_to_baseline": 0.5,
+      "atc_min": 20,
+      "checkout_min": 10,
+      "confirm_required": true,
+      "realert_hours": 24
+    }
   }
 }

@@ -1,69 +1,48 @@
-# Layers 3+4: hourly digests. Two independent jobs — a Layer-3 failure never
-# blocks Layer 4 and vice versa. Both jobs skip cleanly (green, with a notice)
-# while their required configuration is unset, so this can merge before setup finishes.
-# :19 chosen to stay clear of the :07 synthetic run and cron rush minutes.
-name: Error and metrics alerts
+name: GA4 business monitoring
 
 on:
   schedule:
-    - cron: '19 * * * *'
+    - cron: '19,49 * * * *'
+    - cron: '17 4 * * *'
+    - cron: '47 6 * * *'
   workflow_dispatch:
     inputs:
-      validate_ga4:
-        description: '第4层门槛验证:只列出 GA4 realtime 事件名'
-        type: boolean
-        default: false
+      mode:
+        description: Check to run
+        type: choice
+        options: [realtime, daily-primary, daily-confirm, validate]
+        default: realtime
       simulate_zero:
-        description: '第4层测试:模拟加购为0走一遍告警逻辑'
+        description: Simulate add_to_cart zero
         type: boolean
         default: false
-      min_sessions_override:
-        description: '第3层测试:临时压低告警门槛(如 1)'
-        type: string
-        default: ''
-  push:
-    branches: [main, 'claude/**']
-    paths:
-      - '.github/workflows/monitor-alerts.yml'
-      - 'monitoring/scripts/js-error-alert.mjs'
-      - 'monitoring/scripts/ga4-anomaly.mjs'
-      - 'monitoring/alerts-config.json'
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  js-error-alerts:
+  ga4:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Digest JS errors
+      - name: Require monitoring configuration
         env:
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MIN_SESSIONS_OVERRIDE: ${{ inputs.min_sessions_override }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/js-error-alert.mjs
-
-  ga4-anomaly:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: ${{ vars.GCP_WIF_PROVIDER != '' && vars.GA4_PROPERTY_ID != '' }}
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Authenticate to Google Cloud
+        run: |
+          for name in GA4_PROPERTY_ID GCP_WIF_PROVIDER MONITOR_WORKER_URL MONITOR_HEARTBEAT_TOKEN CF_API_TOKEN CF_ACCOUNT_ID; do
+            if [ -z "${!name}" ]; then echo "::error::$name is required"; exit 1; fi
+          done
+      - name: Authenticate with Google OIDC/WIF
         id: google-auth
         uses: google-github-actions/auth@v3
         with:
@@ -73,15 +52,42 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
           create_credentials_file: false
-      - name: Check add_to_cart anomaly
+      - name: Select GA4 check
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
+        run: |
+          mode=realtime
+          if [ "$SCHEDULE" = '17 4 * * *' ]; then mode=daily-primary; fi
+          if [ "$SCHEDULE" = '47 6 * * *' ]; then mode=daily-confirm; fi
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then mode="$INPUT_MODE"; fi
+          echo "value=$mode" >> "$GITHUB_OUTPUT"
+      - name: Run GA4 monitoring
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
           GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          VALIDATE_GA4: ${{ inputs.validate_ga4 || 'false' }}
           SIMULATE_ZERO: ${{ inputs.simulate_zero || 'false' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/ga4-anomaly.mjs
+        run: |
+          case '${{ steps.select.outputs.value }}' in
+            validate) VALIDATE_GA4=true node monitoring/scripts/ga4-anomaly.mjs ;;
+            daily-primary) DAILY_STAGE=primary node monitoring/scripts/ga4-daily-funnel.mjs ;;
+            daily-confirm) DAILY_STAGE=confirm node monitoring/scripts/ga4-daily-funnel.mjs ;;
+            *) node monitoring/scripts/ga4-anomaly.mjs ;;
+          esac
+      - name: Notify workflow or authentication failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_TITLE: APGO Layer 4 GA4 monitor failed
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node monitoring/scripts/telegram-notify.js

@@ -1,0 +1,51 @@
+name: Monitoring self health
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+    - cron: '43 0 * * *'
+  workflow_dispatch:
+    inputs:
+      layer3_selftest:
+        description: Also run Layer 3 beacon self-test
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require health configuration
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+        run: test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
+      - name: Check Worker and Layer 1 heartbeat
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+        run: node monitoring/scripts/worker-health.mjs
+      - name: Check scheduled workflow freshness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node monitoring/scripts/github-schedule-health.mjs
+      - name: Run daily Layer 3 self-test
+        if: github.event.schedule == '43 0 * * *' || inputs.layer3_selftest == true
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+        run: node monitoring/scripts/layer3-self-test.mjs
+      - name: Notify self-monitoring failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_TITLE: APGO monitoring self-health failed
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node monitoring/scripts/telegram-notify.js

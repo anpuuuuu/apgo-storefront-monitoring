@@ -1,94 +1,58 @@
-/* APGO Layer 3: public error-beacon receiver.
-   Deployed to Cloudflare Workers (see deploy-worker.yml), writes into the
-   apgo-monitoring D1 database. Deliberately keyless — the theme snippet holds
-   no credential, so abuse control lives entirely here:
-   - synthetic-monitoring traffic (UA contains APGO-HealthCheck) is dropped
-   - foreign Origin/Referer is dropped silently
-   - oversized payloads rejected, every field re-truncated server-side
-   - per-IP rate limit (hashed with a daily salt; raw IPs are never stored) */
+import { HEARTBEAT_LIMITS } from './config.mjs';
+import { listHeartbeats, writeHeartbeat } from './db.mjs';
+import { corsHeaders, digestBrowserErrors, receiveError } from './errors.mjs';
+import { bearerToken, secretMatches } from './security.mjs';
+import { runScheduledUptime } from './uptime.mjs';
 
-const OWN_ORIGINS = ['https://apgo.my', 'https://www.apgo.my'];
-const ORIGIN_PATTERNS = [/^https:\/\/[a-z0-9-]+\.myshopify\.com$/];
-
-const MAX_BODY = 8192;
-const RATE_LIMIT_PER_MIN = 10;
-
-function originAllowed(o) {
-  return OWN_ORIGINS.includes(o) || ORIGIN_PATTERNS.some((re) => re.test(o));
+function json(value, status = 200, headers = {}) {
+  return Response.json(value, { status, headers: { 'cache-control': 'no-store', ...headers } });
 }
 
-function corsHeaders(origin) {
-  return {
-    'access-control-allow-origin': originAllowed(origin) ? origin : OWN_ORIGINS[0],
-    'access-control-allow-methods': 'POST, OPTIONS',
-    'access-control-allow-headers': 'content-type',
-    'access-control-max-age': '86400',
-  };
+async function health(env) {
+  const heartbeats = await listHeartbeats(env.DB);
+  const now = Date.now();
+  const statuses = heartbeats.map((row) => ({
+    layer: row.layer,
+    source: row.source,
+    status: row.status,
+    observedAt: row.observed_at,
+    ageSeconds: Math.max(0, Math.floor((now - Date.parse(row.observed_at)) / 1000)),
+    stale: !HEARTBEAT_LIMITS[row.layer] || now - Date.parse(row.observed_at) > HEARTBEAT_LIMITS[row.layer],
+  }));
+  const layer1 = statuses.find((row) => row.layer === 'layer1');
+  const ok = Boolean(layer1 && !layer1.stale && layer1.status === 'ok');
+  return json({ ok, service: 'apgo-monitoring', now: new Date(now).toISOString(), heartbeats: statuses }, ok ? 200 : 503);
 }
 
-async function sha256hex(s) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+async function heartbeat(request, env) {
+  if (!await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, error: 'invalid JSON' }, 400); }
+  if (!['layer1', 'layer2', 'layer3', 'layer4'].includes(body.layer)) return json({ ok: false, error: 'invalid layer' }, 400);
+  await writeHeartbeat(env.DB, body.layer, String(body.source || 'github-actions').slice(0, 100), body.status === 'error' ? 'error' : 'ok',
+    body.detail && typeof body.detail === 'object' ? body.detail : {});
+  return json({ ok: true }, 202);
 }
 
 export default {
   async fetch(request, env) {
-    const origin = request.headers.get('origin') || '';
-    const headers = corsHeaders(origin);
+    const url = new URL(request.url);
+    if (url.pathname === '/health' && request.method === 'GET') return health(env);
+    if (url.pathname === '/heartbeat' && request.method === 'POST') return heartbeat(request, env);
+    if (url.pathname === '/beacon' || url.pathname === '/') return receiveError(request, env);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request.headers.get('origin') || '') });
+    return json({ ok: false, error: 'not found' }, 404);
+  },
 
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-    if (request.method !== 'POST') return new Response('apgo-error-monitor', { status: 405, headers });
-
-    const ua = request.headers.get('user-agent') || '';
-    if (ua.includes('APGO-HealthCheck')) return new Response(null, { status: 204, headers });
-
-    /* sendBeacon may omit both Origin and Referer — absent is allowed;
-       present-but-foreign is silently swallowed. */
-    let refOrigin = origin;
-    if (!refOrigin) {
-      try { refOrigin = new URL(request.headers.get('referer') || '').origin; } catch { refOrigin = ''; }
+  async scheduled(controller, env, ctx) {
+    if (env.CRON_ENABLED !== 'true') {
+      console.log(JSON.stringify({ event: 'scheduled_skipped', reason: 'CRON_ENABLED is not true' }));
+      return;
     }
-    if (refOrigin && !originAllowed(refOrigin)) return new Response(null, { status: 204, headers });
-
-    const raw = await request.text();
-    if (raw.length > MAX_BODY) return new Response(null, { status: 413, headers });
-
-    let d;
-    try { d = JSON.parse(raw); } catch { return new Response(null, { status: 400, headers }); }
-    if (!d || typeof d.m !== 'string' || !d.m || typeof d.sid !== 'string') {
-      return new Response(null, { status: 400, headers });
-    }
-
-    const message = d.m.slice(0, 300);
-    const source = String(d.src || '').slice(0, 300);
-    const line = Number.isFinite(+d.line) ? Math.trunc(+d.line) : 0;
-    const col = Number.isFinite(+d.col) ? Math.trunc(+d.col) : 0;
-    const stack = String(d.stack || '').slice(0, 1000);
-    const pageUrl = String(d.url || '').split('?')[0].slice(0, 300);
-    const sid = d.sid.slice(0, 64);
-
-    const ip = request.headers.get('cf-connecting-ip') || '';
-    const day = new Date().toISOString().slice(0, 10);
-    const ipHash = (await sha256hex(ip + '|' + day)).slice(0, 32);
-    const signature = (await sha256hex(message + '|' + source + '|' + line)).slice(0, 32);
-
-    /* Rate limit via an indexed count; if the check itself errors, fail open
-       and insert anyway — the client-side 5-per-pageview cap is the real
-       volume bound, and real error signal beats a perfect limiter. */
-    try {
-      const r = await env.DB.prepare(
-        "SELECT COUNT(*) AS c FROM js_errors WHERE ip_hash = ?1 AND created_at > datetime('now', '-60 seconds')"
-      ).bind(ipHash).first();
-      if (r && r.c >= RATE_LIMIT_PER_MIN) return new Response(null, { status: 429, headers });
-    } catch (e) { /* fail open */ }
-
-    try {
-      await env.DB.prepare(
-        'INSERT INTO js_errors (signature, message, source, line, col, stack, page_url, user_agent, session_id, ip_hash) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)'
-      ).bind(signature, message, source, line, col, stack, pageUrl, ua.slice(0, 300), sid, ipHash).run();
-    } catch (e) {
-      return new Response(null, { status: 500, headers });
-    }
-    return new Response(null, { status: 204, headers });
+    ctx.waitUntil((async () => {
+      const result = await runScheduledUptime(env, controller.scheduledTime);
+      if (!result.duplicate) await digestBrowserErrors(env);
+      console.log(JSON.stringify({ event: 'scheduled_complete', scheduledTime: controller.scheduledTime, ...result }));
+    })());
   },
 };

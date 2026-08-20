@@ -1,42 +1,36 @@
-# Cloudflare 设置（第 1/3/4 层需要，约 10 分钟）
+# Cloudflare 设置（Layer 1、3 与 Heartbeat）
 
-监控系统用你 Cloudflare 账号里的两样东西：
+监控复用 APGO Cloudflare 账号中的：
 
-- **D1 数据库 `apgo-monitoring`**（已由 Claude 建好）：存监控状态和前端错误记录
-- **Worker `apgo-error-monitor`**（代码在 `monitoring/cloudflare/worker/`，等你完成下面步骤后由 GitHub Actions 自动部署）：接收访客浏览器的报错
+- D1 数据库 `apgo-monitoring`：保存 uptime、Heartbeat、前端错误和告警状态。
+- Worker `apgo-error-monitor`：执行五分钟存活检测、接收浏览器错误，并提供 `/health` 与受保护的 `/heartbeat`。
 
-你只需要做一件事：**创建一个 API token 并放进 GitHub secrets**。token 只存在 GitHub secrets 里，不需要发给任何人。
+## GitHub Secrets
 
-## 第 1 步：创建 API token
+打开 [GitHub Actions secrets](https://github.com/anpuuuuu/apgo-theme/settings/secrets/actions)，确认存在：
 
-1. 打开 <https://dash.cloudflare.com/profile/api-tokens>
-2. 点 **Create Token**
-3. 选模板 **Edit Cloudflare Workers** → **Use template**
-4. 在 **Permissions** 区块，点 **+ Add more** 加一条：
-   - `Account` / `D1` / `Edit`
-5. **Account Resources** 选你的账号；**Zone Resources** 保持模板默认即可
-6. **Continue to summary** → **Create Token**
-7. 复制生成的 token（只显示这一次）
-
-## 第 2 步：找到 Account ID
-
-打开 <https://dash.cloudflare.com> → 点进 **Workers & Pages** → 右侧栏就有 **Account ID**，点 Copy。
-
-## 第 3 步：加进 GitHub secrets
-
-打开 <https://github.com/anpuuuuu/apgo-theme/settings/secrets/actions> → **New repository secret**，加两条：
-
-| Name | Value |
+| Name | 用途 |
 |---|---|
-| `CF_API_TOKEN` | 第 1 步复制的 token |
-| `CF_ACCOUNT_ID` | 第 2 步复制的 Account ID |
+| `CF_API_TOKEN` | 部署 Worker、执行 D1 Migration 和 Layer 4 状态读写 |
+| `CF_ACCOUNT_ID` | Cloudflare Account ID |
+| `TELEGRAM_BOT_TOKEN` | 正式告警 |
+| `TELEGRAM_CHAT_ID` | 告警目标群组 |
+| `MONITOR_HEARTBEAT_TOKEN` | GitHub 与 Worker 间的 Heartbeat 认证 |
 
-## 完成之后
+Cloudflare API Token 最少需要 Account / Workers Scripts / Edit 与 Account / D1 / Edit。Token 不要写入文件、Workflow 日志或对话。
 
-在群里或对话里说一声「CF 弄好了」，Claude 会：
+## 首次部署
 
-1. 触发 `Deploy error-monitor worker` workflow 部署 Worker，拿到它的公网地址
-2. 把地址填进 `snippets/apgo-error-monitor.liquid`，测试整条链路
-3. 测试通过后才把 snippet 接进 theme（会先跟你确认）
+1. 手动运行 [Deploy APGO monitoring worker](https://github.com/anpuuuuu/apgo-theme/actions/workflows/deploy-worker.yml)。
+2. Workflow 先应用 D1 Migration，再部署 Worker。
+3. 第一次部署保持 `CRON_ENABLED=false`，避免未验证前正式告警。
+4. 从日志取得 `workers.dev` URL，设置 Repository Variable `MONITOR_WORKER_URL`。
+5. 将 `${MONITOR_WORKER_URL}/beacon` 写入 `snippets/apgo-error-monitor.liquid`。
+6. 验证 `/health`、Heartbeat、非法 Origin、Layer 3 self-test、D1 与 Telegram。
+7. 全部通过后才把 `CRON_ENABLED` 改为 `true` 重新部署。
 
-> 补充：这个 token 权限只有「改 Workers + 改 D1」，动不了你的域名解析、防火墙等其他 Cloudflare 设置。想撤销随时回到 API Tokens 页面删掉即可。
+Worker Secrets `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN` 由部署 Workflow 注入，不进入代码。
+
+## 回退
+
+紧急时把 `CRON_ENABLED` 改回 `false` 并重新部署。Theme 的 Error Monitor 所有发送均为 fail-safe，不会阻止页面渲染、加购或 Checkout。

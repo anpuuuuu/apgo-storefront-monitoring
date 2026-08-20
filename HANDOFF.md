@@ -1,54 +1,42 @@
-# 交接文档：APGO 四层监控系统（给接手的 agent）
+# APGO Monitoring Handoff
 
-> 2026-08-19 由上一个 Claude session 写。读完本文 + `README.md` 即可接手。
-> 品牌主 Wade 非技术背景、主要说中文、告警都看 Telegram 群「网站检测系统」。
+## 当前设计
 
-## 系统现状（全部已在 main 上运行）
+- 分支：`codex/monitoring-v2`。
+- 所有已提交的 `main` 代码都包含在分支内；另一个 main worktree 的 Cart Offers UI 未提交改动没有被夹带。
+- Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已重构。
+- Worker 初始 `CRON_ENABLED=false`，必须完成受控部署验证后才开启。
+- GA4 为 `observe`，从 2026-08-20 起至少观察 14 天；API/Auth/Workflow 故障从第一天正式通知。
 
-| 层 | 状态 | 说明 |
-|---|---|---|
-| 1 拨测 | ✅ 运行中 | `uptime.yml` 每 ~10 分钟 curl apgo.my 首页 + /cart.js；CF secrets 未设前是无状态模式（会重复告警、无恢复通知），设好自动升级 |
-| 2 合成监控 | ✅ 运行中 | `site-health.yml` 每小时 + 每次 theme push，真浏览器加购；已验证能抓真实故障（见下面事件史） |
-| 3 前端报错 | 🔧 代码全好，未通电 | Worker 未部署（等 Wade 的 CF token）；theme snippet 已在 repo（`snippets/apgo-error-monitor.liquid`）但**未被任何 layout 引用**，是死代码，且端点 URL 还是占位符 |
-| 4 业务指标 | ✅ 观察模式运行中 | Google WIF 已通电；`validate_ga4` 已确认 Realtime API 有 `add_to_cart`；配置是 observe 模式 |
+## 基础设施
 
-基础设施：Cloudflare D1 库 `apgo-monitoring`（id `c75e84af-67df-4761-a559-2b0c1d904989`，4 张表见 `cloudflare/worker/schema.sql`，已建好）。阈值集中在 `alerts-config.json`。GitHub secrets 现有 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`。
+- Repo：`anpuuuuu/apgo-theme`
+- D1：`apgo-monitoring` / `c75e84af-67df-4761-a559-2b0c1d904989`
+- Worker：`apgo-error-monitor`
+- GA4 Property：`547019474`
+- WIF Provider：repo variable `GCP_WIF_PROVIDER`
+- Service Account：`codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`
+- `MONITOR_HEARTBEAT_TOKEN` 已创建为 GitHub Secret；不要输出或写进文件。
 
-## 接下来要做的事（按触发条件）
+## 完成上线的顺序
 
-### A. Wade 说「CF 弄好了」（他要照 `docs/cloudflare-setup.md` 加 `CF_API_TOKEN` + `CF_ACCOUNT_ID` 两个 secrets）
+1. Push 分支并手动 dispatch `deploy-worker.yml`；从日志取得 Worker URL。
+2. 设置 repo variable `MONITOR_WORKER_URL`。
+3. 将同一 URL 写进 Theme snippet、`sites.json` 和 `alerts-config.json`。
+4. Worker 保持 Cron 关闭，测试 `/health`、非法 Origin、Payload、Heartbeat、Layer 3 self-test 和 D1。
+5. 合并/推送 main，让 Shopify GitHub integration 收到 Theme snippet。
+6. 手动跑轻量和 MY/SG 完整 Playwright；全部通过后启用定时。
+7. 运行 GA4 validate、daily-primary、daily-confirm。
+8. `CRON_ENABLED=true` 后部署；旧 GitHub Uptime 并行 24 小时再移除 schedule。
 
-1. 手动 dispatch `Deploy error-monitor worker` workflow → 从 run 日志里拿 worker 的 `*.workers.dev` URL
-2. 把 URL 填进两处：`snippets/apgo-error-monitor.liquid` 的 `EP='REPLACE_WITH_WORKER_URL'` 和 `alerts-config.json` 的 `cloudflare.worker_url`
-3. curl 实测 worker 全分支：有效 payload→204 且 D1 有行（用 MCP `d1_database_query` 查）、>8KB→413、UA 含 `APGO-HealthCheck`→204 无行、同 IP 连发 11 条→429、缺字段→400
-4. **跟 Wade 确认后**才动 theme：4 个 layout 各在 `<head>` 后加一行 `{% render 'apgo-error-monitor' %}`——`layout/theme.liquid`（第 7 行 `<head>` 之后）、`layout/password.liquid`、`layout/theme.shogun.landing.liquid`（此文件是 Shogun 自动生成、可能被重写，已知局限）、`templates/gift_card.liquid`。这是**全项目唯一改线上 theme 行为的步骤**，独立 commit，push 后盯自动触发的 Playwright run + 让 Wade 手机开一下网站
-5. 上线后：访问 `https://apgo.my/?apgo_em_test=1`（手机+电脑）→ D1 里应出现 2 个 session 的 `apgo-em-selftest` 行；把 `monitoring/sites.json` 里 apgo-my 的 `expectErrorMonitor` 改 `true`（巡检从此断言 snippet 存活）；dispatch `monitor-alerts.yml` 带 `min_sessions_override=1` 测通告警 → 然后 `UPDATE known_signatures SET muted=1 WHERE sample_message='apgo-em-selftest'` 静音自测签名
-6. 头一两周每天用 MCP 查一眼 `js_errors`，静音良性噪音（预计 1–2 个）
+## 不可误报原则
 
-### B. GA4 第 4 层（GitHub OIDC，无 JSON key）
+- 缺 Secret/Variable、WIF 401/403/429、GA 查询错误、D1 错误、Heartbeat 没写入均让 Workflow 非零失败。
+- Fixture 下架/售罄/Selector 失效用 `TEST_CONFIG_STALE`。
+- Browser Test 必须阻止 Analytics 且不得提交 Checkout。
+- 不修改 Shopify 商品、库存、折扣或 AIOD 规则。
 
-已建立 Google Workload Identity Pool `github-actions`、Provider `apgo-theme`，并让仓库 ID `1154313539` 模拟现有服务账号 `codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`。认证使用短期 OIDC access token；不要再创建或索取 `GCP_SA_KEY`。
+## 24 小时与 14 天人工关卡
 
-1. **门槛验证已通过**：2026-08-20 的 [validation run](https://github.com/anpuuuuu/apgo-theme/actions/runs/32364686993) 在 Realtime API 读到 `add_to_cart: 10`，第 4 层设计成立
-2. observe 模式已自动开始跑（每小时，只记 `alert_log` 的 `would_alert` 行、不发通知）
-3. 1–2 周后用 MCP 查 `alert_log` 复盘 would_alert，向 Wade 汇报误报率，必要时调 `alerts-config.json` 的 `ga4.min_hour_median` → 他点头后把 `ga4.mode` 改 `"armed"`（一行 commit）
-
-### C. 日常值守
-
-- 群里出巡检告警时：先看 Telegram 消息里的错误详情行（会写 HTTP 状态码）。分诊表在 `README.md`「第 2 层告警分诊速查」。5xx 且下轮恢复 = 平台抖动,结案不用动
-- L3 通电后若某错误签名是误报：`UPDATE known_signatures SET muted=1 WHERE signature='<sig>'`（MCP d1_database_query,database_id 见上）
-- 想接 apgo.com.tw：改 `sites.json` 的 apgo-tw 占位 + Worker `OWN_ORIGINS` 加域名
-
-## 关键环境事实（能省你很多弯路）
-
-- **沙箱连不上 apgo.my**（出口代理 403,artifact 的 azure blob 也被挡）→ 所有实测都通过 push/dispatch 让 GitHub Actions 跑,用 GitHub MCP 读日志
-- Playwright 失败 artifact 下载不了,但 `get_job_logs` 里有错误详情,通常够用
-- Cloudflare MCP 能建/查 D1,但**不能部署 Worker** → 部署走 `deploy-worker.yml`（wrangler-action）
-- Shopify MCP 之前连的是台湾店(apgo.tw),已按 Wade 要求吊销、等他重新授权选 **apgo.my**;确认方法:`get-shop-info` 看 domain
-- GitHub cron 抖动大(名义每小时,实际迟 40–50 分钟常见);runner 偶发网络慢(8/19 apt 源挂起吃掉整个 job,已加 5 分钟降级兜底)
-- Wade 的 Supabase「Maestro」项目有 31 张表没开 RLS(anon key 可读写)——与监控无关的既有安全隐患,已提醒过他,他还没处理
-
-## 事件史（背景）
-
-- **2026-08 初**：theme bug 让 v3 商品页加购静默失效 4 天（修复 `106eaf5`,无 JS 报错,只有真浏览器能抓）→ 整套系统的起因
-- **2026-08-19**：Shopify POST /cart/add.js 503 约 1 分钟自愈,巡检 10 分钟内告警（系统首次真实触发,工作正常）;复盘后加了抗抖动重试、告警带错误详情、CI 两处加固
+- Cloudflare Cron 连续稳定 24 小时不是代码测试能代替的；确认后才关闭旧 Uptime schedule。
+- GA4 observe 连续 14 天后检查 `alert_log` 的 `would_alert`，确认误报率后由用户决定 `armed`。

@@ -1,6 +1,6 @@
 # GA4 授权设置（GitHub OIDC，无 JSON key）
 
-第 4 层读取 GA4 的 `add_to_cart` 事件数，与历史基线比对；白天连续为 0 时才进入告警判断。GitHub Actions 通过 Google Workload Identity Federation（WIF）取得短期只读凭证，仓库和电脑都不保存服务账号 JSON key。
+第 4 层每 30 分钟读取 GA4 实时漏斗，并每天计算 MY/SG、设备、商品组与页面组表现。GitHub Actions 通过 Google Workload Identity Federation（WIF）取得短期只读凭证，仓库和电脑都不保存服务账号 JSON key。
 
 ## 已建立的 Google Cloud 配置
 
@@ -37,12 +37,12 @@ Provider 只接受 GitHub OIDC token 中 `repository_id == 1154313539` 的请求
 
 ## Workflow 门槛验证
 
-1. 打开 [Error and metrics alerts workflow](https://github.com/anpuuuuu/apgo-theme/actions/workflows/monitor-alerts.yml)。
-2. 选择 **Run workflow**，开启 `validate_ga4` 后运行。
-3. 查看 `GA4 add_to_cart anomaly` job 的日志。
-4. 日志会列出 realtime event names，并明确说明有没有 `add_to_cart`。
+1. 打开 [GA4 business monitoring workflow](https://github.com/anpuuuuu/apgo-theme/actions/workflows/monitor-alerts.yml)。
+2. 选择 **Run workflow**，将 `mode` 设为 `validate` 后运行。
+3. 查看 `Run GA4 monitoring` 的日志。
+4. 日志会列出最近 30 分钟五个漏斗事件与历史同期中位数，并在成功后写入 Layer 4 Heartbeat。
 
-验证通过后，workflow 会按小时以 observe 模式运行。若 realtime API 没有 `add_to_cart`，停止使用“实时为零”逻辑，改用延迟的 `runReport` 日环比或自建前端事件计数，不能把“采集方式不同”误报成“网站无法加购”。
+验证通过后，workflow 每小时第 19、49 分钟以 observe 模式运行；每日 MYT 12:17 初算前一天，14:47 复核。业务异常先观察 14 天，API/Auth/Workflow 故障从第一天正式告警。
 
 ## 常见故障
 

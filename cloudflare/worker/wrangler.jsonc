@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apgo-error-monitor",
+  "main": "index.mjs",
+  "compatibility_date": "2026-08-20",
+  "workers_dev": true,
+  "vars": {
+    "CRON_ENABLED": "false"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "apgo-monitoring",
+      "database_id": "c75e84af-67df-4761-a559-2b0c1d904989",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

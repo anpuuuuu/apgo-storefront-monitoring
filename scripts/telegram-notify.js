@@ -9,6 +9,7 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const RUN_URL = process.env.RUN_URL || '';
 const SHORT_SHA = (process.env.GITHUB_SHA || '').slice(0, 7);
+const ALERT_TITLE = process.env.ALERT_TITLE || 'APGO 网站健康检查失败';
 
 async function main() {
   if (!TOKEN || !CHAT_ID) {
@@ -51,7 +52,7 @@ async function main() {
   }
 
   const lines = [
-    '🚨 APGO 网站健康检查失败',
+    `🚨 ${ALERT_TITLE}`,
     '',
     ...(failed.length ? failed.map((f) => `❌ ${f}`) : ['(未能定位具体失败项，请看 run 日志)']),
     '',

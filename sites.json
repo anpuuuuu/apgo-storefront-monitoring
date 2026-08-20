@@ -1,23 +1,79 @@
 {
+  "monitoring": {
+    "workerUrl": "",
+    "userAgent": "APGO-HealthCheck/2.0",
+    "blockedAnalyticsHosts": [
+      "googletagmanager.com",
+      "google-analytics.com",
+      "doubleclick.net",
+      "connect.facebook.net",
+      "facebook.com/tr",
+      "analytics.tiktok.com",
+      "clarity.ms",
+      "hotjar.com"
+    ]
+  },
   "sites": [
     {
       "id": "apgo-my",
       "name": "APGO Malaysia (Shopify)",
       "type": "shopify",
       "enabled": true,
-      "expectErrorMonitor": false,
+      "expectErrorMonitor": true,
       "baseUrl": "https://apgo.my",
-      "products": [
-        {
-          "handle": "apgo-atomic-car-nano-coating-standard",
-          "note": "Core coating product, v3 template, deep stock. May render a gift picker."
-        },
-        {
-          "handle": "apgo-pro-car-wash-towel-l-160cm-x-60cm",
-          "note": "Accessory, v3 template without gift picker — the exact page type of the Aug 2026 dead add-to-cart bug."
-        }
+      "markets": [
+        { "id": "MY", "countryCode": "MY", "currency": "MYR", "priceMarker": "RM" },
+        { "id": "SG", "countryCode": "SG", "currency": "SGD", "priceMarker": "$" }
       ],
-      "apiCheckVariantId": 46975928795290
+      "fixtures": {
+        "apiCheckVariantId": 46975928795290,
+        "normalV3": {
+          "handle": "apgo-pro-car-wash-towel-l-160cm-x-60cm"
+        },
+        "giftPickerV3": {
+          "handle": "apgo-atomic-car-nano-coating-standard"
+        },
+        "laundryPdp": {
+          "handle": "apgo-laundry-detergent-oceans海洋晨曦-copy",
+          "unitPriceMinor": 4490,
+          "variants": {
+            "Rose": 48854532096154,
+            "Freesia": 48854532194458,
+            "Cotton": 48854532227226,
+            "Ocean": 48854532259994,
+            "Lavender": 48995859497114,
+            "White Tea": 48995859529882
+          }
+        },
+        "detergentPromo": {
+          "handle": "apgo-laundry-detergent-special-promotion-1",
+          "productId": 9085513072794,
+          "minimumPaidQuantity": 6,
+          "expectedGiftQuantity": 3,
+          "variants": {
+            "Rose": 48952581488794,
+            "Freesia": 48952581587098,
+            "Cotton": 48952581619866,
+            "Ocean": 48952581652634,
+            "Lavender": 48995858120858,
+            "White Tea": 48995858153626
+          }
+        },
+        "glaze": {
+          "triggerProductIds": [8946955714714, 9085530734746],
+          "triggerVariantIds": [48112452010138, 48952646238362],
+          "tabText": "Glaze PWP",
+          "maxAddonQuantity": 1
+        },
+        "cartOffers": {
+          "recommendedTabText": "Boss Recommended",
+          "detergentTabText": "Detergent PWP"
+        }
+      },
+      "expected": {
+        "checkoutHostPattern": "(^|\\.)shopify\\.com$|(^|\\.)apgo\\.my$",
+        "freeGiftPropertyNames": ["_free_gift", "_gift_for", "_aiod_free_gift"]
+      }
     },
     {
       "id": "apgo-tw",
@@ -25,17 +81,9 @@
       "type": "shopify",
       "enabled": false,
       "baseUrl": "https://apgo.com.tw",
-      "products": [],
-      "apiCheckVariantId": null,
-      "note": "Placeholder. To enable: set enabled=true, add 1-2 long-lived product handles and a variant id."
-    },
-    {
-      "id": "laundry-subscription",
-      "name": "APGO Laundry Subscription (self-hosted)",
-      "type": "custom",
-      "enabled": false,
-      "baseUrl": "",
-      "note": "Placeholder. Needs its own spec file in tests/ covering the subscription flow, plus a /health endpoint check."
+      "markets": [],
+      "fixtures": {},
+      "note": "Placeholder. Add stable fixtures before enabling."
     }
   ]
 }

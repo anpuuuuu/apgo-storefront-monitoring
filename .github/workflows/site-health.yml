@@ -1,13 +1,18 @@
-name: Site health
+name: Storefront browser health
 
 on:
   schedule:
     - cron: '7 * * * *'
+    - cron: '37 1,13 * * *'
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Browser suite
+        type: choice
+        options: [light, full]
+        default: light
   push:
-    branches:
-      - main
-      - 'claude/**'
+    branches: [main]
     paths:
       - 'assets/**'
       - 'blocks/**'
@@ -21,65 +26,78 @@ on:
       - '.github/workflows/site-health.yml'
 
 concurrency:
-  group: site-health-${{ github.ref }}
+  group: storefront-health-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  check:
-    name: Storefront checks
+  browser:
     runs-on: ubuntu-latest
-    # 25 not 15: on 2026-08-19 a slow runner spent 15 min just downloading
-    # Chromium and the job died at the cap; tests themselves also stretch
-    # to ~10 min worst-case now that cart checks retry blips with real gaps.
-    timeout-minutes: 25
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: monitoring
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
+      - name: Require heartbeat configuration
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+        run: |
+          test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
+          test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
+      - name: Select suite
+        id: suite
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_SUITE: ${{ inputs.suite }}
+        run: |
+          suite=light
+          if [ "$EVENT_NAME" = push ] || [ "$SCHEDULE" = '37 1,13 * * *' ] || [ "$INPUT_SUITE" = full ]; then suite=full; fi
+          echo "value=$suite" >> "$GITHUB_OUTPUT"
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('monitoring/package-lock.json') }}
-
       - name: Install Chromium
-        # Ubuntu's azure apt mirror sometimes hangs with no timeout and eats
-        # the whole job (2026-08-19: two runs died this way). Give --with-deps
-        # 5 minutes, then fall back to browser-only: the runner image already
-        # ships Chromium's required libs; apt mostly adds CJK fonts, which
-        # only failure screenshots would miss.
         run: timeout 300 npx playwright install --with-deps chromium || npx playwright install chromium
-
-      - name: Run health checks
-        run: npx playwright test
-
-      - name: Notify Telegram
+      - name: Run browser suite
+        env:
+          MONITOR_SUITE: ${{ steps.suite.outputs.value }}
+        run: npm run test:${{ steps.suite.outputs.value }}
+      - name: Write Layer 2 heartbeat
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          MONITOR_LAYER: layer2
+          MONITOR_SOURCE: playwright-${{ steps.suite.outputs.value }}
+          MONITOR_SUITE: ${{ steps.suite.outputs.value }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/write-heartbeat.mjs
+      - name: Notify workflow failure
         if: failure()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_TITLE: APGO Layer 2 browser monitoring failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/telegram-notify.js
-
-      - name: Upload failure artifacts
+      - name: Upload diagnostic artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-failure-artifacts
+          name: playwright-${{ steps.suite.outputs.value }}-${{ github.run_id }}
           path: |
             monitoring/test-results/
+            monitoring/playwright-report/
             monitoring/results.json
           retention-days: 7
           if-no-files-found: ignore
