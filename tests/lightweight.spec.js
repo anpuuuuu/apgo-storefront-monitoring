@@ -5,13 +5,13 @@ const {
   clearCart,
   cartJson,
   addItems,
+  siteUrl,
   ensureAvailable,
 } = require('./monitor-fixture');
 
 for (const site of sites) {
   test(`[light][${site.id}] critical storefront journey`, async ({ monitorPage }) => {
     await monitorPage.goto(site.baseUrl, { waitUntil: 'domcontentloaded' });
-    await clearCart(monitorPage);
 
     await test.step('homepage, navigation and Layer 3 bootstrap', async () => {
       await expect(monitorPage.locator('header, [data-header-section]').first()).toBeVisible();
@@ -25,7 +25,7 @@ for (const site of sites) {
       await addItems(monitorPage, [{ id: site.fixtures.apiCheckVariantId, quantity: 2 }]);
       let cart = await cartJson(monitorPage);
       expect(cart.items.some((item) => Number(item.variant_id) === Number(site.fixtures.apiCheckVariantId))).toBe(true);
-      await monitorPage.goto('/cart', { waitUntil: 'domcontentloaded' });
+      await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
       const row = monitorPage.locator(`.cart-items__table-row[data-variant-id="${site.fixtures.apiCheckVariantId}"]`).first();
       await expect(row).toBeVisible();
       await row.locator('.quantity-minus, button[name="minus"]').first().click();
@@ -42,6 +42,7 @@ for (const site of sites) {
         const fixture = site.fixtures[fixtureName];
         const add = await ensureAvailable(
           monitorPage,
+          site.baseUrl,
           fixture.handle,
           '[data-apgo-cc-add]:visible, form[action*="/cart/add"] button[name="add"]:visible'
         );
@@ -61,7 +62,7 @@ for (const site of sites) {
 
     await test.step('apgo-v1s-plus variant, image, total price and correct cart variant', async () => {
       const fixture = site.fixtures.laundryPdp;
-      await ensureAvailable(monitorPage, fixture.handle, 'input[data-apgo-option-input][value="Lavender"]');
+      await ensureAvailable(monitorPage, site.baseUrl, fixture.handle, 'input[data-apgo-option-input][value="Lavender"]');
       const mainImage = monitorPage.locator('[data-apgo-main-img]').first();
       const beforeImage = await mainImage.getAttribute('src').catch(() => '');
       const lavender = monitorPage.locator('input[data-apgo-option-input][value="Lavender"]').first();

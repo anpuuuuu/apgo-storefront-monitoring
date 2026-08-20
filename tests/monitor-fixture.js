@@ -62,7 +62,7 @@ async function addItems(page, items) {
 
 async function cartRequest(page, url, init = {}) {
   return page.evaluate(async ({ requestUrl, requestInit }) => {
-    const waits = [0, 5_000, 10_000, 20_000];
+    const waits = [0, 5_000, 15_000, 45_000];
     let lastStatus = 0;
     for (const wait of waits) {
       if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
@@ -79,8 +79,12 @@ async function cartRequest(page, url, init = {}) {
   }, { requestUrl: url, requestInit: init });
 }
 
-async function setMarket(page, countryCode) {
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+function siteUrl(baseUrl, pathname = '/') {
+  return new URL(pathname, `${baseUrl.replace(/\/$/, '')}/`).href;
+}
+
+async function setMarket(page, baseUrl, countryCode) {
+  await page.goto(siteUrl(baseUrl), { waitUntil: 'domcontentloaded' });
   const result = await page.evaluate(async (country) => {
     const form = new URLSearchParams({ country_code: country, return_to: '/' });
     const response = await fetch('/localization', {
@@ -95,8 +99,8 @@ async function setMarket(page, countryCode) {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
-async function ensureAvailable(page, handle, selector) {
-  const response = await page.goto(`/products/${encodeURIComponent(handle)}`, { waitUntil: 'domcontentloaded' });
+async function ensureAvailable(page, baseUrl, handle, selector) {
+  const response = await page.goto(siteUrl(baseUrl, `/products/${encodeURIComponent(handle)}`), { waitUntil: 'domcontentloaded' });
   if (!response || response.status() >= 400) throw new TestConfigStaleError(`product ${handle} returned HTTP ${response?.status() || 'network'}`);
   if (await page.locator('[data-apgo-cc-sold-out]:visible, button:has-text("Sold out"):visible').count()) {
     throw new TestConfigStaleError(`product ${handle} is sold out`);
@@ -115,5 +119,6 @@ module.exports = {
   cartJson,
   addItems,
   setMarket,
+  siteUrl,
   ensureAvailable,
 };

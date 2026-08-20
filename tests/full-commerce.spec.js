@@ -6,14 +6,14 @@ const {
   cartJson,
   addItems,
   setMarket,
+  siteUrl,
 } = require('./monitor-fixture');
 
 for (const site of sites) {
   for (const market of site.markets) {
     test(`[full][${site.id}][${market.id}] isolated commerce journey`, async ({ monitorPage }) => {
       await monitorPage.goto(site.baseUrl, { waitUntil: 'domcontentloaded' });
-      await clearCart(monitorPage);
-      await setMarket(monitorPage, market.countryCode);
+      await setMarket(monitorPage, site.baseUrl, market.countryCode);
 
       await test.step('market currency and copy', async () => {
         const currency = await monitorPage.evaluate(() => window.Shopify?.currency?.active || '');
@@ -33,7 +33,7 @@ for (const site of sites) {
         const giftQuantity = cart.items.filter((item) => item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key)))
           .reduce((sum, item) => sum + item.quantity, 0);
         expect(giftQuantity, 'AIOD 6+3 gift lines were not created').toBeGreaterThanOrEqual(fixture.expectedGiftQuantity);
-        await monitorPage.goto('/cart', { waitUntil: 'domcontentloaded' });
+        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
         await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.detergentTabText })).toBeVisible();
         const lockedGift = monitorPage.locator('.cart-items__table-row[data-apgo-gift-line], .apgo-cart-item--gift').first();
         await expect(lockedGift).toBeVisible();
@@ -50,7 +50,7 @@ for (const site of sites) {
         await expect(monitorPage.locator('body')).toContainText(market.priceMarker);
         // Deliberately stop at the checkout summary: no address, payment or
         // order submission is performed by this monitor.
-        await monitorPage.goto('/cart', { waitUntil: 'domcontentloaded' });
+        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
         await clearCart(monitorPage);
       });
 
@@ -58,7 +58,7 @@ for (const site of sites) {
         const fixture = site.fixtures.glaze;
         const triggerVariant = market.id === 'SG' ? fixture.triggerVariantIds[1] : fixture.triggerVariantIds[0];
         await addItems(monitorPage, [{ id: triggerVariant, quantity: 1 }]);
-        await monitorPage.goto('/cart', { waitUntil: 'domcontentloaded' });
+        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
         const tab = monitorPage.getByRole('tab', { name: fixture.tabText });
         await expect(tab).toBeVisible();
         await tab.click();
@@ -81,7 +81,7 @@ for (const site of sites) {
 
       await test.step('recommended tab and checkout summary without order', async () => {
         await addItems(monitorPage, [{ id: site.fixtures.apiCheckVariantId, quantity: 1 }]);
-        await monitorPage.goto('/cart', { waitUntil: 'domcontentloaded' });
+        await monitorPage.goto(siteUrl(site.baseUrl, '/cart'), { waitUntil: 'domcontentloaded' });
         await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.recommendedTabText })).toBeVisible();
         const cartBefore = await cartJson(monitorPage);
         const checkout = monitorPage.locator('button[name="checkout"], a[href*="/checkout"]').first();
