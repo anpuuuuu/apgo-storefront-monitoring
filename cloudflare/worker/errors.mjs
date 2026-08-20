@@ -31,7 +31,7 @@ export async function receiveError(request, env) {
   if (!refOrigin) {
     try { refOrigin = new URL(request.headers.get('referer') || '').origin; } catch { refOrigin = ''; }
   }
-  if (refOrigin && !originAllowed(refOrigin)) return new Response(null, { status: 403, headers });
+  if (!refOrigin || !originAllowed(refOrigin)) return new Response(null, { status: 403, headers });
 
   const raw = await request.text();
   if (new TextEncoder().encode(raw).byteLength > LIMITS.bodyBytes) return new Response(null, { status: 413, headers });

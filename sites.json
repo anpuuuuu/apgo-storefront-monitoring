@@ -1,6 +1,6 @@
 {
   "monitoring": {
-    "workerUrl": "",
+    "workerUrl": "https://apgo-error-monitor.wadeyeh.workers.dev",
     "userAgent": "APGO-HealthCheck/2.0",
     "blockedAnalyticsHosts": [
       "googletagmanager.com",

@@ -2,7 +2,7 @@
   "_readme": "APGO monitoring thresholds. Secrets and account IDs stay in GitHub/Worker secrets; this file contains only non-sensitive behavior settings.",
   "cloudflare": {
     "database_id": "c75e84af-67df-4761-a559-2b0c1d904989",
-    "worker_url": ""
+    "worker_url": "https://apgo-error-monitor.wadeyeh.workers.dev"
   },
   "uptime": {
     "failure_samples": 2,
