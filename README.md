@@ -7,7 +7,7 @@
 | **1 拨测** | 网站活着吗（首页 + `/cart.js`） | ~10 分钟 | `uptime.yml` → `scripts/uptime-check.sh` | ✅ |
 | **2 合成监控** | 关键流程走得通吗（真浏览器加购） | 每小时 + 每次 theme 更新 | `site-health.yml` → Playwright | ✅ |
 | **3 前端报错** | 访客浏览器里 JS 报错即上报（未知坏法也抓得到） | 实时收集 + 每小时汇总 | theme snippet → Cloudflare Worker → `monitor-alerts.yml` | 🔧 等 CF token |
-| **4 业务指标** | 白天加购数异常为 0 就报警（最后兜底） | 每小时 | `monitor-alerts.yml` → GA4 API | 🔧 等门槛验证 |
+| **4 业务指标** | 白天加购数异常为 0 就报警（最后兜底） | 每小时 | `monitor-alerts.yml` → GA4 API | ✅ 观察模式运行中 |
 
 背景：2026 年 8 月，theme 的一个 bug 让 v3 商品页的加购按钮**静默失效了 4 天**才被发现（修复见 `106eaf5`）。该 bug 没有抛出任何 JS 错误——所以第 2 层（真浏览器点按钮）是主力，第 3 层抓会报错的坏法，第 1 层管「整站挂了」的分钟级发现，第 4 层管「前面全漏掉但钱的信号不会骗人」。
 

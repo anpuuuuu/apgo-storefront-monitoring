@@ -10,7 +10,7 @@
 | 1 拨测 | ✅ 运行中 | `uptime.yml` 每 ~10 分钟 curl apgo.my 首页 + /cart.js；CF secrets 未设前是无状态模式（会重复告警、无恢复通知），设好自动升级 |
 | 2 合成监控 | ✅ 运行中 | `site-health.yml` 每小时 + 每次 theme push，真浏览器加购；已验证能抓真实故障（见下面事件史） |
 | 3 前端报错 | 🔧 代码全好，未通电 | Worker 未部署（等 Wade 的 CF token）；theme snippet 已在 repo（`snippets/apgo-error-monitor.liquid`）但**未被任何 layout 引用**，是死代码，且端点 URL 还是占位符 |
-| 4 业务指标 | 🔧 OIDC 已配置 | Google WIF 已通电，等 `validate_ga4` 门槛验证；配置是 observe 模式 |
+| 4 业务指标 | ✅ 观察模式运行中 | Google WIF 已通电；`validate_ga4` 已确认 Realtime API 有 `add_to_cart`；配置是 observe 模式 |
 
 基础设施：Cloudflare D1 库 `apgo-monitoring`（id `c75e84af-67df-4761-a559-2b0c1d904989`，4 张表见 `cloudflare/worker/schema.sql`，已建好）。阈值集中在 `alerts-config.json`。GitHub secrets 现有 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`。
 
@@ -29,9 +29,9 @@
 
 已建立 Google Workload Identity Pool `github-actions`、Provider `apgo-theme`，并让仓库 ID `1154313539` 模拟现有服务账号 `codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`。认证使用短期 OIDC access token；不要再创建或索取 `GCP_SA_KEY`。
 
-1. **门槛验证先行**：晚间繁忙时段 dispatch `monitor-alerts.yml` 勾 `validate_ga4` → 日志里看 realtime 事件名单里**有没有 `add_to_cart`**。没有 = Shopify 走服务端上报、零值检测设计不成立，**停下换方案**（退路：runReport 滞后日环比，或用第 3 层管道自建加购计数），别硬上
-2. 验证通过 → 什么都不用做，observe 模式自动开始跑（每小时,只记 `alert_log` 的 `would_alert` 行、不发通知）
-3. 1–2 周后用 MCP 查 `alert_log` 复盘 would_alert,向 Wade 汇报误报率,必要时调 `alerts-config.json` 的 `ga4.min_hour_median` → 他点头后把 `ga4.mode` 改 `"armed"`（一行 commit）
+1. **门槛验证已通过**：2026-08-20 的 [validation run](https://github.com/anpuuuuu/apgo-theme/actions/runs/32364686993) 在 Realtime API 读到 `add_to_cart: 10`，第 4 层设计成立
+2. observe 模式已自动开始跑（每小时，只记 `alert_log` 的 `would_alert` 行、不发通知）
+3. 1–2 周后用 MCP 查 `alert_log` 复盘 would_alert，向 Wade 汇报误报率，必要时调 `alerts-config.json` 的 `ga4.min_hour_median` → 他点头后把 `ga4.mode` 改 `"armed"`（一行 commit）
 
 ### C. 日常值守
 
