@@ -1,11 +1,9 @@
 name: Storefront browser health
 
 on:
-  # SCHEDULE DISABLED 2026-08-20. lightweight.spec.js asserts
-  # window.__apgoEM === 1, but apgo-error-monitor.liquid returns early
-  # on the APGO-HealthCheck user agent this suite runs with, so the
-  # check can never pass and paged Telegram every hour. Run manually
-  # via workflow_dispatch; re-enable once the assertion is fixed.
+  # Staged rollout: the deterministic Layer 3 assertion has been fixed, but
+  # schedules stay disabled until one manual light run and one manual MY/SG
+  # full run pass against the deployed storefront.
   # schedule:
   # - cron: '7 * * * *'
   # - cron: '37 1,13 * * *'
@@ -16,9 +14,8 @@ on:
         type: choice
         options: [light, full]
         default: light
-  # PUSH TRIGGER DISABLED 2026-08-20, same reason as the schedule above: the
-  # suite fails deterministically, so every theme push paged Telegram as well
-  # as every hourly run. Re-enable together with the schedule.
+  # Re-enable the push trigger together with the schedules after the manual
+  # rollout checks pass.
   # push:
   #   branches: [main]
   #   paths:
@@ -78,6 +75,7 @@ jobs:
       - name: Install Chromium
         run: timeout 300 npx playwright install --with-deps chromium || npx playwright install chromium
       - name: Run browser suite
+        id: browser-suite
         env:
           MONITOR_SUITE: ${{ steps.suite.outputs.value }}
         run: npm run test:${{ steps.suite.outputs.value }}
@@ -90,14 +88,22 @@ jobs:
           MONITOR_SUITE: ${{ steps.suite.outputs.value }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/write-heartbeat.mjs
-      - name: Notify workflow failure
-        if: failure()
+      - name: Notify Playwright assertion failure
+        if: failure() && steps.browser-suite.outcome == 'failure'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_TITLE: APGO Layer 2 browser monitoring failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/telegram-notify.js
+      - name: Notify setup or monitoring infrastructure failure
+        if: failure() && steps.browser-suite.outcome != 'failure'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_TITLE: APGO Layer 2 monitoring infrastructure failed
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/workflow-failure-notify.mjs
       - name: Upload diagnostic artifacts
         if: failure()
         uses: actions/upload-artifact@v4

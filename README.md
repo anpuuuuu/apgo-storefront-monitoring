@@ -92,7 +92,7 @@ Variables：`GA4_PROPERTY_ID`、`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`。
 1. `npm run check:worker`。
 2. 手动运行 `Deploy APGO monitoring worker`；它先应用 D1 Migration，再部署 Worker。
 3. 从日志取得 `workers.dev` URL，填进 `MONITOR_WORKER_URL`、`alerts-config.json`、`sites.json`、Theme snippet。
-4. 保持 `CRON_ENABLED=false` 验证 `/health`、Heartbeat、Beacon、D1 和 Telegram。
+4. 保持 `CRON_ENABLED=false`，以 `rollout_validation=true` 手动运行 self-health，验证 Beacon、Layer 3 Heartbeat、D1 和 Telegram；此阶段 `/health` 返回 Layer 1 未启动是预期状态。
 5. 手动跑 Layer 2、Layer 3 self-test、Layer 4 validate。
 6. 改 `CRON_ENABLED=true` 并重新部署。
 

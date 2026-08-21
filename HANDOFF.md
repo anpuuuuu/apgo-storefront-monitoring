@@ -25,7 +25,7 @@
 3. 将同一 URL 写进 Theme snippet、`sites.json` 和 `alerts-config.json`。
 4. Worker 保持 Cron 关闭，测试 `/health`、非法 Origin、Payload、Heartbeat、经过认证的 Layer 3 self-test 和 D1。
 5. 合并/推送 main，让 Shopify GitHub integration 收到 Theme snippet。
-6. 手动跑轻量和 MY/SG 完整 Playwright；完整测试的 Detergent、Glaze、推荐/Checkout 使用独立 Session。若 Shopify 持续返回 429，等待限流恢复后重跑，不将其判为业务功能故障。
+6. 先以 `rollout_validation=true` 手动运行 Monitoring self health，验证 Layer 3 而不要求尚未开启的 Layer 1；再手动跑轻量和 MY/SG 完整 Playwright。完整测试的 Detergent、Glaze、推荐/Checkout 使用独立 Session。若 Shopify 持续返回 429，等待限流恢复后重跑，不将其判为业务功能故障。
 7. 运行 GA4 validate、daily-primary、daily-confirm。
 8. `CRON_ENABLED=true` 后部署；旧 GitHub Uptime 并行 24 小时再移除 schedule。
 

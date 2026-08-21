@@ -1,12 +1,10 @@
 name: Monitoring self health
 
 on:
-  # SCHEDULE DISABLED 2026-08-20. The failure notifier is
-  # telegram-notify.js, which parses Playwright's results.json --
-  # a file this workflow never produces, so every failure surfaced as
-  # 'could not parse results.json: ENOENT' and hid the real cause.
-  # Run manually via workflow_dispatch; re-enable once it uses a
-  # notifier that does not depend on results.json.
+  # Staged rollout: keep schedules disabled until the Worker HTTP endpoints,
+  # authenticated Layer 3 self-test and first Layer 1 cron heartbeat have all
+  # been verified. The rollout_validation input lets us validate Layer 3
+  # before Layer 1 is deliberately enabled.
   # schedule:
   # - cron: '23 * * * *'
   # - cron: '43 0 * * *'
@@ -16,6 +14,10 @@ on:
         description: Also run Layer 3 beacon self-test
         type: boolean
         default: true
+      rollout_validation:
+        description: Skip Layer 1 and schedule freshness while Cron is intentionally disabled
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,10 +40,12 @@ jobs:
           test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
           test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
       - name: Check Worker and Layer 1 heartbeat
+        if: inputs.rollout_validation != true
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
         run: node monitoring/scripts/worker-health.mjs
       - name: Check scheduled workflow freshness
+        if: inputs.rollout_validation != true
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node monitoring/scripts/github-schedule-health.mjs
