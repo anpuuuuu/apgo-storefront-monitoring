@@ -58,7 +58,6 @@ for (const site of sites) {
         }
       }
       await clickCartAdd(monitorPage, add);
-      await expect.poll(async () => (await cartJson(monitorPage)).item_count, { timeout: 30_000 }).toBeGreaterThan(0);
       await clearCart(monitorPage);
     });
   }

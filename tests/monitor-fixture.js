@@ -164,8 +164,9 @@ async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_00
     }
     if (!response.ok()) throw new Error(`/cart/add.js HTTP ${lastStatus}: ${JSON.stringify(body)}`);
 
+    const addedVariantIds = addResponseVariantIds(body);
+    expect(addedVariantIds.length, 'UI add response should contain at least one added variant').toBeGreaterThan(0);
     if (expectedVariantId) {
-      const addedVariantIds = addResponseVariantIds(body);
       expect(
         addedVariantIds,
         `UI add response should include selected variant ${expectedVariantId}`
