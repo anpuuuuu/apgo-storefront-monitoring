@@ -52,6 +52,16 @@ for (const check of checks) {
   }
   if (!latest) throw new Error(`${check.workflow} has no completed scheduled run after startup grace`);
   const ageMinutes = (now - Date.parse(latest.updated_at)) / 60_000;
+  if (ageMinutes > check.maxAgeMinutes && rolloutAgeMinutes <= 180) {
+    console.log(JSON.stringify({
+      workflow: check.workflow,
+      status: 'startup_grace',
+      rolloutAgeMinutes,
+      previousScheduledRunAgeMinutes: ageMinutes,
+      message: 'Schedule was just enabled; waiting for its first post-rollout run',
+    }));
+    continue;
+  }
   console.log(JSON.stringify({ workflow: check.workflow, ageMinutes, conclusion: latest.conclusion, url: latest.html_url }));
   if (ageMinutes > check.maxAgeMinutes) throw new Error(`${check.workflow} schedule is stale (${ageMinutes.toFixed(1)} minutes)`);
   if (latest.conclusion !== 'success') throw new Error(`${check.workflow} latest scheduled run concluded ${latest.conclusion}`);

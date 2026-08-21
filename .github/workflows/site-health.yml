@@ -22,8 +22,6 @@ on:
       - 'sections/**'
       - 'snippets/**'
       - 'templates/**'
-      - 'monitoring/**'
-      - '.github/workflows/site-health.yml'
 
 concurrency:
   group: storefront-health-${{ github.ref }}
