@@ -21,8 +21,24 @@ export function bearerToken(request) {
 export function cleanPath(value) {
   try {
     const url = new URL(String(value || ''), 'https://apgo.my');
-    return url.pathname.slice(0, 300);
+    return redactSensitivePath(url.pathname).slice(0, 300);
   } catch {
     return '/';
   }
+}
+
+export function cleanSource(value) {
+  const input = String(value || '');
+  if (!input) return '';
+  try {
+    const url = new URL(input, 'https://apgo.my');
+    return `${url.origin}${redactSensitivePath(url.pathname)}`.slice(0, 300);
+  } catch {
+    return input.replace(/[?#].*$/, '').slice(0, 300);
+  }
+}
+
+function redactSensitivePath(pathname) {
+  return String(pathname || '/')
+    .replace(/(\/gift_cards\/)[^/]+/i, '$1[redacted]');
 }

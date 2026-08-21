@@ -37,6 +37,9 @@ export const LIMITS = {
   errorWindowMinutes: 10,
   errorMinOccurrences: 3,
   errorMinSessions: 2,
+  resourceMinOccurrences: 8,
+  resourceMinSessions: 5,
+  errorDigestMaxItems: 6,
   errorRealertMs: 2 * 60 * 60_000,
 };
 

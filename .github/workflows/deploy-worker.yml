@@ -36,6 +36,12 @@ jobs:
       - name: Install Worker tooling
         working-directory: monitoring
         run: npm ci --no-audit --no-fund
+      - name: Test Layer 3 alert policy
+        working-directory: monitoring
+        run: npm run test:layer3
+      - name: Validate Worker bundle
+        working-directory: monitoring
+        run: npm run check:worker
       - name: Back up remote D1 before migrations
         working-directory: monitoring
         env:

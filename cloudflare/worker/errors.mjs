@@ -1,6 +1,6 @@
 import { LIMITS, SHOPIFY_ORIGIN, STORE_ORIGINS } from './config.mjs';
 import { getState, logAlert, setState, writeHeartbeat } from './db.mjs';
-import { bearerToken, cleanPath, secretMatches, sha256Hex } from './security.mjs';
+import { bearerToken, cleanPath, cleanSource, secretMatches, sha256Hex } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
 
 export function originAllowed(origin) {
@@ -8,12 +8,27 @@ export function originAllowed(origin) {
 }
 
 export function corsHeaders(origin) {
-  return {
-    'access-control-allow-origin': originAllowed(origin) ? origin : STORE_ORIGINS[0],
+  const headers = {
     'access-control-allow-methods': 'POST, OPTIONS',
     'access-control-allow-headers': 'content-type',
     'access-control-max-age': '86400',
+    vary: 'Origin',
   };
+  if (originAllowed(origin)) headers['access-control-allow-origin'] = origin;
+  return headers;
+}
+
+export function isCriticalCartError({ kind, status, stage }) {
+  const httpStatus = Number(status) || 0;
+  return kind === 'cart'
+    && stage === 'response'
+    && httpStatus >= 500
+    && httpStatus <= 599;
+}
+
+export function isIgnoredBrowserNoise({ kind, message }) {
+  if (kind !== 'error') return false;
+  return /_AutofillCallbackHandler|window\.webkit\.messageHandlers/.test(String(message || ''));
 }
 
 function cleanText(value, max) {
@@ -82,16 +97,20 @@ export async function receiveError(request, env) {
   const day = new Date().toISOString().slice(0, 10);
   const ipHash = (await sha256Hex(`${request.headers.get('cf-connecting-ip') || ''}|${day}`)).slice(0, 32);
   const message = cleanText(data.m, 300);
-  const source = cleanText(data.src, 300);
+  const source = cleanSource(data.src);
   const line = Number.isFinite(Number(data.line)) ? Math.trunc(Number(data.line)) : 0;
   const col = Number.isFinite(Number(data.col)) ? Math.trunc(Number(data.col)) : 0;
   const kind = ['error', 'rejection', 'resource', 'cart', 'selftest'].includes(data.kind) ? data.kind : 'error';
   const action = cleanText(data.action, 80);
   const stage = cleanText(data.stage, 80);
   const status = Number.isFinite(Number(data.status)) ? Math.trunc(Number(data.status)) : 0;
-  const critical = kind === 'cart' && Boolean(data.critical);
+  // Never trust a browser-supplied `critical` flag. A status of 0 is normally
+  // a shopper connection drop, navigation abort or device/network issue. Only
+  // a real Shopify Cart API 5xx response is eligible for immediate escalation.
+  const critical = isCriticalCartError({ kind, status, stage });
   const authorizedSelftest = kind === 'selftest'
     && await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN);
+  if (isIgnoredBrowserNoise({ kind, message })) return new Response(null, { status: 204, headers });
   const signature = (await sha256Hex(`${kind}|${message}|${source}|${line}|${action}|${stage}`)).slice(0, 32);
 
   const rate = await env.DB.prepare(
@@ -108,7 +127,14 @@ export async function receiveError(request, env) {
     cleanText(data.sid, 64), ipHash, action, status, stage, critical ? 1 : 0).run();
 
   if (authorizedSelftest) await writeHeartbeat(env.DB, 'layer3', 'authenticated-selftest', 'ok', { signature, page: cleanPath(data.url) });
-  if (critical) await alertCriticalCartError(env, { signature, message, action, stage, status });
+  if (critical) await alertCriticalCartError(env, {
+    signature,
+    message,
+    action,
+    stage,
+    status,
+    page_url: cleanPath(data.url),
+  });
   return new Response(null, { status: 204, headers });
 }
 
@@ -116,7 +142,7 @@ async function alertCriticalCartError(env, detail) {
   const key = `critical-cart:${detail.signature}`;
   const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
   if (Date.now() - state.lastAlertMs < LIMITS.errorRealertMs) return;
-  await sendTelegram(env, `🔴 [Layer 3 Critical Cart Error]\n${detail.action || detail.stage}: ${detail.message}\nHTTP ${detail.status || 'network'}\nSignature: ${detail.signature}`);
+  await sendTelegram(env, `🔴 [Layer 3 Critical Cart Error]\n${detail.action || detail.stage}: ${detail.message}\nHTTP ${detail.status}\nPage: ${detail.page_url}\nSignature: ${detail.signature}`);
   await logAlert(env.DB, 'layer3', 'critical-cart', detail);
   await setState(env.DB, key, { lastAlertMs: Date.now() });
 }
@@ -126,27 +152,79 @@ export async function digestBrowserErrors(env) {
     `SELECT signature, kind, COUNT(*) AS occurrences,
             COUNT(DISTINCT session_id) AS sessions,
             MIN(message) AS message, MIN(page_url) AS page_url,
-            MAX(action) AS action, MAX(stage) AS stage, MAX(http_status) AS http_status
+            MIN(source) AS source, MAX(action) AS action,
+            MAX(stage) AS stage, MAX(http_status) AS http_status
      FROM js_errors
      WHERE critical = 0 AND kind <> 'selftest' AND created_at > datetime('now', '-10 minutes')
      GROUP BY signature
-     HAVING COUNT(*) >= ?1 AND COUNT(DISTINCT session_id) >= ?2
-     ORDER BY occurrences DESC`
-  ).bind(LIMITS.errorMinOccurrences, LIMITS.errorMinSessions).all();
+     HAVING (kind = 'resource' AND COUNT(*) >= ?3 AND COUNT(DISTINCT session_id) >= ?4)
+         OR (kind <> 'resource' AND COUNT(*) >= ?1 AND COUNT(DISTINCT session_id) >= ?2)
+     ORDER BY occurrences DESC
+     LIMIT 50`
+  ).bind(
+    LIMITS.errorMinOccurrences,
+    LIMITS.errorMinSessions,
+    LIMITS.resourceMinOccurrences,
+    LIMITS.resourceMinSessions,
+  ).all();
 
+  const pending = [];
   for (const row of rows.results || []) {
     const known = await env.DB.prepare('SELECT muted FROM known_signatures WHERE signature = ?1').bind(row.signature).first();
     if (known?.muted) continue;
     const key = `js-alert:${row.signature}`;
     const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
     if (Date.now() - state.lastAlertMs < LIMITS.errorRealertMs) continue;
-    await sendTelegram(env, `🟠 [Layer 3 Browser Error]\n${row.sessions} sessions · ${row.occurrences} occurrences / 10 min\n${row.kind}: ${row.message}\nPage: ${row.page_url}\nSignature: ${row.signature}`);
-    await logAlert(env.DB, 'layer3', 'browser-error', row);
-    await setState(env.DB, key, { lastAlertMs: Date.now() });
-    await env.DB.prepare(
+    pending.push(row);
+  }
+
+  if (!pending.length) return { alerted: 0, eligible: 0 };
+
+  const selected = pending.slice(0, LIMITS.errorDigestMaxItems);
+  await sendTelegram(env, buildBrowserDigest(selected, pending.length));
+  await logAlert(env.DB, 'layer3', 'browser-digest', {
+    signatures: selected.map((row) => row.signature),
+    omitted: Math.max(0, pending.length - selected.length),
+    rows: selected,
+  });
+
+  const alertedAt = Date.now();
+  await env.DB.batch(selected.flatMap((row) => [
+    env.DB.prepare(
+      `INSERT INTO state (key, value, updated_at)
+       VALUES (?1, ?2, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    ).bind(`js-alert:${row.signature}`, JSON.stringify({ lastAlertMs: alertedAt })),
+    env.DB.prepare(
       `INSERT INTO known_signatures (signature, sample_message, last_alerted_at)
        VALUES (?1, ?2, datetime('now'))
        ON CONFLICT(signature) DO UPDATE SET last_alerted_at = datetime('now')`
-    ).bind(row.signature, row.message).run();
+    ).bind(row.signature, row.message),
+  ]));
+
+  return { alerted: selected.length, eligible: pending.length };
+}
+
+export function buildBrowserDigest(rows, eligibleCount = rows.length) {
+  const sections = [[
+    '🟠 [Layer 3 Browser Error Digest]',
+    `${eligibleCount} eligible signatures / 10 min`,
+  ].join('\n')];
+
+  rows.forEach((row, index) => {
+    const stage = row.stage ? `/${String(row.stage).toUpperCase()}` : '';
+    const lines = [
+      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${row.sessions} sessions · ${row.occurrences} events`,
+      String(row.message || 'Unknown browser error').slice(0, 220),
+      `Page: ${row.page_url || '/'}`,
+    ];
+    if (row.source) lines.push(`Source: ${String(row.source).slice(0, 220)}`);
+    lines.push(`Signature: ${row.signature}`);
+    sections.push(lines.join('\n'));
+  });
+
+  if (eligibleCount > rows.length) {
+    sections.push(`+ ${eligibleCount - rows.length} more signatures retained in D1`);
   }
+  return sections.join('\n\n');
 }

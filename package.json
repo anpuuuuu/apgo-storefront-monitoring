@@ -4,6 +4,7 @@
   "description": "Synthetic health checks for APGO storefronts (add-to-cart and critical flows)",
   "scripts": {
     "test": "playwright test",
+    "test:layer3": "node --test tests/layer3-alerts.test.mjs",
     "test:light": "cross-env MONITOR_SUITE=light playwright test",
     "test:full": "cross-env MONITOR_SUITE=full playwright test",
     "check:worker": "wrangler deploy --dry-run --config cloudflare/worker/wrangler.jsonc"

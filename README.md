@@ -46,9 +46,12 @@ npm run test:full
 - 收集 `window.error`、第一方资源加载失败、`unhandledrejection`、Cart API 失败和 Theme 主动触发的 `apgo:cart-error`。
 - 只发送清理后的 path，不发送 query、姓名、邮箱、地址或 cart token。
 - Worker 只接受 APGO/Shopify Origin，限制 8KB、10 条/IP/分钟；IP 每日散列。
-- 非 Critical：10 分钟内至少 3 次且至少 2 个 Session 才告警；两小时同 Signature 不重复。
-- 5xx/Network Critical Cart Error 可立即告警。
-- Error 30 天、Alert 90 天；已知 Signature 可在 `known_signatures.muted=1` 静音。
+- JS、Promise 与一般 Cart Error：10 分钟内至少 3 次且至少 2 个 Session 才进入告警；资源错误采用较高的 8 次、5 个 Session 门槛。
+- 每个 Cron 周期只发送一条 Digest，最多列出 6 个 Signature；其余证据继续保留在 D1，不再为每个失败资源各发一条 Telegram。
+- 只有 Shopify Cart API 实际返回 HTTP 5xx 才会立即发送 Critical Cart Error。`Failed to fetch`、`Load failed` 与 status `0` 属于客户端网络/导航中断，必须达到多人门槛才告警。
+- 两小时内同 Signature 不重复；已知 Signature 可在 `known_signatures.muted=1` 静音。
+- `page_url` 只保存 path，`source` 只保存 origin + path；query string 会被移除，Gift Card identifier 会被替换为 `[redacted]`。
+- Error 保留 30 天，Alert 保留 90 天。
 - 手动网页自测：`https://apgo.my/?apgo_em_test=1`；自动每日自测由 `monitor-self-health.yml` 使用 Heartbeat Token 发出经过认证的 Self-test。公开网页触发的 Self-test 不得写入 Heartbeat。
 
 ## Layer 4
