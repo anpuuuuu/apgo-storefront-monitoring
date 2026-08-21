@@ -39,9 +39,17 @@ async function returnToCartAndClear(page, site) {
   await clearCart(page);
 }
 
+const requestedMarket = (process.env.MONITOR_MARKET || '').toUpperCase();
+const requestedFlow = (process.env.MONITOR_FLOW || '').toLowerCase();
+
+function shouldRun(market, flow) {
+  return (!requestedMarket || market.id === requestedMarket)
+    && (!requestedFlow || flow === requestedFlow);
+}
+
 for (const site of sites) {
   for (const market of site.markets) {
-    test(`[full][${site.id}][${market.id}] detergent tiers and checkout`, async ({ monitorPage }) => {
+    if (shouldRun(market, 'detergent')) test(`[full][${site.id}][${market.id}] detergent tiers and checkout`, async ({ monitorPage }) => {
       await prepareMarket(monitorPage, site, market);
       const fixture = site.fixtures.detergentPromo;
       const variants = Object.values(fixture.variants).slice(0, 3);
@@ -101,7 +109,7 @@ for (const site of sites) {
       await returnToCartAndClear(monitorPage, site);
     });
 
-    test(`[full][${site.id}][${market.id}] Glaze add-on eligibility`, async ({ monitorPage }) => {
+    if (shouldRun(market, 'glaze')) test(`[full][${site.id}][${market.id}] Glaze add-on eligibility`, async ({ monitorPage }) => {
       await prepareMarket(monitorPage, site, market);
       const fixture = site.fixtures.glaze;
       const triggerVariant = market.id === 'SG' ? fixture.triggerVariantIds[1] : fixture.triggerVariantIds[0];
@@ -137,7 +145,7 @@ for (const site of sites) {
       await clearCart(monitorPage);
     });
 
-    test(`[full][${site.id}][${market.id}] recommendations and checkout`, async ({ monitorPage }) => {
+    if (shouldRun(market, 'recommendations')) test(`[full][${site.id}][${market.id}] recommendations and checkout`, async ({ monitorPage }) => {
       await prepareMarket(monitorPage, site, market);
       await addItems(monitorPage, [{ id: site.fixtures.apiCheckVariantId, quantity: 1 }]);
       await navigateToCart(monitorPage, site.baseUrl, { settleMs: 2_000 });

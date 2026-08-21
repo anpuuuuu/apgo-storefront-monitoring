@@ -23,7 +23,8 @@
 配置全部集中在 `sites.json`，商品或 Variant 过期时抛出 `TEST_CONFIG_STALE`，不会伪装成网站故障。
 
 - 轻量：Homepage、导航、Layer 3 bootstrap、Cart API、普通/赠品 V3、洗衣精香味/图片/数量总价/正确 Variant、购物车数量/小计/删除。
-- 完整：每个市场分别以独立 Session 测试 Detergent、Glaze 和推荐/Checkout；币种；MY 6 包=4+2、9 包=6+3；SG 6 包全数收费；赠品保护；Glaze Trigger/Add-on；Cart Offers Tabs；Checkout 摘要。不会提交订单。
+- 完整：每个市场分别测试 Detergent、Glaze 和推荐/Checkout；币种；MY 6 包=4+2、9 包=6+3；SG 6 包全数收费；赠品保护；Glaze Trigger/Add-on；Cart Offers Tabs；Checkout 摘要。不会提交订单。
+- 六个完整 Journey 使用独立 GitHub Runner 并逐个执行；只有全部通过才写 Layer 2 Heartbeat。这样既隔离 Session/IP，也避免监控自己的密集 Cart/Localization 请求触发 Shopify `429`。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
 - Shopify `429` 使用 5/15/45 秒退避；持续 429 明确报告为平台限流，不归类为商品配置失效，也不自动重跑整套真实写入。
 - 失败上传 Screenshot、Trace、Console、Network 和最终 Cart JSON；关闭 Video，避免单次失败产生数百 MB 无效文件。
