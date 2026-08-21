@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sites.json'), 'utf8'));
 const sites = config.sites.filter((site) => site.enabled && site.type === 'shopify');
+const monitorSuite = process.env.MONITOR_SUITE || 'light';
 
 class TestConfigStaleError extends Error {
   constructor(message) {
@@ -38,6 +39,14 @@ const test = base.extend({
     await context.route('**/*', (route) => {
       const url = route.request().url();
       if (config.monitoring.blockedAnalyticsHosts.some((host) => url.includes(host))) return route.abort('blockedbyclient');
+      // Light checks validate the theme's own product/cart controls. Loading
+      // AIOD here adds several background cart polls which can rate-limit the
+      // synthetic session before its single UI add. Full commerce checks keep
+      // AIOD enabled because those checks explicitly verify its discounts and
+      // free gifts.
+      if (monitorSuite === 'light' && /\/extensions\/.*aiod-automatic-discounts-/i.test(url)) {
+        return route.abort('blockedbyclient');
+      }
       return route.continue();
     });
     await use(page);
@@ -117,6 +126,57 @@ async function cartRequest(page, url, init = {}) {
   }, { requestUrl: url, requestInit: init });
 }
 
+function addResponseVariantIds(body) {
+  const entries = Array.isArray(body?.items) ? body.items : [body];
+  return entries
+    .map((item) => Number(item?.variant_id || item?.id || 0))
+    .filter(Boolean);
+}
+
+async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_000 } = {}) {
+  const waits = [0, 5_000, 15_000, 45_000];
+  let lastStatus = 0;
+
+  for (const wait of waits) {
+    if (wait) await page.waitForTimeout(wait);
+    await expect(button).toBeEnabled({ timeout: timeoutMs });
+
+    const responsePromise = page.waitForResponse((response) => {
+      try {
+        const url = new URL(response.url());
+        return url.pathname === '/cart/add.js' && response.request().method() === 'POST';
+      } catch (_) {
+        return false;
+      }
+    }, { timeout: timeoutMs });
+
+    await button.click();
+    const response = await responsePromise;
+    lastStatus = response.status();
+    const text = await response.text();
+    if (lastStatus === 429) continue;
+
+    let body;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch (_) {
+      throw new Error(`/cart/add.js returned non-JSON HTTP ${lastStatus}: ${text.slice(0, 300)}`);
+    }
+    if (!response.ok()) throw new Error(`/cart/add.js HTTP ${lastStatus}: ${JSON.stringify(body)}`);
+
+    if (expectedVariantId) {
+      const addedVariantIds = addResponseVariantIds(body);
+      expect(
+        addedVariantIds,
+        `UI add response should include selected variant ${expectedVariantId}`
+      ).toContain(Number(expectedVariantId));
+    }
+    return body;
+  }
+
+  throw new Error(`/cart/add.js remained rate limited after retries (HTTP ${lastStatus})`);
+}
+
 function siteUrl(baseUrl, pathname = '/') {
   return new URL(pathname, `${baseUrl.replace(/\/$/, '')}/`).href;
 }
@@ -177,7 +237,14 @@ async function navigateToCart(page, baseUrl, { settleMs = 1_500 } = {}) {
 }
 
 async function ensureAvailable(page, baseUrl, handle, selector) {
-  const response = await page.goto(siteUrl(baseUrl, `/products/${encodeURIComponent(handle)}`), { waitUntil: 'domcontentloaded' });
+  const target = siteUrl(baseUrl, `/products/${encodeURIComponent(handle)}`);
+  const waits = [0, 5_000, 15_000, 45_000];
+  let response;
+  for (const wait of waits) {
+    if (wait) await page.waitForTimeout(wait);
+    response = await page.goto(target, { waitUntil: 'domcontentloaded' });
+    if (response?.status() !== 429) break;
+  }
   if (!response || response.status() >= 400) throw new TestConfigStaleError(`product ${handle} returned HTTP ${response?.status() || 'network'}`);
   if (await page.locator('[data-apgo-cc-sold-out]:visible, button:has-text("Sold out"):visible').count()) {
     throw new TestConfigStaleError(`product ${handle} is sold out`);
@@ -195,6 +262,7 @@ module.exports = {
   clearCart,
   cartJson,
   addItems,
+  clickCartAdd,
   waitForCartStable,
   setMarket,
   navigateToCart,

@@ -10,7 +10,10 @@
       "facebook.com/tr",
       "analytics.tiktok.com",
       "clarity.ms",
-      "hotjar.com"
+      "hotjar.com",
+      "monorail-edge.shopifysvc.com",
+      "apgo.my/web-pixels@",
+      "apgo.my/api/collect"
     ]
   },
   "sites": [
