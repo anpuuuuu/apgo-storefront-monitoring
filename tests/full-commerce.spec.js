@@ -121,8 +121,11 @@ for (const site of sites) {
       await logOfferTabs(monitorPage, `${market.id}-glaze-trigger`);
       await expect(tab).toBeVisible({ timeout: 20_000 });
       await tab.click();
-      const add = monitorPage.locator('[data-offer-group]:not([hidden]) [data-offer-add]:not([disabled])').first();
-      if (await add.isVisible().catch(() => false)) {
+      // Keep the locator anchored to the first offer card. Filtering by
+      // :not([disabled]) made Playwright jump to the next card after the
+      // clicked button became disabled, producing a false failure.
+      const add = monitorPage.locator('[data-offer-group]:not([hidden]) [data-offer-add]').first();
+      if (await add.isVisible().catch(() => false) && await add.isEnabled().catch(() => false)) {
         await add.click();
         await dismissGiftModal(monitorPage);
         await expect(add).toBeDisabled();
@@ -150,7 +153,12 @@ for (const site of sites) {
       await addItems(monitorPage, [{ id: site.fixtures.apiCheckVariantId, quantity: 1 }]);
       await navigateToCart(monitorPage, site.baseUrl, { settleMs: 2_000 });
       await dismissGiftModal(monitorPage);
-      await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.recommendedTabText })).toBeVisible();
+      // With only one eligible offer group the storefront intentionally hides
+      // the tab bar and renders that group as a labelled region. Verify the
+      // audience contract instead of requiring editable tab copy to exist.
+      const recommendedGroup = monitorPage.locator('[data-offer-group][data-audience="all"]:not([hidden])').first();
+      await expect(recommendedGroup).toBeVisible({ timeout: 20_000 });
+      await expect(recommendedGroup).toContainText(site.fixtures.cartOffers.recommendedTabText);
       const cartBefore = await cartJson(monitorPage);
       const checkout = monitorPage.locator('button[name="checkout"], a[href*="/checkout"]').first();
       await expect(checkout).toBeVisible();
