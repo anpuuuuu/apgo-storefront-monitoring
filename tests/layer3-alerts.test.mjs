@@ -6,6 +6,7 @@ import {
   corsHeaders,
   isCriticalCartError,
   isIgnoredBrowserNoise,
+  isIgnoredUserAgent,
   originAllowed,
 } from '../cloudflare/worker/errors.mjs';
 import { cleanPath, cleanSource } from '../cloudflare/worker/security.mjs';
@@ -51,15 +52,31 @@ test('browser digest combines signatures and reports omitted evidence', () => {
       kind: 'error',
       stage: '',
       sessions: 4,
+      networks: 3,
       occurrences: 7,
       message: 'Required ref not found',
       page_url: '/pages/golden-bull-award',
+      pages: '/pages/golden-bull-award,/cart',
+      facebook_in_app_sessions: 2,
+      android_webview_sessions: 1,
+      mobile_browser_sessions: 0,
+      desktop_browser_sessions: 1,
       source: 'https://apgo.my/assets/component.js',
     },
   ], 3);
 
   assert.match(message, /Browser Error Digest/);
-  assert.match(message, /4 sessions · 7 events/);
+  assert.match(message, /4 sessions · 3 networks · 7 events/);
   assert.match(message, /Required ref not found/);
+  assert.match(message, /Pages \(2\): \/pages\/golden-bull-award \| \/cart/);
+  assert.match(message, /Facebook in-app \(2\) · Android WebView \(1\) · Desktop browser \(1\)/);
   assert.match(message, /\+ 2 more signatures retained in D1/);
+});
+
+test('social crawlers are ignored without excluding real Facebook in-app shoppers', () => {
+  assert.equal(isIgnoredUserAgent('Mozilla/5.0 (compatible; meta-externalads/1.1; +https://developers.facebook.com/docs/sharing/webmasters/crawler)'), true);
+  assert.equal(isIgnoredUserAgent('facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'), true);
+  assert.equal(isIgnoredUserAgent('Mozilla/5.0 (compatible; Facebot/1.0)'), true);
+  assert.equal(isIgnoredUserAgent('Mozilla/5.0 (Linux; Android 16) [FB_IAB/FB4A;FBAV/526.0.0.0.0;]'), false);
+  assert.equal(isIgnoredUserAgent('Mozilla/5.0 (Linux; Android 15; Device Build/AP3A; wv) Version/4.0 Chrome/138 Mobile Safari/537.36'), false);
 });

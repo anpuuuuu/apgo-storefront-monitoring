@@ -31,6 +31,12 @@ export function isIgnoredBrowserNoise({ kind, message }) {
   return /_AutofillCallbackHandler|window\.webkit\.messageHandlers/.test(String(message || ''));
 }
 
+export function isIgnoredUserAgent(userAgent) {
+  // These are link-preview/ad crawlers, not shoppers. Keep FB_IAB/FB4A and
+  // ordinary Android WebViews because they represent real customer sessions.
+  return /(?:meta-externalads\/|facebookexternalhit\/|\bFacebot\b)/i.test(String(userAgent || ''));
+}
+
 function cleanText(value, max) {
   return String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, max);
 }
@@ -94,6 +100,7 @@ export async function receiveError(request, env) {
   if (!data || typeof data.m !== 'string' || !data.m || typeof data.sid !== 'string') return new Response(null, { status: 400, headers });
 
   const ua = cleanText(request.headers.get('user-agent'), 300);
+  if (isIgnoredUserAgent(ua)) return new Response(null, { status: 204, headers });
   const day = new Date().toISOString().slice(0, 10);
   const ipHash = (await sha256Hex(`${request.headers.get('cf-connecting-ip') || ''}|${day}`)).slice(0, 32);
   const message = cleanText(data.m, 300);
@@ -151,9 +158,32 @@ export async function digestBrowserErrors(env) {
   const rows = await env.DB.prepare(
     `SELECT signature, kind, COUNT(*) AS occurrences,
             COUNT(DISTINCT session_id) AS sessions,
+            COUNT(DISTINCT ip_hash) AS networks,
             MIN(message) AS message, MIN(page_url) AS page_url,
+            GROUP_CONCAT(DISTINCT page_url) AS pages,
             MIN(source) AS source, MAX(action) AS action,
-            MAX(stage) AS stage, MAX(http_status) AS http_status
+            MAX(stage) AS stage, MAX(http_status) AS http_status,
+            COUNT(DISTINCT CASE
+              WHEN instr(user_agent, 'FB_IAB/') > 0 THEN session_id
+            END) AS facebook_in_app_sessions,
+            COUNT(DISTINCT CASE
+              WHEN instr(user_agent, 'FB_IAB/') = 0
+               AND (
+                 instr(user_agent, '; wv)') > 0
+                 OR (instr(user_agent, 'Version/4.0') > 0 AND instr(user_agent, 'Mobile Safari') > 0)
+               )
+              THEN session_id
+            END) AS android_webview_sessions,
+            COUNT(DISTINCT CASE
+              WHEN instr(user_agent, 'Mobile') > 0
+               AND instr(user_agent, 'FB_IAB/') = 0
+               AND instr(user_agent, '; wv)') = 0
+               AND NOT (instr(user_agent, 'Version/4.0') > 0 AND instr(user_agent, 'Mobile Safari') > 0)
+              THEN session_id
+            END) AS mobile_browser_sessions,
+            COUNT(DISTINCT CASE
+              WHEN instr(user_agent, 'Mobile') = 0 THEN session_id
+            END) AS desktop_browser_sessions
      FROM js_errors
      WHERE critical = 0 AND kind <> 'selftest' AND created_at > datetime('now', '-10 minutes')
      GROUP BY signature
@@ -213,11 +243,29 @@ export function buildBrowserDigest(rows, eligibleCount = rows.length) {
 
   rows.forEach((row, index) => {
     const stage = row.stage ? `/${String(row.stage).toUpperCase()}` : '';
+    const networkEvidence = Number(row.networks || 0) > 0 ? ` · ${row.networks} networks` : '';
+    const pages = [...new Set(
+      String(row.pages || row.page_url || '/')
+        .split(',')
+        .map((page) => page.trim())
+        .filter(Boolean),
+    )];
+    const visiblePages = pages.slice(0, 3);
+    const pageEvidence = visiblePages.join(' | ') + (pages.length > visiblePages.length
+      ? ` | +${pages.length - visiblePages.length} more`
+      : '');
+    const clients = [
+      ['Facebook in-app', Number(row.facebook_in_app_sessions || 0)],
+      ['Android WebView', Number(row.android_webview_sessions || 0)],
+      ['Mobile browser', Number(row.mobile_browser_sessions || 0)],
+      ['Desktop browser', Number(row.desktop_browser_sessions || 0)],
+    ].filter(([, count]) => count > 0);
     const lines = [
-      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${row.sessions} sessions · ${row.occurrences} events`,
+      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${row.sessions} sessions${networkEvidence} · ${row.occurrences} events`,
       String(row.message || 'Unknown browser error').slice(0, 220),
-      `Page: ${row.page_url || '/'}`,
+      `Pages (${pages.length}): ${pageEvidence}`,
     ];
+    if (clients.length) lines.push(`Clients: ${clients.map(([label, count]) => `${label} (${count})`).join(' · ')}`);
     if (row.source) lines.push(`Source: ${String(row.source).slice(0, 220)}`);
     lines.push(`Signature: ${row.signature}`);
     sections.push(lines.join('\n'));

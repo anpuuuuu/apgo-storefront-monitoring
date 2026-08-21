@@ -48,7 +48,10 @@ npm run test:full
 - Worker 只接受 APGO/Shopify Origin，限制 8KB、10 条/IP/分钟；IP 每日散列。
 - JS、Promise 与一般 Cart Error：10 分钟内至少 3 次且至少 2 个 Session 才进入告警；资源错误采用较高的 8 次、5 个 Session 门槛。
 - 每个 Cron 周期只发送一条 Digest，最多列出 6 个 Signature；其余证据继续保留在 D1，不再为每个失败资源各发一条 Telegram。
+- Digest 会列出同一 Signature 影响的所有页面（最多显示 3 个）、不同网络数量，以及 Facebook 内置浏览器、Android WebView、一般手机浏览器和桌面浏览器的 Session 分布，避免把跨页面问题误认为单一商品页故障。
 - 只有 Shopify Cart API 实际返回 HTTP 5xx 才会立即发送 Critical Cart Error。`Failed to fetch`、`Load failed` 与 status `0` 属于客户端网络/导航中断，必须达到多人门槛才告警。
+- `Failed to fetch` 代表顾客浏览器当次请求确实失败，但不能单独证明 Shopify 服务器故障；必须结合 Layer 1 Cart API、Layer 2 加购测试与不同网络数量判断。监控不会自动重试 Cart POST，避免服务器已收到第一次请求时造成重复加购。
+- Browser Error Digest 会列出受影响页面、独立网络数与客户端类型。`meta-externalads`、`facebookexternalhit`、`Facebot` 等社交预览/广告爬虫会在写入 D1 前被过滤；真实顾客使用的 Facebook 内置浏览器 `FB_IAB` 仍会保留。
 - 两小时内同 Signature 不重复；已知 Signature 可在 `known_signatures.muted=1` 静音。
 - `page_url` 只保存 path，`source` 只保存 origin + path；query string 会被移除，Gift Card identifier 会被替换为 `[redacted]`。
 - Error 保留 30 天，Alert 保留 90 天。
