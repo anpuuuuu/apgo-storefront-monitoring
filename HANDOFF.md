@@ -3,9 +3,11 @@
 ## 当前设计
 
 - 分支：`codex/monitoring-v2`。
-- 所有已提交的 `main` 代码都包含在分支内；另一个 main worktree 的 Cart Offers UI 未提交改动没有被夹带。
-- Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已重构；`2135fec` 暂停的 Layer 3 接入已修正，但恢复定时任务前仍需先完成一次受控部署与手动验证。
-- Worker 初始 `CRON_ENABLED=false`，必须完成受控部署验证后才开启；旧 GitHub Uptime 继续承担当前存活检测。
+- 分支与 `main` 已同步到本文件所述监控实现。
+- Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已部署；`2135fec` 暂停的 Layer 3 接入已修正。
+- Worker `CRON_ENABLED=true`；5 分钟 Layer 1 已实际触发并写入 D1，`/health` 返回 200。
+- Layer 2 的 MY/SG Detergent、Glaze、推荐/Checkout 六条独立 Journey 已全部通过；Browser 与 Self-health schedules 已开启。
+- 旧 GitHub Uptime 继续并行到 Cloudflare Cron 满 24 小时，之后才关闭其 schedule。
 - GA4 为 `observe`，从 2026-08-20 起至少观察 14 天；API/Auth/Workflow 故障从第一天正式通知。
 
 ## 基础设施
@@ -18,16 +20,11 @@
 - Service Account：`codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`
 - `MONITOR_HEARTBEAT_TOKEN` 已创建为 GitHub Secret；不要输出或写进文件。
 
-## 完成上线的顺序
+## 剩余人工关卡
 
-1. Push 分支并手动 dispatch `deploy-worker.yml`；从日志取得 Worker URL。
-2. 设置 repo variable `MONITOR_WORKER_URL`。
-3. 将同一 URL 写进 Theme snippet、`sites.json` 和 `alerts-config.json`。
-4. Worker 保持 Cron 关闭，测试 `/health`、非法 Origin、Payload、Heartbeat、经过认证的 Layer 3 self-test 和 D1。
-5. 合并/推送 main，让 Shopify GitHub integration 收到 Theme snippet。
-6. 先以 `rollout_validation=true` 手动运行 Monitoring self health，验证 Layer 3 而不要求尚未开启的 Layer 1；再手动跑轻量和 MY/SG 完整 Playwright。完整测试的 Detergent、Glaze、推荐/Checkout 使用逐个执行的独立 GitHub Runner，避免监控自身触发 Shopify 限流；持续 429 不判为业务功能故障。
-7. 运行 GA4 validate、daily-primary、daily-confirm。
-8. `CRON_ENABLED=true` 后部署；旧 GitHub Uptime 并行 24 小时再移除 schedule。
+1. 观察 Cloudflare Cron 与旧 GitHub Uptime 并行满 24 小时；确认没有漏跑、重复通知或异常延迟后，移除 `.github/workflows/uptime.yml` 的 schedule。
+2. 保持 GA4 `observe` 满 14 天，审查 `would_alert`、阈值与误报记录后，再由用户决定是否切换为 `armed`。
+3. 商品、Variant、价格、赠品或 AIOD 规则变更时，先更新 `sites.json` Fixture，并手动跑完整 Browser suite。
 
 ## 不可误报原则
 

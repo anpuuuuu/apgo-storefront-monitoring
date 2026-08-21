@@ -93,8 +93,10 @@ Variables：`GA4_PROPERTY_ID`、`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`。
 1. `npm run check:worker`。
 2. 手动运行 `Deploy APGO monitoring worker`；它先应用 D1 Migration，再部署 Worker。
 3. 从日志取得 `workers.dev` URL，填进 `MONITOR_WORKER_URL`、`alerts-config.json`、`sites.json`、Theme snippet。
-4. 保持 `CRON_ENABLED=false`，以 `rollout_validation=true` 手动运行 self-health，验证 Beacon、Layer 3 Heartbeat、D1 和 Telegram；此阶段 `/health` 返回 Layer 1 未启动是预期状态。
-5. 手动跑 Layer 2、Layer 3 self-test、Layer 4 validate。
-6. 改 `CRON_ENABLED=true` 并重新部署。
+4. 首次上线时保持 `CRON_ENABLED=false`，以 `rollout_validation=true` 手动运行 self-health，验证 Beacon、Layer 3 Heartbeat、D1 和 Telegram。
+5. 手动跑 Layer 2、Layer 3 self-test、Layer 4 validate；全部通过后才将 `CRON_ENABLED` 改为 `true`。
+6. Cron 开启后等待实际的 5 分钟触发，确认 `/health` 返回 200 且包含新鲜的 Layer 1 Heartbeat，再启用 GitHub Browser/Self-health schedules。
+
+当前上线状态（2026-08-21）：Worker Cron、Browser schedules、Self-health schedules 与 GA4 Observe schedules 已启用；MY/SG 六条完整购物流程及正常 Self-health 已通过。旧 GitHub Uptime 会与 Layer 1 并行 24 小时，确认稳定后才移除其 schedule。
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。
