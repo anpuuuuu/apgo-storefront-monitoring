@@ -15,10 +15,9 @@ module.exports = defineConfig({
   use: {
     headless: true,
     viewport: { width: 1366, height: 900 },
-    /* "APGO-HealthCheck" marks this traffic so it can be filtered out of
-       server logs / analytics if ever needed. */
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 APGO-HealthCheck',
+    /* Keep Playwright's real browser UA. Shopify maintains separate document
+       caches for browser versions and a hard-coded UA can receive stale
+       theme HTML. The fixture marks synthetic traffic before page scripts run. */
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     // Traces already include screenshots and network timing. Full-page video

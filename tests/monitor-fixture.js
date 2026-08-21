@@ -16,6 +16,9 @@ const test = base.extend({
   monitorPage: async ({ page, context }, use, testInfo) => {
     const consoleLog = [];
     const networkLog = [];
+    // Runs before every storefront document and lets the Layer 3 snippet
+    // exclude synthetic monitoring without changing the browser User-Agent.
+    await page.addInitScript(() => { window.__apgoHealthCheck = true; });
     page.on('console', (message) => consoleLog.push(`${message.type()}: ${message.text()}`));
     page.on('pageerror', (error) => consoleLog.push(`pageerror: ${error.message}`));
     page.on('requestfailed', (request) => networkLog.push(`FAILED ${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`));
