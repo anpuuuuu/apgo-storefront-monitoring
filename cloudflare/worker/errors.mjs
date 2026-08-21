@@ -1,6 +1,6 @@
 import { LIMITS, SHOPIFY_ORIGIN, STORE_ORIGINS } from './config.mjs';
 import { getState, logAlert, setState, writeHeartbeat } from './db.mjs';
-import { cleanPath, sha256Hex } from './security.mjs';
+import { bearerToken, cleanPath, secretMatches, sha256Hex } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
 
 export function originAllowed(origin) {
@@ -20,6 +20,44 @@ function cleanText(value, max) {
   return String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, max);
 }
 
+async function readLimitedText(request, maxBytes) {
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    const error = new Error('payload too large');
+    error.status = 413;
+    throw error;
+  }
+  if (!request.body) return '';
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('payload too large');
+        const error = new Error('payload too large');
+        error.status = 413;
+        throw error;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
 export async function receiveError(request, env) {
   const origin = request.headers.get('origin') || '';
   const headers = corsHeaders(origin);
@@ -33,8 +71,9 @@ export async function receiveError(request, env) {
   }
   if (!refOrigin || !originAllowed(refOrigin)) return new Response(null, { status: 403, headers });
 
-  const raw = await request.text();
-  if (new TextEncoder().encode(raw).byteLength > LIMITS.bodyBytes) return new Response(null, { status: 413, headers });
+  let raw;
+  try { raw = await readLimitedText(request, LIMITS.bodyBytes); }
+  catch (error) { return new Response(null, { status: error?.status === 413 ? 413 : 400, headers }); }
   let data;
   try { data = JSON.parse(raw); } catch { return new Response(null, { status: 400, headers }); }
   if (!data || typeof data.m !== 'string' || !data.m || typeof data.sid !== 'string') return new Response(null, { status: 400, headers });
@@ -51,6 +90,8 @@ export async function receiveError(request, env) {
   const stage = cleanText(data.stage, 80);
   const status = Number.isFinite(Number(data.status)) ? Math.trunc(Number(data.status)) : 0;
   const critical = kind === 'cart' && Boolean(data.critical);
+  const authorizedSelftest = kind === 'selftest'
+    && await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN);
   const signature = (await sha256Hex(`${kind}|${message}|${source}|${line}|${action}|${stage}`)).slice(0, 32);
 
   const rate = await env.DB.prepare(
@@ -66,7 +107,7 @@ export async function receiveError(request, env) {
   ).bind(signature, kind, message, source, line, col, cleanText(data.stack, 1000), cleanPath(data.url), ua,
     cleanText(data.sid, 64), ipHash, action, status, stage, critical ? 1 : 0).run();
 
-  if (kind === 'selftest') await writeHeartbeat(env.DB, 'layer3', 'browser-selftest', 'ok', { signature, page: cleanPath(data.url) });
+  if (authorizedSelftest) await writeHeartbeat(env.DB, 'layer3', 'authenticated-selftest', 'ok', { signature, page: cleanPath(data.url) });
   if (critical) await alertCriticalCartError(env, { signature, message, action, stage, status });
   return new Response(null, { status: 204, headers });
 }
@@ -87,7 +128,7 @@ export async function digestBrowserErrors(env) {
             MIN(message) AS message, MIN(page_url) AS page_url,
             MAX(action) AS action, MAX(stage) AS stage, MAX(http_status) AS http_status
      FROM js_errors
-     WHERE critical = 0 AND created_at > datetime('now', '-10 minutes')
+     WHERE critical = 0 AND kind <> 'selftest' AND created_at > datetime('now', '-10 minutes')
      GROUP BY signature
      HAVING COUNT(*) >= ?1 AND COUNT(DISTINCT session_id) >= ?2
      ORDER BY occurrences DESC`

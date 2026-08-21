@@ -4,8 +4,8 @@
 
 - 分支：`codex/monitoring-v2`。
 - 所有已提交的 `main` 代码都包含在分支内；另一个 main worktree 的 Cart Offers UI 未提交改动没有被夹带。
-- Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已重构。
-- Worker 初始 `CRON_ENABLED=false`，必须完成受控部署验证后才开启。
+- Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已重构；`2135fec` 暂停的 Layer 3 接入已修正，但恢复定时任务前仍需先完成一次受控部署与手动验证。
+- Worker 初始 `CRON_ENABLED=false`，必须完成受控部署验证后才开启；旧 GitHub Uptime 继续承担当前存活检测。
 - GA4 为 `observe`，从 2026-08-20 起至少观察 14 天；API/Auth/Workflow 故障从第一天正式通知。
 
 ## 基础设施
@@ -23,9 +23,9 @@
 1. Push 分支并手动 dispatch `deploy-worker.yml`；从日志取得 Worker URL。
 2. 设置 repo variable `MONITOR_WORKER_URL`。
 3. 将同一 URL 写进 Theme snippet、`sites.json` 和 `alerts-config.json`。
-4. Worker 保持 Cron 关闭，测试 `/health`、非法 Origin、Payload、Heartbeat、Layer 3 self-test 和 D1。
+4. Worker 保持 Cron 关闭，测试 `/health`、非法 Origin、Payload、Heartbeat、经过认证的 Layer 3 self-test 和 D1。
 5. 合并/推送 main，让 Shopify GitHub integration 收到 Theme snippet。
-6. 手动跑轻量和 MY/SG 完整 Playwright；全部通过后启用定时。
+6. 手动跑轻量和 MY/SG 完整 Playwright；完整测试的 Detergent、Glaze、推荐/Checkout 使用独立 Session。若 Shopify 持续返回 429，等待限流恢复后重跑，不将其判为业务功能故障。
 7. 运行 GA4 validate、daily-primary、daily-confirm。
 8. `CRON_ENABLED=true` 后部署；旧 GitHub Uptime 并行 24 小时再移除 schedule。
 

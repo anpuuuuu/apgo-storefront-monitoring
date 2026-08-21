@@ -17,7 +17,10 @@ for (const site of sites) {
       await expect(monitorPage.locator('header, [data-header-section]').first()).toBeVisible();
       await expect(monitorPage.locator('a[href*="/collections"]:visible, a[href*="/pages"]:visible').first()).toBeVisible();
       if (site.expectErrorMonitor) {
-        await expect.poll(() => monitorPage.evaluate(() => window.__apgoEM === 1), { message: 'Layer 3 monitor did not initialize' }).toBe(true);
+        await expect.poll(
+          () => monitorPage.evaluate(() => window.__apgoEM),
+          { message: 'Layer 3 monitor snippet is missing' }
+        ).toBe('excluded');
       }
     });
 

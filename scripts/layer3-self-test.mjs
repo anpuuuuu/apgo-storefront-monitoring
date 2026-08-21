@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 const workerUrl = (process.env.MONITOR_WORKER_URL || '').replace(/\/$/, '');
-if (!workerUrl) throw new Error('MONITOR_WORKER_URL is required');
+const token = process.env.MONITOR_HEARTBEAT_TOKEN || '';
+if (!workerUrl || !token) throw new Error('MONITOR_WORKER_URL and MONITOR_HEARTBEAT_TOKEN are required');
+
+const storefront = await fetch('https://apgo.my/?apgo_em_test=1', {
+  headers: { 'user-agent': 'APGO-Layer3-SelfTest/2.0' },
+  redirect: 'follow',
+});
+const storefrontHtml = await storefront.text();
+if (!storefront.ok || !storefrontHtml.includes(`${workerUrl}/beacon`)) {
+  throw new Error(`Layer 3 storefront snippet is missing (HTTP ${storefront.status})`);
+}
 
 const session = `github-selftest-${Date.now()}`;
 const response = await fetch(`${workerUrl}/beacon`, {
@@ -10,6 +20,7 @@ const response = await fetch(`${workerUrl}/beacon`, {
     referer: 'https://apgo.my/?apgo_em_test=1',
     'content-type': 'text/plain;charset=UTF-8',
     'user-agent': 'APGO-Layer3-SelfTest/2.0',
+    authorization: `Bearer ${token}`,
   },
   body: JSON.stringify({
     kind: 'selftest',

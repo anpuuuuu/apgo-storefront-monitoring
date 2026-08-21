@@ -1,12 +1,16 @@
 const { defineConfig } = require('@playwright/test');
+const fullSuite = process.env.MONITOR_SUITE === 'full';
 
 module.exports = defineConfig({
   testDir: './tests',
   /* Generous: the cart checks retry writes with real gaps (see spec) so a
      ~1-min Shopify blip doesn't page anyone; worst case needs ~2 min. */
-  timeout: 150_000,
-  retries: 1,
-  workers: process.env.MONITOR_SUITE === 'full' ? 1 : 2,
+  timeout: fullSuite ? 420_000 : 180_000,
+  // Retrying a complete MY/SG commerce journey repeats many real Shopify
+  // writes and can itself trigger 429s. Light checks retain one retry; full
+  // checks use resilient steps and fail once with complete diagnostics.
+  retries: fullSuite ? 0 : 1,
+  workers: fullSuite ? 1 : 2,
   reporter: [['line'], ['json', { outputFile: 'results.json' }], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
   use: {
     headless: true,
@@ -24,7 +28,7 @@ module.exports = defineConfig({
     actionTimeout: 15_000,
     navigationTimeout: 45_000,
   },
-  projects: process.env.MONITOR_SUITE === 'full'
+  projects: fullSuite
     ? [{ name: 'full', testMatch: /full-commerce\.spec\.js/ }]
     : [{ name: 'light', testMatch: /lightweight\.spec\.js/ }],
 });

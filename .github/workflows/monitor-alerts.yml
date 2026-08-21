@@ -90,4 +90,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_TITLE: APGO Layer 4 GA4 monitor failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/telegram-notify.js
+        run: node monitoring/scripts/workflow-failure-notify.mjs

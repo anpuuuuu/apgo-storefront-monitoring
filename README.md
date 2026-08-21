@@ -23,10 +23,10 @@
 配置全部集中在 `sites.json`，商品或 Variant 过期时抛出 `TEST_CONFIG_STALE`，不会伪装成网站故障。
 
 - 轻量：Homepage、导航、Layer 3 bootstrap、Cart API、普通/赠品 V3、洗衣精香味/图片/数量总价/正确 Variant、购物车数量/小计/删除。
-- 完整：独立 MY/SG Context；币种；洗衣精 6+3；赠品保护；Glaze Trigger/Add-on；Cart Offers Tabs；Checkout 摘要。不会提交订单。
+- 完整：每个市场分别以独立 Session 测试 Detergent、Glaze 和推荐/Checkout；币种；MY 6 包=4+2、9 包=6+3；SG 6 包全数收费；赠品保护；Glaze Trigger/Add-on；Cart Offers Tabs；Checkout 摘要。不会提交订单。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
-- Shopify `429` 使用 5/10/20 秒退避；轻量场景合并为一个 Session，避免监控自身触发限流。
-- 失败上传 Screenshot、Trace、Video、Console、Network 和最终 Cart JSON。
+- Shopify `429` 使用 5/15/45 秒退避；持续 429 明确报告为平台限流，不归类为商品配置失效，也不自动重跑整套真实写入。
+- 失败上传 Screenshot、Trace、Console、Network 和最终 Cart JSON；关闭 Video，避免单次失败产生数百 MB 无效文件。
 
 本地：
 
@@ -48,7 +48,7 @@ npm run test:full
 - 非 Critical：10 分钟内至少 3 次且至少 2 个 Session 才告警；两小时同 Signature 不重复。
 - 5xx/Network Critical Cart Error 可立即告警。
 - Error 30 天、Alert 90 天；已知 Signature 可在 `known_signatures.muted=1` 静音。
-- 手动网页自测：`https://apgo.my/?apgo_em_test=1`；自动每日自测由 `monitor-self-health.yml` 执行。
+- 手动网页自测：`https://apgo.my/?apgo_em_test=1`；自动每日自测由 `monitor-self-health.yml` 使用 Heartbeat Token 发出经过认证的 Self-test。公开网页触发的 Self-test 不得写入 Heartbeat。
 
 ## Layer 4
 

@@ -19,7 +19,7 @@
       "name": "APGO Malaysia (Shopify)",
       "type": "shopify",
       "enabled": true,
-      "expectErrorMonitor": false,
+      "expectErrorMonitor": true,
       "baseUrl": "https://apgo.my",
       "markets": [
         {

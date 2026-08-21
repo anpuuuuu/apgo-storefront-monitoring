@@ -33,7 +33,10 @@ jobs:
       - name: Require health configuration
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
-        run: test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+        run: |
+          test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
+          test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
       - name: Check Worker and Layer 1 heartbeat
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
@@ -46,6 +49,7 @@ jobs:
         if: github.event.schedule == '43 0 * * *' || inputs.layer3_selftest == true
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
         run: node monitoring/scripts/layer3-self-test.mjs
       - name: Notify self-monitoring failure
         if: failure()
@@ -54,4 +58,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_TITLE: APGO monitoring self-health failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/telegram-notify.js
+        run: node monitoring/scripts/workflow-failure-notify.mjs

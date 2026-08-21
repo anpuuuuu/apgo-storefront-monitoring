@@ -50,6 +50,31 @@ async function cartJson(page) {
   return cartRequest(page, '/cart.js', { cache: 'no-store' });
 }
 
+function cartSignature(cart) {
+  return JSON.stringify((cart.items || []).map((item) => ({
+    key: item.key,
+    quantity: item.quantity,
+    finalLinePrice: item.final_line_price,
+    properties: item.properties || {},
+  })));
+}
+
+async function waitForCartStable(page, { timeoutMs = 20_000, intervalMs = 1_500, stableSamples = 2 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let previous = '';
+  let stable = 0;
+  let latest;
+  while (Date.now() < deadline) {
+    latest = await cartJson(page);
+    const signature = cartSignature(latest);
+    stable = signature === previous ? stable + 1 : 1;
+    if (stable >= stableSamples) return latest;
+    previous = signature;
+    await page.waitForTimeout(intervalMs);
+  }
+  throw new Error(`Cart did not stabilize within ${timeoutMs} ms: ${cartSignature(latest || { items: [] })}`);
+}
+
 async function addItems(page, items) {
   const body = await cartRequest(page, '/cart/add.js', {
     method: 'POST',
@@ -93,16 +118,49 @@ async function setMarket(page, baseUrl, countryCode) {
       country_code: country,
       return_to: '/',
     });
-    const response = await fetch('/localization', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
-      redirect: 'follow',
-    });
-    return { ok: response.ok, status: response.status };
+    const waits = [0, 5_000, 15_000, 45_000];
+    let status = 0;
+    for (const wait of waits) {
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      const response = await fetch('/localization', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+        redirect: 'follow',
+      });
+      status = response.status;
+      if (status !== 429) return { ok: response.ok, status };
+    }
+    return { ok: false, status };
   }, countryCode);
+  if (result.status === 429) throw new Error(`Shopify localization remained rate limited for ${countryCode}`);
   if (!result.ok) throw new TestConfigStaleError(`Shopify localization rejected ${countryCode} (HTTP ${result.status})`);
   await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+async function navigateToCart(page, baseUrl, { settleMs = 1_500 } = {}) {
+  const target = siteUrl(baseUrl, '/cart');
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      if (new URL(page.url()).pathname !== '/cart') {
+        await page.goto(target, { waitUntil: 'domcontentloaded' });
+      } else {
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+      }
+    } catch (error) {
+      lastError = error;
+      const interrupted = /interrupted by another navigation|ERR_ABORTED|Navigation failed because page was closed/i.test(error.message);
+      if (!interrupted) throw error;
+    }
+    if (new URL(page.url()).pathname === '/cart') {
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      if (settleMs) await page.waitForTimeout(settleMs);
+      return;
+    }
+    await page.waitForTimeout(attempt * 1_000);
+  }
+  throw new Error(`Could not reach cart after AIOD navigation settled: ${lastError?.message || page.url()}`);
 }
 
 async function ensureAvailable(page, baseUrl, handle, selector) {
@@ -124,7 +182,9 @@ module.exports = {
   clearCart,
   cartJson,
   addItems,
+  waitForCartStable,
   setMarket,
+  navigateToCart,
   siteUrl,
   ensureAvailable,
 };
