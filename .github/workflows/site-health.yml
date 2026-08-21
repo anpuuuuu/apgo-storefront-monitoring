@@ -1,12 +1,9 @@
 name: Storefront browser health
 
 on:
-  # Staged rollout: the deterministic Layer 3 assertion has been fixed, but
-  # schedules stay disabled until one manual light run and one manual MY/SG
-  # full run pass against the deployed storefront.
-  # schedule:
-  # - cron: '7 * * * *'
-  # - cron: '37 1,13 * * *'
+  schedule:
+    - cron: '7 * * * *'
+    - cron: '37 1,13 * * *'
   workflow_dispatch:
     inputs:
       suite:
@@ -14,21 +11,19 @@ on:
         type: choice
         options: [light, full]
         default: light
-  # Re-enable the push trigger together with the schedules after the manual
-  # rollout checks pass.
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - 'assets/**'
-  #     - 'blocks/**'
-  #     - 'config/**'
-  #     - 'layout/**'
-  #     - 'locales/**'
-  #     - 'sections/**'
-  #     - 'snippets/**'
-  #     - 'templates/**'
-  #     - 'monitoring/**'
-  #     - '.github/workflows/site-health.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'assets/**'
+      - 'blocks/**'
+      - 'config/**'
+      - 'layout/**'
+      - 'locales/**'
+      - 'sections/**'
+      - 'snippets/**'
+      - 'templates/**'
+      - 'monitoring/**'
+      - '.github/workflows/site-health.yml'
 
 concurrency:
   group: storefront-health-${{ github.ref }}

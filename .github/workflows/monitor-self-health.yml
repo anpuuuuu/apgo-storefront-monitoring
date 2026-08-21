@@ -1,13 +1,9 @@
 name: Monitoring self health
 
 on:
-  # Staged rollout: keep schedules disabled until the Worker HTTP endpoints,
-  # authenticated Layer 3 self-test and first Layer 1 cron heartbeat have all
-  # been verified. The rollout_validation input lets us validate Layer 3
-  # before Layer 1 is deliberately enabled.
-  # schedule:
-  # - cron: '23 * * * *'
-  # - cron: '43 0 * * *'
+  schedule:
+    - cron: '23 * * * *'
+    - cron: '43 0 * * *'
   workflow_dispatch:
     inputs:
       layer3_selftest:
