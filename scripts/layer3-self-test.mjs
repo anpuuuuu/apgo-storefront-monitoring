@@ -3,8 +3,17 @@ const workerUrl = (process.env.MONITOR_WORKER_URL || '').replace(/\/$/, '');
 const token = process.env.MONITOR_HEARTBEAT_TOKEN || '';
 if (!workerUrl || !token) throw new Error('MONITOR_WORKER_URL and MONITOR_HEARTBEAT_TOKEN are required');
 
+// Shopify serves a separate cached document to bare script-style user agents.
+// Use a browser-shaped UA so this check verifies the same storefront document
+// customers and Playwright receive. APGO-HealthCheck keeps the injected client
+// monitor inert if a browser ever executes this response.
+const storefrontUserAgent =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 ' +
+  'APGO-HealthCheck/2.0 Layer3-SelfTest';
+
 const storefront = await fetch('https://apgo.my/?apgo_em_test=1', {
-  headers: { 'user-agent': 'APGO-Layer3-SelfTest/2.0' },
+  headers: { 'user-agent': storefrontUserAgent },
   redirect: 'follow',
 });
 const storefrontHtml = await storefront.text();
