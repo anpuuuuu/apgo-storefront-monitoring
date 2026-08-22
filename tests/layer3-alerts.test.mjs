@@ -2,12 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  browserRealertMs,
   buildBrowserDigest,
+  classifyBrowserSignal,
   corsHeaders,
   isCriticalCartError,
   isIgnoredBrowserNoise,
   isIgnoredUserAgent,
+  normalizedBrowserSignatureInput,
   originAllowed,
+  shouldAlertDigestRow,
 } from '../cloudflare/worker/errors.mjs';
 import { cleanPath, cleanSource } from '../cloudflare/worker/security.mjs';
 
@@ -50,6 +54,7 @@ test('browser digest combines signatures and reports omitted evidence', () => {
     {
       signature: 'abc123',
       kind: 'error',
+      category: 'theme',
       stage: '',
       sessions: 4,
       networks: 3,
@@ -66,11 +71,39 @@ test('browser digest combines signatures and reports omitted evidence', () => {
   ], 3);
 
   assert.match(message, /Browser Error Digest/);
-  assert.match(message, /4 sessions · 3 networks · 7 events/);
+  assert.match(message, /THEME · 4 sessions · 3 networks · 7 events/);
   assert.match(message, /Required ref not found/);
   assert.match(message, /Pages \(2\): \/pages\/golden-bull-award \| \/cart/);
   assert.match(message, /Facebook in-app \(2\) · Android WebView \(1\) · Desktop browser \(1\)/);
   assert.match(message, /\+ 2 more signatures retained in D1/);
+});
+
+test('browser signals are classified and noisy platform errors need stronger evidence', () => {
+  assert.equal(classifyBrowserSignal({ kind: 'cart' }), 'cart-network');
+  assert.equal(classifyBrowserSignal({ kind: 'resource', source: 'https://cdn.shopify.com/shopifycloud/shop-js/modules/loader.shop-login-button.js' }), 'shopify-platform');
+  assert.equal(classifyBrowserSignal({ kind: 'resource', source: 'https://apgo.my/cdn/fonts/font.woff2' }), 'font-resource');
+  assert.equal(classifyBrowserSignal({ kind: 'error', message: 'Required ref productCardLink not found' }), 'theme');
+
+  assert.equal(shouldAlertDigestRow({ category: 'shopify-platform', occurrences: 14, sessions: 14, networks: 8 }), false);
+  assert.equal(shouldAlertDigestRow({ category: 'shopify-platform', occurrences: 15, sessions: 15, networks: 5 }), true);
+  assert.equal(shouldAlertDigestRow({ category: 'cart-network', occurrences: 3, sessions: 3, networks: 1 }), false);
+  assert.equal(shouldAlertDigestRow({ category: 'cart-network', occurrences: 3, sessions: 3, networks: 2 }), true);
+  assert.equal(shouldAlertDigestRow({ category: 'theme', occurrences: 3, sessions: 3, networks: 2 }), true);
+  assert.equal(browserRealertMs({ category: 'shopify-platform' }), 6 * 60 * 60_000);
+});
+
+test('equivalent uncaught platform errors share stable signature input', () => {
+  const common = {
+    kind: 'error',
+    source: 'https://cdn.shopify.com/shopifycloud/shop-js/modules/loader.init-shop-cart-sync.js',
+    line: 1,
+    action: '',
+    stage: '',
+  };
+  assert.equal(
+    normalizedBrowserSignatureInput({ ...common, message: 'Uncaught SyntaxError: Unexpected private name #moveItemsToDefaultSlot' }),
+    normalizedBrowserSignatureInput({ ...common, message: 'SyntaxError: Unexpected private name #moveItemsToDefaultSlot' }),
+  );
 });
 
 test('social crawlers are ignored without excluding real Facebook in-app shoppers', () => {

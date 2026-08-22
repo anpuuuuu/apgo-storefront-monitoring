@@ -4,6 +4,8 @@
   "description": "Synthetic health checks for APGO storefronts (add-to-cart and critical flows)",
   "scripts": {
     "test": "playwright test",
+    "test:worker": "node --test tests/layer3-alerts.test.mjs tests/uptime.test.mjs tests/theme-regressions.test.mjs",
+    "test:cart-failures": "node tests/local-cart-failure-smoke.mjs",
     "test:layer3": "node --test tests/layer3-alerts.test.mjs",
     "test:light": "cross-env MONITOR_SUITE=light playwright test",
     "test:full": "cross-env MONITOR_SUITE=full playwright test",

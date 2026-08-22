@@ -37,6 +37,52 @@ export function isIgnoredUserAgent(userAgent) {
   return /(?:meta-externalads\/|facebookexternalhit\/|\bFacebot\b)/i.test(String(userAgent || ''));
 }
 
+export function classifyBrowserSignal({ kind, message, source, stage }) {
+  if (kind === 'cart') return 'cart-network';
+  const evidence = `${message || ''} ${source || ''} ${stage || ''}`;
+  if (/\/shopifycloud\/shop-js\/modules\/|\/cdn\/wpm\/|#moveItemsToDefaultSlot|shop-(?:login|user-recognition|cart-sync)/i.test(evidence)) {
+    return 'shopify-platform';
+  }
+  if ((kind === 'resource' || stage === 'style') && /\/cdn\/fonts\//i.test(evidence)) return 'font-resource';
+  return 'theme';
+}
+
+function platformFamily(evidence) {
+  if (/shop-login|login-button/i.test(evidence)) return 'shop-login';
+  if (/user-recognition/i.test(evidence)) return 'user-recognition';
+  if (/cart-sync|moveItemsToDefaultSlot/i.test(evidence)) return 'cart-sync';
+  if (/\/cdn\/wpm\//i.test(evidence)) return 'web-pixels';
+  const moduleName = String(evidence).match(/\/shopifycloud\/shop-js\/modules\/([^/?#\s]+)/i)?.[1];
+  return moduleName || 'shop-js';
+}
+
+export function normalizedBrowserSignatureInput({ kind, message, source, line, action, stage }) {
+  const normalizedMessage = String(message || '').replace(/^Uncaught\s+/i, '').trim();
+  const category = classifyBrowserSignal({ kind, message: normalizedMessage, source, stage });
+  if (category === 'shopify-platform') {
+    return `${category}|${platformFamily(`${normalizedMessage} ${source || ''}`)}`;
+  }
+  return `${kind}|${normalizedMessage}|${source || ''}|${Number(line) || 0}|${action || ''}|${stage || ''}`;
+}
+
+export function shouldAlertDigestRow(row) {
+  const category = row.category || classifyBrowserSignal(row);
+  const occurrences = Number(row.occurrences || 0);
+  const sessions = Number(row.sessions || 0);
+  const networks = Number(row.networks || 0);
+  if (category === 'shopify-platform') return occurrences >= 15 && sessions >= 15 && networks >= 5;
+  if (category === 'font-resource') return sessions >= 20 && networks >= 5;
+  if (category === 'cart-network') return occurrences >= 3 && sessions >= 3 && networks >= 2;
+  return networks >= 2;
+}
+
+export function browserRealertMs(row) {
+  const category = row.category || classifyBrowserSignal(row);
+  if (category === 'shopify-platform') return 6 * 60 * 60_000;
+  if (category === 'font-resource') return 12 * 60 * 60_000;
+  return LIMITS.errorRealertMs;
+}
+
 function cleanText(value, max) {
   return String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, max);
 }
@@ -118,7 +164,14 @@ export async function receiveError(request, env) {
   const authorizedSelftest = kind === 'selftest'
     && await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN);
   if (isIgnoredBrowserNoise({ kind, message })) return new Response(null, { status: 204, headers });
-  const signature = (await sha256Hex(`${kind}|${message}|${source}|${line}|${action}|${stage}`)).slice(0, 32);
+  const signature = (await sha256Hex(normalizedBrowserSignatureInput({
+    kind,
+    message,
+    source,
+    line,
+    action,
+    stage,
+  }))).slice(0, 32);
 
   const rate = await env.DB.prepare(
     "SELECT COUNT(*) AS c FROM js_errors WHERE ip_hash = ?1 AND created_at > datetime('now', '-60 seconds')"
@@ -200,11 +253,13 @@ export async function digestBrowserErrors(env) {
 
   const pending = [];
   for (const row of rows.results || []) {
+    row.category = classifyBrowserSignal(row);
+    if (!shouldAlertDigestRow(row)) continue;
     const known = await env.DB.prepare('SELECT muted FROM known_signatures WHERE signature = ?1').bind(row.signature).first();
     if (known?.muted) continue;
     const key = `js-alert:${row.signature}`;
     const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
-    if (Date.now() - state.lastAlertMs < LIMITS.errorRealertMs) continue;
+    if (Date.now() - state.lastAlertMs < browserRealertMs(row)) continue;
     pending.push(row);
   }
 
@@ -261,7 +316,7 @@ export function buildBrowserDigest(rows, eligibleCount = rows.length) {
       ['Desktop browser', Number(row.desktop_browser_sessions || 0)],
     ].filter(([, count]) => count > 0);
     const lines = [
-      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${row.sessions} sessions${networkEvidence} · ${row.occurrences} events`,
+      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${String(row.category || classifyBrowserSignal(row)).toUpperCase()} · ${row.sessions} sessions${networkEvidence} · ${row.occurrences} events`,
       String(row.message || 'Unknown browser error').slice(0, 220),
       `Pages (${pages.length}): ${pageEvidence}`,
     ];

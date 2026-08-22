@@ -82,6 +82,11 @@ async function updateTargetState(env, sample) {
   await setState(env.DB, key, state);
 }
 
+export function heartbeatSeverity(age, maxAge) {
+  if (!(age > maxAge)) return null;
+  return age > maxAge * 2 ? 'critical' : 'warning';
+}
+
 async function checkStaleHeartbeats(env) {
   const rows = await listHeartbeats(env.DB);
   const byLayer = new Map(rows.map((row) => [row.layer, row]));
@@ -93,6 +98,7 @@ async function checkStaleHeartbeats(env) {
     const stateKey = `heartbeat-alert:${layer}`;
     const state = (await getState(env.DB, stateKey)) || {
       open: false,
+      severity: null,
       lastAlertMs: 0,
       missingSinceMs: null,
     };
@@ -110,16 +116,28 @@ async function checkStaleHeartbeats(env) {
       state.missingSinceMs = null;
     }
 
-    const missingPastGrace = !row && now - state.missingSinceMs > maxAge;
-    const stale = missingPastGrace || (row && (!Number.isFinite(age) || age > maxAge));
-    if (stale && (!state.open || now - state.lastAlertMs >= LIMITS.uptimeRealertMs)) {
-      await sendTelegram(env, `🔴 [Monitoring Health] ${layer} heartbeat is stale\nLast: ${row?.observed_at || 'never'}\nLimit: ${Math.round(maxAge / 60_000)} minutes`);
-      await logAlert(env.DB, 'self-health', 'stale', { layer, last: row?.observed_at || null, maxAge });
-      await setState(env.DB, stateKey, { ...state, open: true, lastAlertMs: now });
-    } else if (!stale && state.open) {
+    const effectiveAge = row ? age : now - state.missingSinceMs;
+    const severity = heartbeatSeverity(effectiveAge, maxAge);
+    const shouldAlert = severity && (
+      !state.open
+      || state.severity !== severity
+      || now - state.lastAlertMs >= LIMITS.uptimeRealertMs
+    );
+    if (shouldAlert) {
+      const critical = severity === 'critical';
+      await sendTelegram(env, `${critical ? '🔴 [Monitoring Health]' : '🟠 [Monitoring Delayed]'} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\nLimit: ${Math.round(maxAge / 60_000)} minutes`);
+      await logAlert(env.DB, 'self-health', critical ? 'stale' : 'delayed', {
+        layer,
+        severity,
+        last: row?.observed_at || null,
+        maxAge,
+        age: effectiveAge,
+      });
+      await setState(env.DB, stateKey, { ...state, open: true, severity, lastAlertMs: now });
+    } else if (!severity && state.open) {
       await sendTelegram(env, `🟢 [Monitoring Recovery] ${layer} heartbeat resumed\n${row.observed_at}`);
       await logAlert(env.DB, 'self-health', 'recovery', { layer, observedAt: row.observed_at });
-      await setState(env.DB, stateKey, { ...state, open: false, lastAlertMs: state.lastAlertMs });
+      await setState(env.DB, stateKey, { ...state, open: false, severity: null, lastAlertMs: state.lastAlertMs });
     } else {
       await setState(env.DB, stateKey, state);
     }
