@@ -1,11 +1,11 @@
-# Layer 1: uptime probe. Nominal cadence is every 10 minutes, but GitHub cron
-# is best-effort — expect 10-15 min in practice, occasionally a skipped slot.
-# Off-peak minutes (:03, :13, ...) chosen because :00/:30 are the most delayed.
+# Layer 1 DIAGNOSTIC probe. The production Layer-1 uptime check moved into
+# the Cloudflare Worker cron (every 5 min, see monitoring/cloudflare/worker/);
+# this workflow kept its schedule for the planned 24h parallel run after that
+# migration (README: Worker 部署与回退) and the schedule is now removed.
+# It remains manually dispatchable for diagnostics and secret-path testing.
 name: Uptime
 
 on:
-  schedule:
-    - cron: '3-59/10 * * * *'
   workflow_dispatch:
     inputs:
       force_fail:

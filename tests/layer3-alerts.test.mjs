@@ -9,6 +9,7 @@ import {
   isCriticalCartError,
   isIgnoredBrowserNoise,
   isIgnoredUserAgent,
+  normalizeSignatureText,
   normalizedBrowserSignatureInput,
   originAllowed,
   shouldAlertDigestRow,
@@ -103,6 +104,20 @@ test('equivalent uncaught platform errors share stable signature input', () => {
   assert.equal(
     normalizedBrowserSignatureInput({ ...common, message: 'Uncaught SyntaxError: Unexpected private name #moveItemsToDefaultSlot' }),
     normalizedBrowserSignatureInput({ ...common, message: 'SyntaxError: Unexpected private name #moveItemsToDefaultSlot' }),
+  );
+});
+
+test('embedded URLs, hashes and long ids collapse into one signature per error family', () => {
+  assert.equal(normalizeSignatureText('Unable to fetch https://apgo.my/cdn/shop/t/141/assets/apgo-pdp.js?v=12345'), 'Unable to fetch <url>');
+  assert.equal(normalizeSignatureText('chunk 3f64194b86975454 failed after 128793 ms'), 'chunk <hex> failed after <n> ms');
+  const common = { kind: 'error', source: 'https://apgo.my/products/atomic-coating', line: 12, action: '', stage: '' };
+  assert.equal(
+    normalizedBrowserSignatureInput({ ...common, message: 'Uncaught TypeError: Unable to fetch https://apgo.my/cdn/shop/t/141/assets/a.js?v=111' }),
+    normalizedBrowserSignatureInput({ ...common, message: 'TypeError: Unable to fetch https://apgo.my/cdn/shop/t/141/assets/a.js?v=999' }),
+  );
+  assert.notEqual(
+    normalizedBrowserSignatureInput({ ...common, message: 'TypeError: Unable to fetch https://apgo.my/x' }),
+    normalizedBrowserSignatureInput({ ...common, message: 'TypeError: window.foo is not a function' }),
   );
 });
 

@@ -56,13 +56,25 @@ function platformFamily(evidence) {
   return moduleName || 'shop-js';
 }
 
+/* Embedded URLs, long ids and hashes make every occurrence of one error
+   family hash to a fresh signature (observed: one "Unable to fetch <asset>"
+   family split into 45 signatures in a day), which defeats first-seen
+   detection, mute flags and re-alert cooldowns. Collapse them before
+   hashing; classification still sees the original text. */
+export function normalizeSignatureText(text) {
+  return String(text || '')
+    .replace(/https?:\/\/[^\s"'()<>]+/gi, '<url>')
+    .replace(/\b[0-9a-f]{8,}\b/gi, '<hex>')
+    .replace(/\d{4,}/g, '<n>');
+}
+
 export function normalizedBrowserSignatureInput({ kind, message, source, line, action, stage }) {
   const normalizedMessage = String(message || '').replace(/^Uncaught\s+/i, '').trim();
   const category = classifyBrowserSignal({ kind, message: normalizedMessage, source, stage });
   if (category === 'shopify-platform') {
     return `${category}|${platformFamily(`${normalizedMessage} ${source || ''}`)}`;
   }
-  return `${kind}|${normalizedMessage}|${source || ''}|${Number(line) || 0}|${action || ''}|${stage || ''}`;
+  return `${kind}|${normalizeSignatureText(normalizedMessage)}|${source || ''}|${Number(line) || 0}|${action || ''}|${stage || ''}`;
 }
 
 export function shouldAlertDigestRow(row) {

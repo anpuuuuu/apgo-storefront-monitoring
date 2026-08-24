@@ -22,9 +22,22 @@
 
 ## 剩余人工关卡
 
-1. 观察 Cloudflare Cron 与旧 GitHub Uptime 并行满 24 小时；确认没有漏跑、重复通知或异常延迟后，移除 `.github/workflows/uptime.yml` 的 schedule。
-2. 保持 GA4 `observe` 满 14 天，审查 `would_alert`、阈值与误报记录后，再由用户决定是否切换为 `armed`。
+1. ~~移除旧 Uptime schedule~~ ✅ 2026-08-24 已完成（并行 3 天、Worker 每 5 分钟 cron 稳定写入 D1、无漏跑；uptime.yml 保留手动 dispatch 作诊断用）。
+2. 保持 GA4 `observe` 满 14 天（至 ~9/3），审查 `would_alert`、阈值与误报记录后，再由用户决定是否切换为 `armed`。
 3. 商品、Variant、价格、赠品或 AIOD 规则变更时，先更新 `sites.json` Fixture，并手动跑完整 Browser suite。
+4. `Missing shadow root`（`assets/critical.js:102` OverflowList）修不修等 Wade 决定：每天 ~25 访客、全在商品页、不挡购买；成因 = 老 iOS 15 不支持声明式 Shadow DOM + 新浏览器上疑似客户端重渲染丢失 shadow root。选项：(a) connectedCallback 防御式降级不 throw（小改）；(b) 深查 morph 重渲染路径正确修复；(c) 静音签名不修。
+
+## 2026-08-24 变更记录
+
+- Worker 签名计算前把 message 中的 URL/≥8 位 hex/≥4 位数字归一化（`normalizeSignatureText`，errors.mjs），修复一类错误裂成 45 个签名的碎片化；分类逻辑仍用原文。旧 `js-alert:*` 冷却与 `known_signatures` 旧签名成为无害孤儿，重复告警若出现属一次性重置。
+- codex 8/21-23 已修的真 bug（有回归测试）：`productCardLink` ref 缺失、PDP 加购并发锁、cart 数量更新失败恢复。老浏览器 `#moveItemsToDefaultSlot` SyntaxError 判定为 Shopify 官方 shop-js 问题,已归类 platform 家族降噪。
+
+## 环境事实（agent 换人时省弯路）
+
+- 沙箱连不上 apgo.my（代理 403）、GitHub artifact blob 也被挡 → 实测靠 Actions 跑 + GitHub MCP/`GITHUB_TOKEN` 读日志。
+- Cloudflare MCP 能查/改 D1（静音：`UPDATE known_signatures SET muted=1 WHERE signature='<sig>'`），不能部署 Worker → 部署走 deploy-worker.yml。
+- Shopify MCP 等 Wade 在 claude.ai 重新授权 apgo.my 店（曾连台湾店已吊销）。
+- Wade：非技术、中文、看 Telegram 群「网站检测系统」；改 theme/武装 L4 要他点头。
 
 ## 不可误报原则
 
