@@ -54,7 +54,7 @@ const test = base.extend({
       await testInfo.attach('console.log', { body: Buffer.from(consoleLog.join('\n')), contentType: 'text/plain' });
       await testInfo.attach('network.log', { body: Buffer.from(networkLog.join('\n')), contentType: 'text/plain' });
       try {
-        const cart = await page.evaluate(() => fetch('/cart.js', { cache: 'no-store' }).then((response) => response.json()));
+        const cart = await cartRequest(page, '/cart.js', { cache: 'no-store' });
         await testInfo.attach('final-cart.json', { body: Buffer.from(JSON.stringify(cart, null, 2)), contentType: 'application/json' });
       } catch (error) {
         await testInfo.attach('final-cart-error.txt', { body: Buffer.from(error.message), contentType: 'text/plain' });
@@ -109,20 +109,28 @@ async function addItems(page, items) {
 
 async function cartRequest(page, url, init = {}) {
   return page.evaluate(async ({ requestUrl, requestInit }) => {
-    const waits = [0, 5_000, 15_000, 45_000];
+    const waits = [0, 15_000, 45_000, 90_000];
     let lastStatus = 0;
+    let retryAfterMs = 0;
     for (const wait of waits) {
-      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      const delay = Math.max(wait, retryAfterMs);
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       const response = await fetch(requestUrl, requestInit);
       lastStatus = response.status;
       const text = await response.text();
-      if (response.status === 429) continue;
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        const seconds = Number(retryAfter);
+        const dateDelay = retryAfter && !Number.isFinite(seconds) ? Date.parse(retryAfter) - Date.now() : 0;
+        retryAfterMs = Number.isFinite(seconds) ? Math.max(0, seconds * 1_000) : Math.max(0, dateDelay || 0);
+        continue;
+      }
       let body;
       try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text.slice(0, 300) }; }
       if (!response.ok) throw new Error(`${requestUrl} HTTP ${response.status}: ${JSON.stringify(body)}`);
       return body;
     }
-    throw new Error(`${requestUrl} remained rate limited after retries (HTTP ${lastStatus})`);
+    throw new Error(`MONITOR_RATE_LIMIT: ${requestUrl} remained rate limited after customer-like retries (HTTP ${lastStatus})`);
   }, { requestUrl: url, requestInit: init });
 }
 
@@ -134,11 +142,13 @@ function addResponseVariantIds(body) {
 }
 
 async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_000 } = {}) {
-  const waits = [0, 5_000, 15_000, 45_000];
+  const waits = [0, 15_000, 45_000, 90_000];
   let lastStatus = 0;
+  let retryAfterMs = 0;
 
   for (const wait of waits) {
-    if (wait) await page.waitForTimeout(wait);
+    const delay = Math.max(wait, retryAfterMs);
+    if (delay) await page.waitForTimeout(delay);
     await expect(button).toBeEnabled({ timeout: timeoutMs });
 
     const responsePromise = page.waitForResponse((response) => {
@@ -154,7 +164,14 @@ async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_00
     const response = await responsePromise;
     lastStatus = response.status();
     const text = await response.text();
-    if (lastStatus === 429) continue;
+    if (lastStatus === 429) {
+      const headers = await response.headers();
+      const retryAfter = headers['retry-after'];
+      const seconds = Number(retryAfter);
+      const dateDelay = retryAfter && !Number.isFinite(seconds) ? Date.parse(retryAfter) - Date.now() : 0;
+      retryAfterMs = Number.isFinite(seconds) ? Math.max(0, seconds * 1_000) : Math.max(0, dateDelay || 0);
+      continue;
+    }
 
     let body;
     try {
@@ -175,7 +192,7 @@ async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_00
     return body;
   }
 
-  throw new Error(`/cart/add.js remained rate limited after retries (HTTP ${lastStatus})`);
+  throw new Error(`MONITOR_RATE_LIMIT: /cart/add.js remained rate limited after customer-like retries (HTTP ${lastStatus})`);
 }
 
 function siteUrl(baseUrl, pathname = '/') {

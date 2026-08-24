@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { selectMeaningfulScheduledRun } from './github-schedule-health-lib.mjs';
+
 const token = process.env.GITHUB_TOKEN || '';
 const repository = process.env.GITHUB_REPOSITORY || '';
 if (!token || !repository) throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY are required');
@@ -40,7 +42,15 @@ for (const check of checks) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`GitHub runs API ${response.status}: ${JSON.stringify(body)}`);
-  const latest = (body.workflow_runs || []).find((run) => run.status === 'completed');
+  const { run: latest, ignored } = selectMeaningfulScheduledRun(body.workflow_runs || []);
+  if (ignored.length) {
+    console.log(JSON.stringify({
+      workflow: check.workflow,
+      status: 'ignored_neutral_runs',
+      runs: ignored.map((run) => ({ id: run.id, conclusion: run.conclusion, url: run.html_url })),
+      message: 'Cancelled/skipped scheduled runs do not prove that the storefront monitor failed',
+    }));
+  }
   if (!latest && rolloutAgeMinutes <= 180) {
     console.log(JSON.stringify({
       workflow: check.workflow,

@@ -47,7 +47,11 @@ jobs:
         run: |
           suite=light
           matrix='[{"id":"light","market":"","flow":""}]'
-          if [ "$EVENT_NAME" = push ] || [ "$SCHEDULE" = '37 1,13 * * *' ] || [ "$INPUT_SUITE" = full ]; then
+          # Theme pushes use the lightweight smoke journey. Shopify can create
+          # several GitHub commits close together, and running six write-heavy
+          # commerce journeys for every commit can rate-limit /cart/add.js.
+          # The complete MY/SG suite still runs twice daily and on demand.
+          if [ "$SCHEDULE" = '37 1,13 * * *' ] || [ "$INPUT_SUITE" = full ]; then
             suite=full
             matrix='[{"id":"my-detergent","market":"MY","flow":"detergent"},{"id":"my-glaze","market":"MY","flow":"glaze"},{"id":"my-recommendations","market":"MY","flow":"recommendations"},{"id":"sg-detergent","market":"SG","flow":"detergent"},{"id":"sg-glaze","market":"SG","flow":"glaze"},{"id":"sg-recommendations","market":"SG","flow":"recommendations"}]'
           fi
