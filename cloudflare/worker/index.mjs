@@ -8,6 +8,10 @@ function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'cache-control': 'no-store', ...headers } });
 }
 
+export function normalizeHeartbeatStatus(status) {
+  return ['ok', 'passed', 'transient'].includes(String(status || '').toLowerCase()) ? 'ok' : 'error';
+}
+
 async function health(env) {
   const heartbeats = await listHeartbeats(env.DB);
   const now = Date.now();
@@ -29,7 +33,8 @@ async function heartbeat(request, env) {
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: 'invalid JSON' }, 400); }
   if (!['layer1', 'layer2', 'layer3', 'layer4'].includes(body.layer)) return json({ ok: false, error: 'invalid layer' }, 400);
-  await writeHeartbeat(env.DB, body.layer, String(body.source || 'github-actions').slice(0, 100), body.status === 'error' ? 'error' : 'ok',
+  const normalizedStatus = normalizeHeartbeatStatus(body.status);
+  await writeHeartbeat(env.DB, body.layer, String(body.source || 'github-actions').slice(0, 100), normalizedStatus,
     body.detail && typeof body.detail === 'object' ? body.detail : {});
   return json({ ok: true }, 202);
 }

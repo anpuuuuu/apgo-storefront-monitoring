@@ -3,8 +3,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sites.json'), 'utf8'));
-const sites = config.sites.filter((site) => site.enabled && site.type === 'shopify');
+const requestedSite = process.env.MONITOR_SITE || '';
+const sites = config.sites.filter((site) => site.enabled
+  && site.type === 'shopify'
+  && (!requestedSite || site.id === requestedSite));
 const monitorSuite = process.env.MONITOR_SUITE || 'light';
+
+if (requestedSite && sites.length === 0) {
+  throw new Error(`TEST_CONFIG_STALE: enabled Shopify site ${requestedSite} was not found`);
+}
 
 class TestConfigStaleError extends Error {
   constructor(message) {
@@ -151,6 +158,40 @@ async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_00
     if (delay) await page.waitForTimeout(delay);
     await expect(button).toBeEnabled({ timeout: timeoutMs });
 
+    let commitButton = button;
+    const opensMobileConfirm = await button.evaluate((element) => (
+      window.innerWidth <= 1023 && (
+        element.hasAttribute('data-apgo-cc-buybar-add')
+        || element.hasAttribute('data-apgo-cc-buybar-checkout')
+        || element.hasAttribute('data-apgo-add')
+        || element.hasAttribute('data-apgo-buy-now')
+      )
+    )).catch(() => false);
+
+    if (opensMobileConfirm) {
+      const isV3 = await button.evaluate((element) => (
+        element.hasAttribute('data-apgo-cc-buybar-add')
+        || element.hasAttribute('data-apgo-cc-buybar-checkout')
+      ));
+      const isBuy = await button.evaluate((element) => (
+        element.hasAttribute('data-apgo-cc-buybar-checkout')
+        || element.hasAttribute('data-apgo-buy-now')
+      ));
+      await button.click();
+      const confirmModal = page.locator(
+        isV3
+          ? '[data-apgo-cc-confirm-modal].is-open:visible'
+          : '[data-apgo-confirm].is-open:visible'
+      ).first();
+      await expect(confirmModal).toBeVisible({ timeout: timeoutMs });
+      commitButton = confirmModal.locator(
+        isV3
+          ? (isBuy ? '[data-apgo-cc-confirm-buy]:visible' : '[data-apgo-cc-confirm-add]:visible')
+          : (isBuy ? '[data-apgo-confirm-buy]:visible' : '[data-apgo-confirm-add]:visible')
+      ).first();
+      await expect(commitButton).toBeEnabled({ timeout: timeoutMs });
+    }
+
     const responsePromise = page.waitForResponse((response) => {
       try {
         const url = new URL(response.url());
@@ -160,7 +201,7 @@ async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_00
       }
     }, { timeout: timeoutMs });
 
-    await button.click();
+    await commitButton.click();
     const response = await responsePromise;
     lastStatus = response.status();
     const text = await response.text();
@@ -201,6 +242,15 @@ function siteUrl(baseUrl, pathname = '/') {
 
 async function setMarket(page, baseUrl, countryCode) {
   await page.goto(siteUrl(baseUrl), { waitUntil: 'domcontentloaded' });
+  const challenged = await page.getByText(/connection needs to be verified|verify you are human/i).first()
+    .isVisible().catch(() => false);
+  if (challenged) {
+    throw new Error('MONITOR_ACCESS_CHALLENGE: Cloudflare challenged the synthetic browser before market selection');
+  }
+
+  const currentCountry = await page.evaluate(() => String(window.Shopify?.country || '').toUpperCase());
+  if (currentCountry === String(countryCode).toUpperCase()) return;
+
   const result = await page.evaluate(async (country) => {
     const form = new URLSearchParams({
       form_type: 'localization',
@@ -224,7 +274,7 @@ async function setMarket(page, baseUrl, countryCode) {
     }
     return { ok: false, status };
   }, countryCode);
-  if (result.status === 429) throw new Error(`Shopify localization remained rate limited for ${countryCode}`);
+  if (result.status === 429) throw new Error(`MONITOR_RATE_LIMIT: Shopify localization remained rate limited for ${countryCode}`);
   if (!result.ok) throw new TestConfigStaleError(`Shopify localization rejected ${countryCode} (HTTP ${result.status})`);
   await page.reload({ waitUntil: 'domcontentloaded' });
 }

@@ -14,7 +14,33 @@
       "monorail-edge.shopifysvc.com",
       "apgo.my/web-pixels@",
       "apgo.my/api/collect"
-    ]
+    ],
+    "layer2": {
+      "retryDelayMs": 60000,
+      "devices": [
+        {
+          "id": "desktop-chromium",
+          "browser": "chromium",
+          "profile": "desktop",
+          "hourly": true,
+          "daily": true
+        },
+        {
+          "id": "android-chromium",
+          "browser": "chromium",
+          "profile": "pixel-7",
+          "hourly": true,
+          "daily": true
+        },
+        {
+          "id": "iphone-webkit",
+          "browser": "webkit",
+          "profile": "iphone-14",
+          "hourly": false,
+          "daily": true
+        }
+      ]
+    }
   },
   "sites": [
     {
@@ -24,12 +50,25 @@
       "enabled": true,
       "expectErrorMonitor": true,
       "baseUrl": "https://apgo.my",
+      "criticalLinks": [
+        {
+          "id": "golden-bull",
+          "path": "/pages/golden-bull-award",
+          "homepageHrefContains": "/pages/golden-bull-award"
+        },
+        {
+          "id": "all-products",
+          "path": "/collections/all",
+          "homepageHrefContains": "/collections/all"
+        }
+      ],
       "markets": [
         {
           "id": "MY",
           "countryCode": "MY",
           "currency": "MYR",
           "priceMarker": "RM",
+          "detergentPaidUnitPriceMinor": 3900,
           "detergentPromotionTiers": [
             { "cartQuantity": 6, "expectedPaidQuantity": 4, "expectedGiftQuantity": 2 },
             { "cartQuantity": 9, "expectedPaidQuantity": 6, "expectedGiftQuantity": 3 }
@@ -41,6 +80,7 @@
           "countryCode": "SG",
           "currency": "SGD",
           "priceMarker": "$",
+          "detergentPaidUnitPriceMinor": 1690,
           "detergentPromotionTiers": [
             { "cartQuantity": 6, "expectedPaidQuantity": 6, "expectedGiftQuantity": 0 }
           ],
@@ -50,15 +90,35 @@
       "fixtures": {
         "apiCheckVariantId": 46975928795290,
         "normalV3": {
-          "handle": "apgo-pro-car-wash-towel-l-160cm-x-60cm"
+          "handle": "apgo-pro-car-wash-towel-l-160cm-x-60cm",
+          "expectedVariantId": 46975928795290
         },
         "giftPickerV3": {
-          "handle": "apgo-atomic-car-nano-coating-standard"
+          "handle": "atomic-glaze-coating-8-8-promotion",
+          "expectedVariantId": 48112452010138,
+          "requiredGiftQuantity": 2,
+          "giftVariantIds": [
+            48791211212954,
+            48791316005018,
+            46901363081370,
+            46516524417178,
+            46516355006618
+          ]
         },
-        "laundryPdp": {
-          "handle": "apgo-laundry-detergent-oceans海洋晨曦-copy",
-          "unitPriceMinor": 4490,
-          "variants": {
+      "laundryPdp": {
+        "handle": "apgo-laundry-detergent-oceans海洋晨曦-copy",
+        "unitPriceMinor": 3900,
+        "primaryScent": "Lavender",
+        "secondaryScent": "White Tea",
+        "optionValues": {
+          "Rose": "Rose",
+          "Freesia": "Freesia",
+          "Cotton": "Cotton",
+          "Ocean": "Ocean",
+          "Lavender": "Lavender",
+          "White Tea": "White Tea"
+        },
+        "variants": {
             "Rose": 48854532096154,
             "Freesia": 48854532194458,
             "Cotton": 48854532227226,
@@ -83,16 +143,57 @@
           "triggerProductIds": [8946955714714, 9085530734746],
           "triggerVariantIds": [48112452010138, 48952646238362],
           "tabText": "Glaze PWP",
-          "maxAddonQuantity": 1
+          "maxAddonQuantity": 1,
+          "firstOfferProductId": 9092162257050,
+          "firstOfferVariantId": 48971340775578,
+          "firstOfferPriceMinor": {
+            "MY": 4900,
+            "SG": 2090
+          }
         },
         "cartOffers": {
           "recommendedTabText": "Boss Recommended",
-          "detergentTabText": "Detergent PWP"
+          "detergentTabText": "Detergent PWP",
+          "quickAddProductId": 9092162257050,
+          "quickAddVariantId": 48971340775578,
+          "selectOptionsHandle": "apgo-pro-car-wash-towel-m-100cm-x-50cm"
         }
       },
+      "promotions": [
+        {
+          "id": "detergent",
+          "type": "detergent",
+          "markets": ["MY", "SG"],
+          "fixture": "detergentPromo",
+          "requiresExpectedCart": true
+        },
+        {
+          "id": "glaze",
+          "type": "glaze",
+          "markets": ["MY", "SG"],
+          "fixture": "glaze",
+          "requiresExpectedCart": true
+        },
+        {
+          "id": "recommendations",
+          "type": "recommendations",
+          "markets": ["MY", "SG"],
+          "fixture": "cartOffers",
+          "requiresExpectedCart": false
+        },
+        {
+          "id": "golden-bull",
+          "type": "event-page",
+          "markets": ["MY", "SG"],
+          "path": "/pages/golden-bull-award",
+          "minimumVisibleSections": 1,
+          "requiresExpectedCart": false
+        }
+      ],
       "expected": {
         "checkoutHostPattern": "(^|\\.)shopify\\.com$|(^|\\.)apgo\\.my$",
-        "freeGiftPropertyNames": ["_free_gift", "_gift_for", "_aiod_free_gift"]
+        "freeGiftPropertyNames": ["_free_gift", "_gift_for", "_aiod_free_gift", "_gift_pick"],
+        "checkoutSummaryPattern": "APGO|Detergent|Coating|Towel"
       }
     },
     {

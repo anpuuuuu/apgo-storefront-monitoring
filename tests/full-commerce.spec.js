@@ -83,6 +83,14 @@ for (const site of sites) {
             && (item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key))))
           .reduce((sum, item) => sum + item.quantity, 0);
         expect(giftQuantity, `${market.id} ${tier.cartQuantity}-pack gift quantity`).toBe(tier.expectedGiftQuantity);
+        const detergentLines = cart.items.filter((item) => Number(item.product_id) === Number(fixture.productId));
+        const paidAmount = detergentLines.reduce((sum, item) => sum + item.final_line_price, 0);
+        const expectedPaidAmount = tier.expectedPaidQuantity * market.detergentPaidUnitPriceMinor;
+        expect(paidAmount, `${market.id} ${tier.cartQuantity}-pack exact paid amount`).toBe(expectedPaidAmount);
+        expect(cart.total_price, `${market.id} ${tier.cartQuantity}-pack cart subtotal`).toBe(expectedPaidAmount);
+        for (const giftLine of detergentLines.filter((item) => item.final_line_price === 0)) {
+          expect(Object.keys(giftLine.properties || {}).length, 'free detergent lines must retain promotion properties').toBeGreaterThan(0);
+        }
         await logOfferTabs(monitorPage, `${market.id}-detergent-${tier.cartQuantity}`);
         await expect(monitorPage.getByRole('tab', { name: site.fixtures.cartOffers.detergentTabText })).toBeVisible({ timeout: 20_000 });
 
@@ -124,13 +132,20 @@ for (const site of sites) {
       // Keep the locator anchored to the first offer card. Filtering by
       // :not([disabled]) made Playwright jump to the next card after the
       // clicked button became disabled, producing a false failure.
-      const add = monitorPage.locator('[data-offer-group]:not([hidden]) [data-offer-add]').first();
-      if (await add.isVisible().catch(() => false) && await add.isEnabled().catch(() => false)) {
-        await add.click();
-        await dismissGiftModal(monitorPage);
-        await expect(add).toBeDisabled();
-        await expect(add).toContainText(/ADDED|ADD AGAIN/i);
-      }
+      const offerCard = monitorPage.locator(`[data-offer-group]:not([hidden]) [data-offer-card][data-product-id="${fixture.firstOfferProductId}"]`).first();
+      await expect(offerCard, 'configured Glaze add-on card').toBeVisible();
+      const add = offerCard.locator('[data-offer-add]').first();
+      await expect(add, 'eligible Glaze add-on must expose an enabled ADD button').toBeVisible();
+      await expect(add).toBeEnabled();
+      await add.click();
+      await dismissGiftModal(monitorPage);
+      await expect(add).toBeDisabled();
+      await expect(add).toContainText(/ADDED/i);
+      const cartAfterOffer = await waitForCartStable(monitorPage);
+      const addOn = cartAfterOffer.items.find((item) => Number(item.variant_id) === Number(fixture.firstOfferVariantId));
+      expect(addOn, `Glaze add-on variant ${fixture.firstOfferVariantId}`).toBeTruthy();
+      expect(addOn.quantity, 'Glaze add-on quantity limit').toBe(fixture.maxAddonQuantity);
+      expect(addOn.final_line_price, `Glaze ${market.id} add-on exact promo amount`).toBe(fixture.firstOfferPriceMinor[market.id]);
 
       const triggerItem = (await cartJson(monitorPage)).items.find((item) => Number(item.variant_id) === Number(triggerVariant));
       expect(triggerItem, `Glaze trigger variant ${triggerVariant} should exist in cart`).toBeTruthy();
@@ -159,6 +174,21 @@ for (const site of sites) {
       const recommendedGroup = monitorPage.locator('[data-offer-group][data-audience="all"]:not([hidden])').first();
       await expect(recommendedGroup).toBeVisible({ timeout: 20_000 });
       await expect(recommendedGroup).toContainText(site.fixtures.cartOffers.recommendedTabText);
+
+      const quickAddCard = recommendedGroup.locator(`[data-offer-card][data-product-id="${site.fixtures.cartOffers.quickAddProductId}"]`).first();
+      const quickAdd = quickAddCard.locator('[data-offer-add]').first();
+      await expect(quickAdd, 'single default-variant recommendation should expose ADD').toBeVisible();
+      await quickAdd.click();
+      await expect.poll(async () => (await cartJson(monitorPage)).items.some((item) => Number(item.variant_id) === Number(site.fixtures.cartOffers.quickAddVariantId)))
+        .toBe(true);
+
+      const selectOptions = recommendedGroup.locator(`a.cart-offers-tabs__select-options[href*="/products/${site.fixtures.cartOffers.selectOptionsHandle}"]`).first();
+      await expect(selectOptions, 'named/multi-variant recommendation should expose SELECT OPTIONS').toBeVisible();
+      await Promise.all([
+        monitorPage.waitForURL(new RegExp(`/products/${site.fixtures.cartOffers.selectOptionsHandle}`), { timeout: 30_000 }),
+        selectOptions.click(),
+      ]);
+      await navigateToCart(monitorPage, site.baseUrl);
       const cartBefore = await cartJson(monitorPage);
       const checkout = monitorPage.locator('button[name="checkout"], a[href*="/checkout"]').first();
       await expect(checkout).toBeVisible();
@@ -167,7 +197,7 @@ for (const site of sites) {
         checkout.click(),
       ]);
       expect(new RegExp(site.expected.checkoutHostPattern, 'i').test(new URL(monitorPage.url()).hostname)).toBe(true);
-      expect(cartBefore.item_count).toBe(1);
+      expect(cartBefore.item_count).toBeGreaterThanOrEqual(2);
       expect(cartBefore.currency).toBe(market.currency);
       await returnToCartAndClear(monitorPage, site);
     });

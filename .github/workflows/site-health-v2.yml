@@ -1,0 +1,160 @@
+name: Storefront browser health v2 (staged)
+
+# Rollout guard: the v2 matrix stays manual until it completes three clean
+# workflow_dispatch rounds. The existing scheduled Layer 2 workflow remains
+# active meanwhile, so storefront coverage is never removed during rollout.
+on:
+  workflow_dispatch:
+    inputs:
+      cadence:
+        description: Layer 2 journey set
+        type: choice
+        options: [hourly, full]
+        default: hourly
+      retry_delay_seconds:
+        description: Delay before fresh-session recheck
+        type: number
+        default: 60
+
+concurrency:
+  group: storefront-health-v2-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      cadence: ${{ steps.matrix.outputs.cadence }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate fixtures and build Site × Market × Device × Journey matrix
+        id: matrix
+        working-directory: monitoring
+        env:
+          CADENCE: ${{ inputs.cadence }}
+        shell: bash
+        run: |
+          node scripts/layer2-config.mjs validate
+          matrix="$(node scripts/layer2-config.mjs matrix sites.json "$CADENCE")"
+          echo "cadence=$CADENCE" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  browser:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: monitoring
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-v2-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('monitoring/package-lock.json') }}
+      - name: Install browser engine
+        run: timeout 360 npx playwright install --with-deps ${{ matrix.browser }} || npx playwright install ${{ matrix.browser }}
+      - name: Run journey and one explicit fresh-session recheck when needed
+        id: journey
+        env:
+          MONITOR_V2: '1'
+          MONITOR_JOB_ID: ${{ matrix.id }}
+          MONITOR_SITE: ${{ matrix.site }}
+          MONITOR_MARKET: ${{ matrix.market }}
+          MONITOR_DEVICE: ${{ matrix.device }}
+          MONITOR_JOURNEY: ${{ matrix.journey }}
+          MONITOR_SUITE: ${{ matrix.suite }}
+          MONITOR_FLOW: ${{ matrix.flow }}
+          MONITOR_SPEC: ${{ matrix.spec }}
+          MONITOR_RETRY_DELAY_SECONDS: ${{ inputs.retry_delay_seconds }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/run-layer2-journey.mjs
+      - name: Upload failed/transient evidence and journey heartbeat result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer2-v2-${{ matrix.id }}-${{ github.run_id }}
+          path: monitoring/artifacts/
+          retention-days: 7
+          if-no-files-found: error
+
+  finalize:
+    if: always()
+    needs: [plan, browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Download every journey result
+        uses: actions/download-artifact@v4
+        with:
+          pattern: layer2-v2-*-${{ github.run_id }}
+          path: layer2-results
+      - name: Aggregate results and require every planned journey heartbeat
+        id: aggregate
+        env:
+          MONITOR_RESULTS_ROOT: layer2-results
+          MONITOR_EXPECTED_MATRIX: ${{ needs.plan.outputs.matrix }}
+          MONITOR_AGGREGATE_FILE: layer2-aggregate.json
+          MONITOR_HEARTBEAT_DETAIL_FILE: layer2-heartbeat-detail.json
+          MONITOR_CADENCE: ${{ needs.plan.outputs.cadence }}
+        run: node monitoring/scripts/aggregate-layer2-results.mjs
+      - name: Require heartbeat configuration
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+        run: |
+          test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
+          test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
+      - name: Write aggregate Layer 2 heartbeat
+        env:
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          MONITOR_LAYER: layer2
+          MONITOR_STATUS: ${{ steps.aggregate.outputs.status }}
+          MONITOR_SOURCE: playwright-v2-${{ needs.plan.outputs.cadence }}
+          MONITOR_SUITE: ${{ needs.plan.outputs.cadence }}
+          MONITOR_DETAIL_JSON_FILE: layer2-heartbeat-detail.json
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node monitoring/scripts/write-heartbeat.mjs
+      - name: Notify only after both attempts fail or a journey is missing
+        if: always() && (failure() || steps.aggregate.outputs.status == 'failed')
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_TITLE: ${{ steps.aggregate.outputs.alert_title }}
+          ALERT_DETAIL: ${{ steps.aggregate.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node monitoring/scripts/workflow-failure-notify.mjs
+      - name: Fail workflow for missing or twice-failed journeys
+        if: steps.aggregate.outputs.status == 'failed'
+        run: |
+          echo "::error::${{ steps.aggregate.outputs.detail }}"
+          exit 1
+      - name: Upload aggregate summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer2-v2-summary-${{ github.run_id }}
+          path: |
+            layer2-aggregate.json
+            layer2-heartbeat-detail.json
+          retention-days: 14

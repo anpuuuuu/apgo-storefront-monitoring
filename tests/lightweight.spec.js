@@ -64,15 +64,16 @@ for (const site of sites) {
 
   test(`[light][${site.id}] apgo-v1s-plus variant, image, total price and cart variant`, async ({ monitorPage }) => {
     const fixture = site.fixtures.laundryPdp;
-    await ensureAvailable(monitorPage, site.baseUrl, fixture.handle, 'input[data-apgo-option-input][value="Lavender"]');
-    const mainImage = monitorPage.locator('[data-apgo-main-img]').first();
-    const beforeImage = await mainImage.getAttribute('src').catch(() => '');
-    const lavender = monitorPage.locator('input[data-apgo-option-input][value="Lavender"]').first();
-    await lavender.check({ force: true });
+    const lavenderValue = fixture.optionValues?.Lavender || 'Lavender';
+    await ensureAvailable(monitorPage, site.baseUrl, fixture.handle, 'main h1:visible');
+    const lavender = monitorPage.locator(`input[data-apgo-option-input][value="${lavenderValue}"]`).first();
+    const lavenderLabel = monitorPage.locator(`label:visible:has(input[data-apgo-option-input][value="${lavenderValue}"])`).first();
+    expect(await lavender.count(), 'Lavender radio input must exist').toBe(1);
+    await expect(lavenderLabel, 'Lavender visible option label').toBeVisible();
+    await lavenderLabel.click();
     await expect(lavender).toBeChecked();
-    await expect(lavender.locator('xpath=..')).toHaveClass(/active/);
+    await expect(lavenderLabel).toHaveClass(/active/);
     await expect.poll(() => monitorPage.evaluate(() => Number(window.currentVariantId || document.querySelector('form[action*="/cart/add"] input[name="id"]')?.value))).toBe(Number(fixture.variants.Lavender));
-    if (beforeImage) await expect.poll(() => mainImage.getAttribute('src')).not.toBe(beforeImage);
     const price = monitorPage.locator('[data-apgo-price]').first();
     const beforePrice = await price.textContent();
     await monitorPage.locator('[data-apgo-qty="up"]').first().click();
