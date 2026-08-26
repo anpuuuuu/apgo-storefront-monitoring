@@ -23,9 +23,10 @@
 配置全部集中在 `sites.json`，商品、Variant、市场金额或促销预期过期时抛出 `TEST_CONFIG_STALE`，不会伪装成网站故障。矩阵由 `scripts/layer2-config.mjs` 从配置动态产生，不再写死 APGO Job。
 
 - 每小时/Push：Pixel 7 等效 Android 执行 Homepage → 活动入口 → Gift Picker/普通 V3/洗衣精 PDP → Cart → Checkout；Desktop Chromium 执行基础 Smoke。
-- 完整：Android 验证 Detergent、Glaze、推荐和 Golden Bull；Desktop Chromium、Android Chromium 与 iPhone WebKit 分别验证 MY/SG 核心 Cart/Checkout。
-- Detergent 会验证准确付费/赠品数量、金额和小计；Glaze 会验证 Trigger、准确 Add-on Variant/市场促销价、上限与失效；推荐区会分别验证 `ADD` 和 `SELECT OPTIONS`。
-- Golden Bull 自动发现可见 Campaign Section，验证 Promotion ID 唯一、Position 连续、图片/链接、Carousel、Add 与 Buy Now 只加一次。
+- 每天 MYT 09:37 完整运行：Android 验证 Detergent、全部 5 个 Cart Offer Tab、Gift Picker、批量删除和 Golden Bull；Desktop Chromium、Android Chromium 与 iPhone WebKit 分别验证 MY/SG 核心 Cart/Checkout。
+- `sites.json.themeContract` 与 Theme JSON 严格比对所有启用 Tab、25 个 Offer 和 Golden Bull Block；新增、删除、启用或修改而未同步监控预期时报告 `TEST_CONFIG_STALE`。
+- Cart Offer 每个 Tab 使用独立 Matrix Job，并以最多 3 个商品的全新 Browser Context/Cart Token 分片；逐项验证 Trigger、Variant、市场价、实际结算、限购/不限量、`ADD`/`SELECT OPTIONS` 和 Trigger 失效。
+- Golden Bull 按 MY/SG 精确 Block 清单验证，而非只抽第一个；所有 Banner/CTA 做通用检查，每个普通 Promo 的 Add 与 Buy Now 都执行。
 - 第一次失败保存证据，等待 60 秒后以全新 Browser Context 复测；第二次成功记为 `transient/flaky` 且不发正式告警，两次失败才告警。Cloudflare 持续挑战与 Fixture 过期有独立分类。
 - 每个矩阵 Job 独立 Runner 且 `max-parallel=1`，避免同时制造大量 Cart API 请求。全部预期 Journey 都返回结果后才写包含 Site/Market/Device/Journey 摘要的 Layer 2 Heartbeat。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
@@ -44,7 +45,7 @@ npm run validate:layer2
 npm run test:layer2-config
 ```
 
-V2 上线闸门：先手动运行 `Storefront browser health v2 (staged)` 三轮；三轮均通过后才为 V2 加入 Schedule。旧 Layer 2 在 V2 Scheduled 连续成功 48 小时前保留，避免切换期间出现覆盖空窗。
+V2 已配置每小时第 7 分钟的核心巡检与每天 MYT 09:37 的完整巡检。上线后与旧 Layer 2 Schedule 并行 48 小时；确认无误报、限流和 Heartbeat 缺失后，才关闭旧 Schedule，旧 Workflow 保留手动回退入口。
 
 ## Layer 3
 

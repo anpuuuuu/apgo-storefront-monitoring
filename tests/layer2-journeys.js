@@ -72,12 +72,15 @@ async function addNormalV3(page, site) {
   return cart;
 }
 
-async function addGiftPickerV3(page, site) {
+async function addGiftPickerV3(page, site, market = null) {
   const fixture = site.fixtures.giftPickerV3;
+  const marketId = market?.id || 'MY';
+  const handle = fixture.marketHandles?.[marketId] || fixture.handle;
+  const expectedVariantId = fixture.marketVariantIds?.[marketId] || fixture.expectedVariantId;
   const add = await ensureAvailable(
     page,
     site.baseUrl,
-    fixture.handle,
+    handle,
     '[data-apgo-cc-add]:visible, [data-apgo-cc-buybar-add]:visible, form[action*="/cart/add"] button[name="add"]:visible'
   );
   const picker = page.locator('[data-apgo-cc-gift-picker]:visible').first();
@@ -85,7 +88,7 @@ async function addGiftPickerV3(page, site) {
   expect(Number(await picker.getAttribute('data-gift-count'))).toBe(fixture.requiredGiftQuantity);
   const options = picker.locator('[data-apgo-cc-gift-option]:not(.is-soldout)');
   if (await options.count() < fixture.requiredGiftQuantity) {
-    throw new TestConfigStaleError(`${fixture.handle} has fewer available gifts than required`);
+    throw new TestConfigStaleError(`${handle} has fewer available gifts than required`);
   }
   const selected = [];
   for (let index = 0; index < fixture.requiredGiftQuantity; index += 1) {
@@ -97,9 +100,9 @@ async function addGiftPickerV3(page, site) {
     await option.locator('[data-apgo-cc-gift-step="up"]').click();
     selected.push(variantId);
   }
-  await clickCartAdd(page, add, { expectedVariantId: fixture.expectedVariantId });
+  await clickCartAdd(page, add, { expectedVariantId });
   const cart = await cartJson(page);
-  expect(cart.items.some((item) => Number(item.variant_id) === Number(fixture.expectedVariantId))).toBe(true);
+  expect(cart.items.some((item) => Number(item.variant_id) === Number(expectedVariantId))).toBe(true);
   const giftQuantity = cart.items
     .filter((item) => selected.includes(Number(item.variant_id)) && item.properties?._gift_pick === 'true')
     .reduce((sum, item) => sum + item.quantity, 0);
@@ -136,9 +139,13 @@ async function verifyLaundryPdp(page, site, { addToCart = true } = {}) {
     window.currentVariantId
     || document.querySelector('form[action*="/cart/add"] input[name="id"]')?.value
   ));
-  const scentOrder = initialVariantId === Number(fixture.variants[fixture.primaryScent])
-    ? [fixture.secondaryScent, fixture.primaryScent]
-    : [fixture.primaryScent, fixture.secondaryScent];
+  const allScents = Object.keys(fixture.variants);
+  const initialScent = allScents.find((scent) => Number(fixture.variants[scent]) === initialVariantId);
+  // Start with a different option so the first assertion proves state changes,
+  // then walk every configured scent one-by-one. This catches controlled-form
+  // regressions where a partial selection is immediately reset on re-render.
+  const scentOrder = allScents.filter((scent) => scent !== initialScent);
+  if (initialScent) scentOrder.push(initialScent);
 
   for (const scent of scentOrder) {
     const input = page.locator(`input[data-apgo-option-input][value="${optionValue(scent)}"]`).first();
@@ -224,11 +231,51 @@ async function enterCheckout(page, site, market, expectedCart) {
   ]);
   expect(new RegExp(site.expected.checkoutHostPattern, 'i').test(new URL(page.url()).hostname)).toBe(true);
   await expect(page.locator('body')).toContainText(market.priceMarker);
-  await expect(page.locator('body')).toContainText(new RegExp(site.expected.checkoutSummaryPattern, 'i'));
-  for (const item of expectedCart.items.filter((entry) => entry.quantity > 0).slice(0, 3)) {
+  const body = page.locator('body');
+  await expect(body).toContainText(new RegExp(site.expected.checkoutSummaryPattern, 'i'));
+  const expectedItems = expectedCart.items.filter((entry) => entry.quantity > 0);
+  for (const item of expectedItems) {
     await expect(page.locator('body')).toContainText(item.product_title);
+    if (item.variant_title && item.variant_title !== 'Default Title') {
+      await expect(body).toContainText(item.variant_title);
+    }
+    if (item.quantity > 1) {
+      const quantity = String(item.quantity);
+      await expect.poll(async () => {
+        const exactText = await page.getByText(quantity, { exact: true }).count();
+        const labelled = await page.locator(`[aria-label*="Quantity ${quantity}" i], [aria-label*="Qty ${quantity}" i]`).count();
+        return exactText + labelled;
+      }, { message: `checkout must expose quantity ${quantity} for ${item.product_title}` }).toBeGreaterThan(0);
+    }
   }
+  const checkoutText = (await body.innerText()).replace(/[\s,]/g, '');
+  const amount = (Number(expectedCart.total_price) / 100).toFixed(2);
+  const compactMarker = String(market.priceMarker || '').replace(/\s/g, '');
+  expect(checkoutText, `checkout must show exact cart total ${compactMarker}${amount}`).toContain(`${compactMarker}${amount}`);
+  const expectedGiftQuantity = expectedItems
+    .filter((item) => item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key)))
+    .reduce((sum, item) => sum + item.quantity, 0);
+  if (expectedGiftQuantity > 0) expect(checkoutText).toMatch(/FREE|0\.00|赠品|贈品/i);
   // Stop at the summary. Never fill contact, shipping or payment fields.
+}
+
+async function buyNormalV3(page, site) {
+  const fixture = site.fixtures.normalV3;
+  const buy = await ensureAvailable(
+    page,
+    site.baseUrl,
+    fixture.handle,
+    '[data-apgo-cc-buy-now]:visible, [data-apgo-cc-buybar-checkout]:visible, [data-apgo-buy-now]:visible'
+  );
+  const before = await cartJson(page);
+  await clickCartAdd(page, buy, { expectedVariantId: fixture.expectedVariantId });
+  await page.waitForURL(/\/cart(?:$|\?)/, { timeout: 45_000 });
+  const cart = await cartJson(page);
+  const added = cart.items.find((item) => Number(item.variant_id) === Number(fixture.expectedVariantId));
+  expect(added, 'Buy now must add the selected V3 variant').toBeTruthy();
+  expect(cart.item_count - before.item_count, 'Buy now must add exactly once').toBe(1);
+  await assertHeaderCartCount(page, cart.item_count);
+  return cart;
 }
 
 async function clearAfterCheckout(page, site) {
@@ -246,5 +293,6 @@ module.exports = {
   verifyLaundryPdp,
   verifyCartBasics,
   enterCheckout,
+  buyNormalV3,
   clearAfterCheckout,
 };

@@ -96,6 +96,14 @@
         "giftPickerV3": {
           "handle": "atomic-glaze-coating-8-8-promotion",
           "expectedVariantId": 48112452010138,
+          "marketHandles": {
+            "MY": "atomic-glaze-coating-8-8-promotion",
+            "SG": "atomic-glaze-coating-sg61-promotion"
+          },
+          "marketVariantIds": {
+            "MY": 48112452010138,
+            "SG": 48952646238362
+          },
           "requiredGiftQuantity": 2,
           "giftVariantIds": [
             48791211212954,
@@ -159,6 +167,54 @@
           "selectOptionsHandle": "apgo-pro-car-wash-towel-m-100cm-x-50cm"
         }
       },
+      "themeContract": {
+        "cartTemplate": "templates/cart.json",
+        "cartOffers": {
+          "tabs": [
+            { "blockId": "tab_pxghyY", "slot": "tab_5", "label": "Crystal PWP", "audience": "trigger", "triggerProducts": ["atomic-crystal-merdeka-set", "jc-birthday-special-atomic-crystal-plus-promotion"], "triggerMinQuantity": 1 },
+            { "blockId": "tab_RdreJB", "slot": "tab_4", "label": "Atomic PWP", "audience": "trigger", "triggerProducts": ["✨atomic-coating-special-ltd-bundle-✨"], "triggerMinQuantity": 1 },
+            { "blockId": "tab_glaze", "slot": "tab_2", "label": "Glaze PWP", "audience": "trigger", "triggerProducts": ["atomic-glaze-coating-8-8-promotion", "atomic-glaze-coating-sg61-promotion"], "triggerMinQuantity": 1 },
+            { "blockId": "tab_detergent", "slot": "tab_3", "label": "Detergent PWP", "audience": "trigger", "triggerProducts": ["apgo-laundry-detergent-special-promotion-1"], "triggerMinQuantity": 6 },
+            { "blockId": "tab_recommended", "slot": "tab_1", "label": "Boss Recommended", "audience": "all", "triggerProducts": [], "triggerMinQuantity": 1 }
+          ],
+          "offers": [
+            { "blockId": "glaze_paint", "tabSlot": "tab_2", "product": "apgo-car-paint-headlight-care", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 49.00", "promoPriceSg": "$20.90", "maxQuantity": 1 },
+            { "blockId": "glaze_wheel", "tabSlot": "tab_2", "product": "apgo-wheel-cleaner-tyre-care-set", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 59.00", "promoPriceSg": "$ 24.90", "maxQuantity": 1 },
+            { "blockId": "glaze_sprayer", "tabSlot": "tab_2", "product": "apgo-car-wash-foam-pressure-sprayer-version-2", "variantId": "46893290848410", "priceMode": "promo", "promoPriceMy": "RM 88.00", "promoPriceSg": "$ 37.90", "maxQuantity": 1 },
+            { "blockId": "detergent_tencel", "tabSlot": "tab_3", "product": "apgo-tencel-special-cleaning-formula", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 23.00", "promoPriceSg": "", "maxQuantity": 1 },
+            { "blockId": "detergent_floor", "tabSlot": "tab_3", "product": "apgo-floor-cleaner-made-in-taiwan", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 23.00", "promoPriceSg": "", "maxQuantity": 1 },
+            { "blockId": "detergent_shoe", "tabSlot": "tab_3", "product": "apgo-white-shoe-cleaner-made-in-taiwan", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 17.00", "promoPriceSg": "", "maxQuantity": 1 },
+            { "blockId": "offer_item_JiQgKK", "tabSlot": "tab_1", "product": "apgo-car-paint-headlight-care", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_fcqmcp", "tabSlot": "tab_1", "product": "apgo-wheel-cleaner-tyre-care-set", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_dLqrjd", "tabSlot": "tab_1", "product": "apgo-deep-clean-set", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_UcCx3d", "tabSlot": "tab_1", "product": "apgo-car-windshield-oil-film-remover-glass-cleaner-set", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_TYdFdk", "tabSlot": "tab_1", "product": "apgo-windshield-oil-film-remover-perfect-glass-restorer-quartz-glass-coating", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_NU8Ved", "tabSlot": "tab_1", "product": "apgo-pro-car-wash-towel-m-100cm-x-50cm", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_7yFcX8", "tabSlot": "tab_1", "product": "atomic-glaze-coating-8-8-promotion", "variantId": "", "priceMode": "actual", "promoPriceMy": "RM 138", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_prYgei", "tabSlot": "tab_1", "product": "atomic-glaze-coating-sg61-promotion", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_VmzNBU", "tabSlot": "tab_1", "product": "✨atomic-coating-special-ltd-bundle-✨", "variantId": "", "priceMode": "actual", "promoPriceMy": "", "promoPriceSg": "", "maxQuantity": 0 },
+            { "blockId": "offer_item_XVrdXC", "tabSlot": "tab_4", "product": "apgo-car-interior-eco-friendly-cleaner", "variantId": "46971435679898", "priceMode": "promo", "promoPriceMy": "RM 18.8", "promoPriceSg": "$ 7.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_U3FEd8", "tabSlot": "tab_4", "product": "apgo-atomic-car-nano-coating-refill-pack-standard", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 15.9", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_X8EMPn", "tabSlot": "tab_4", "product": "apgo-car-wash-shampoo-special-formula-refill-pack", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 8.8", "promoPriceSg": "$ 3.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_HxKrDn", "tabSlot": "tab_4", "product": "apgo-glass-cleaner-500ml", "variantId": "46901363081370", "priceMode": "promo", "promoPriceMy": "RM 15.8", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_fwnJge", "tabSlot": "tab_4", "product": "apgo-microfiber-pro-car-coating-cloth-30cm-x-30cm-1-pcs", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 9.9", "promoPriceSg": "$ 3.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_cWQE7G", "tabSlot": "tab_5", "product": "apgo-car-interior-eco-friendly-cleaner", "variantId": "46971435679898", "priceMode": "promo", "promoPriceMy": "RM 18.8", "promoPriceSg": "$ 7.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_anEBA6", "tabSlot": "tab_5", "product": "apgo-atomic-car-nano-coating-refill-pack-standard", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 15.9", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_VdcC9d", "tabSlot": "tab_5", "product": "apgo-car-wash-shampoo-special-formula-refill-pack", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 8.8", "promoPriceSg": "$ 3.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_9nMDRk", "tabSlot": "tab_5", "product": "apgo-glass-cleaner-500ml", "variantId": "46901363081370", "priceMode": "promo", "promoPriceMy": "RM 15.8", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_Dat3yQ", "tabSlot": "tab_5", "product": "apgo-microfiber-pro-car-coating-cloth-30cm-x-30cm-1-pcs", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 9.9", "promoPriceSg": "$ 3.9", "maxQuantity": 0 }
+          ]
+        },
+        "goldenBullTemplate": "templates/page.golden-bull-award.json",
+        "goldenBullBlocks": [
+          { "blockId": "promo_banner_merdeka", "type": "promo_banner", "marketVisibility": "my", "ctaMode": "add_buy", "singleCtaLabel": "Grab Deals Now", "banner": "shopify://shop_images/banner_2.png", "bannerSg": "", "product": "atomic-crystal-merdeka-set", "variantId": "", "productSg": "", "variantIdSg": "", "giftEnabled": false, "giftPool": [], "giftCount": 2, "counterEnabled": false, "counterMilestoneTotal": "500", "counterReleaseTotal": "88", "counterManualDeduction": "0", "counterFlowBaseline": "0", "renderMarkets": ["MY"] },
+          { "blockId": "promo_banner_aCnrUD", "type": "promo_banner", "marketVisibility": "both", "ctaMode": "add_buy", "singleCtaLabel": "Grab Deals Now", "banner": "shopify://shop_images/jc_birthday_titanium_banner.png", "bannerSg": "shopify://shop_images/jc_birthday_titanium_banner.png", "product": "jc-birthday-special-titanium", "variantId": "", "productSg": "jc-birthday-special-titanium", "variantIdSg": "", "giftEnabled": false, "giftPool": [], "giftCount": 2, "counterEnabled": false, "counterMilestoneTotal": "500", "counterReleaseTotal": "88", "counterManualDeduction": "0", "counterFlowBaseline": "0", "renderMarkets": ["MY", "SG"] },
+          { "blockId": "promo_banner_L3JjXC", "type": "promo_banner", "marketVisibility": "sg", "ctaMode": "add_buy", "singleCtaLabel": "Grab Deals Now", "banner": "", "bannerSg": "shopify://shop_images/jc_birthday_crystal_banner.png", "product": "", "variantId": "", "productSg": "jc-birthday-special-atomic-crystal-plus-promotion", "variantIdSg": "", "giftEnabled": false, "giftPool": [], "giftCount": 2, "counterEnabled": false, "counterMilestoneTotal": "500", "counterReleaseTotal": "88", "counterManualDeduction": "0", "counterFlowBaseline": "0", "renderMarkets": ["SG"] },
+          { "blockId": "promo_banner_detergent", "type": "promo_banner", "marketVisibility": "my", "ctaMode": "product_link", "singleCtaLabel": "Grab Deals Now", "banner": "shopify://shop_images/detergent_banner_photo.png", "bannerSg": "", "product": "apgo-laundry-detergent-special-promotion-1", "variantId": "", "productSg": "", "variantIdSg": "", "giftEnabled": false, "giftPool": [], "giftCount": 2, "counterEnabled": false, "counterMilestoneTotal": "500", "counterReleaseTotal": "88", "counterManualDeduction": "0", "counterFlowBaseline": "0", "renderMarkets": ["MY"] },
+          { "blockId": "product_carousel_b1f1", "type": "product_carousel", "marketVisibility": "both", "banner": "shopify://shop_images/6_d62a57fd-3001-4aeb-980d-4c79bebcfabc.png", "bannerSg": "", "products": ["apgo-car-paint-headlight-care", "apgo-wheel-cleaner-tyre-care-set", "apgo-deep-clean-set", "apgo-car-windshield-oil-film-remover-glass-cleaner-set", "atomic-series-coating-refill-5-in-1-set", "apgo-windshield-oil-film-remover-perfect-glass-restorer-quartz-glass-coating", "apgo-pro-car-wash-towel-m-100cm-x-50cm", "atomic-glaze-coating-sg61-promotion", "atomic-glaze-coating-8-8-promotion", "✨atomic-coating-special-ltd-bundle-✨"], "variantIds": "", "hideCompareAt": true, "showPromoLimit": false, "showScrollCue": true, "renderMarkets": ["MY", "SG"] },
+          { "blockId": "promo_banner_aurora", "type": "promo_banner", "marketVisibility": "both", "ctaMode": "add_buy", "singleCtaLabel": "Grab Deals Now", "banner": "", "bannerSg": "", "product": "", "variantId": "", "productSg": "", "variantIdSg": "", "giftEnabled": false, "giftPool": [], "giftCount": 2, "counterEnabled": false, "counterMilestoneTotal": "500", "counterReleaseTotal": "88", "counterManualDeduction": "88", "counterFlowBaseline": "0", "renderMarkets": [] }
+        ]
+      },
       "promotions": [
         {
           "id": "detergent",
@@ -168,32 +224,25 @@
           "requiresExpectedCart": true
         },
         {
-          "id": "glaze",
-          "type": "glaze",
-          "markets": ["MY", "SG"],
-          "fixture": "glaze",
-          "requiresExpectedCart": true
-        },
-        {
-          "id": "recommendations",
-          "type": "recommendations",
+          "id": "cart-offers",
+          "type": "cart-offers",
           "markets": ["MY", "SG"],
           "fixture": "cartOffers",
-          "requiresExpectedCart": false
+          "requiresExpectedCart": true
         },
         {
           "id": "golden-bull",
           "type": "event-page",
           "markets": ["MY", "SG"],
           "path": "/pages/golden-bull-award",
-          "minimumVisibleSections": 1,
-          "requiresExpectedCart": false
+          "requiresExpectedCart": true
         }
       ],
       "expected": {
         "checkoutHostPattern": "(^|\\.)shopify\\.com$|(^|\\.)apgo\\.my$",
         "freeGiftPropertyNames": ["_free_gift", "_gift_for", "_aiod_free_gift", "_gift_pick"],
-        "checkoutSummaryPattern": "APGO|Detergent|Coating|Towel"
+        "checkoutSummaryPattern": "APGO|Detergent|Coating|Towel",
+        "checkoutExactCartLines": true
       }
     },
     {

@@ -6,7 +6,7 @@
 - 分支与 `main` 已同步到本文件所述监控实现。
 - Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已部署；`2135fec` 暂停的 Layer 3 接入已修正。
 - Worker `CRON_ENABLED=true`；5 分钟 Layer 1 已实际触发并写入 D1，`/health` 返回 200。
-- Layer 2 的 MY/SG Detergent、Glaze、推荐/Checkout 六条独立 Journey 已全部通过；Browser 与 Self-health schedules 已开启。
+- Layer 2 V2 已加入 Theme Coverage Contract、5 个 Cart Offer 全覆盖、Golden Bull 精确市场清单、六香味 PDP、Gift/批量删除与精确 Checkout 断言。V2 Schedule 为每小时核心检查和每天 MYT 09:37 全量检查；旧 Layer 2 保留 48 小时并行观察后再关闭。
 - 旧 GitHub Uptime 继续并行到 Cloudflare Cron 满 24 小时，之后才关闭其 schedule。
 - GA4 为 `observe`，从 2026-08-20 起至少观察 14 天；API/Auth/Workflow 故障从第一天正式通知。
 

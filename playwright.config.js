@@ -38,7 +38,7 @@ module.exports = defineConfig({
   testDir: './tests',
   /* Generous: the cart checks retry writes with real gaps (see spec) so a
      ~1-min Shopify blip doesn't page anyone; worst case needs ~2 min. */
-  timeout: fullSuite ? 420_000 : 300_000,
+  timeout: fullSuite ? 900_000 : 300_000,
   // Retrying a complete commerce journey repeats real Shopify writes and can
   // itself trigger 429s. Individual requests retry with backoff instead.
   retries: 0,

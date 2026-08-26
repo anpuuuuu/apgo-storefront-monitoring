@@ -1,9 +1,11 @@
-name: Storefront browser health v2 (staged)
+name: Storefront browser health v2
 
-# Rollout guard: the v2 matrix stays manual until it completes three clean
-# workflow_dispatch rounds. The existing scheduled Layer 2 workflow remains
-# active meanwhile, so storefront coverage is never removed during rollout.
+# V2 runs beside the legacy Layer 2 schedule for the 48-hour rollout window.
+# The legacy workflow remains the rollback path until that observation passes.
 on:
+  schedule:
+    - cron: '7 * * * *'
+    - cron: '37 1 * * *'
   workflow_dispatch:
     inputs:
       cadence:
@@ -15,6 +17,18 @@ on:
         description: Delay before fresh-session recheck
         type: number
         default: 60
+  push:
+    branches: [main]
+    paths:
+      - 'assets/**'
+      - 'blocks/**'
+      - 'config/**'
+      - 'layout/**'
+      - 'sections/**'
+      - 'snippets/**'
+      - 'templates/**'
+      - 'monitoring/**'
+      - '.github/workflows/site-health-v2.yml'
 
 concurrency:
   group: storefront-health-v2-${{ github.ref }}
@@ -38,9 +52,14 @@ jobs:
         id: matrix
         working-directory: monitoring
         env:
-          CADENCE: ${{ inputs.cadence }}
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_CADENCE: ${{ inputs.cadence }}
         shell: bash
         run: |
+          CADENCE=hourly
+          if [ "$SCHEDULE" = '37 1 * * *' ]; then CADENCE=full; fi
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then CADENCE="${INPUT_CADENCE:-hourly}"; fi
           node scripts/layer2-config.mjs validate
           matrix="$(node scripts/layer2-config.mjs matrix sites.json "$CADENCE")"
           echo "cadence=$CADENCE" >> "$GITHUB_OUTPUT"
@@ -49,7 +68,7 @@ jobs:
   browser:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -80,6 +99,7 @@ jobs:
           MONITOR_JOURNEY: ${{ matrix.journey }}
           MONITOR_SUITE: ${{ matrix.suite }}
           MONITOR_FLOW: ${{ matrix.flow }}
+          MONITOR_RULE: ${{ matrix.rule }}
           MONITOR_SPEC: ${{ matrix.spec }}
           MONITOR_RETRY_DELAY_SECONDS: ${{ inputs.retry_delay_seconds }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

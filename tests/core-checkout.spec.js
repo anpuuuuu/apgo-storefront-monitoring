@@ -5,6 +5,7 @@ const {
   addNormalV3,
   verifyCartBasics,
   enterCheckout,
+  buyNormalV3,
   clearAfterCheckout,
 } = require('./layer2-journeys');
 
@@ -20,6 +21,13 @@ for (const site of sites) {
     await addNormalV3(monitorPage, site);
     const cart = await verifyCartBasics(monitorPage, site);
     await enterCheckout(monitorPage, site, market, cart);
+    await clearAfterCheckout(monitorPage, site);
+
+    // Exercise the second purchase entry point independently. APGO's Buy now
+    // intentionally stages the exact item in Cart first so discounts/gifts can
+    // settle, then this journey continues to the Shopify Checkout summary.
+    const buyCart = await buyNormalV3(monitorPage, site);
+    await enterCheckout(monitorPage, site, market, buyCart);
     await clearAfterCheckout(monitorPage, site);
   });
 }
