@@ -32,3 +32,17 @@ test('cart quantity failures explain refresh state and restore server-rendered c
   assert.match(script, /Your cart has been refreshed\. Please try again\./);
   assert.match(script, /We couldn't refresh your cart\. Please reload the page before continuing\./);
 });
+
+test('PDP free-gift popup keeps its timer below the image and has no competing CTA', () => {
+  const liquid = readRepoFile('snippets/apgo-promo-popup.liquid');
+  const script = readRepoFile('assets/apgo-promo-popup.js');
+  const section = readRepoFile('sections/apgo_product_page_v3.liquid');
+  const visualStart = liquid.indexOf('class="apgo-promo-popup__visual"');
+  const visualEnd = liquid.indexOf('class="apgo-promo-popup__body"');
+  const image = liquid.indexOf('class="apgo-promo-popup__media"', visualStart);
+  const timer = liquid.indexOf('data-apgo-promo-timer', visualStart);
+  assert(visualStart >= 0 && image > visualStart && timer > image && timer < visualEnd);
+  assert.doesNotMatch(liquid, /data-apgo-promo-cta|apgo-promo-popup__cta/);
+  assert.doesNotMatch(script, /data-apgo-promo-cta/);
+  assert.doesNotMatch(section, /promo_popup_cta|apgo-promo-popup__cta/);
+});
