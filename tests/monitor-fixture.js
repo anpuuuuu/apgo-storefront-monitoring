@@ -20,6 +20,18 @@ class TestConfigStaleError extends Error {
   }
 }
 
+async function assertNoAccessChallenge(page, stage = 'storefront rendering') {
+  const title = await page.title().catch(() => '');
+  const body = await page.locator('body').innerText({ timeout: 2_000 }).catch(() => '');
+  const challengeSelector = await page.locator(
+    '#challenge-running, #challenge-stage, form#challenge-form, input[name="cf-turnstile-response"]'
+  ).first().isVisible().catch(() => false);
+  const challengeText = `${title}\n${body.slice(0, 8_000)}`;
+  if (challengeSelector || /connection needs to be verified|verify(?:ing)? you are human|just a moment|enable javascript and cookies to continue|security verification/i.test(challengeText)) {
+    throw new Error(`MONITOR_ACCESS_CHALLENGE: Cloudflare challenged the synthetic browser during ${stage}`);
+  }
+}
+
 const test = base.extend({
   monitorPage: async ({ page, context }, use, testInfo) => {
     const consoleLog = [];
@@ -242,11 +254,7 @@ function siteUrl(baseUrl, pathname = '/') {
 
 async function setMarket(page, baseUrl, countryCode) {
   await page.goto(siteUrl(baseUrl), { waitUntil: 'domcontentloaded' });
-  const challenged = await page.getByText(/connection needs to be verified|verify you are human/i).first()
-    .isVisible().catch(() => false);
-  if (challenged) {
-    throw new Error('MONITOR_ACCESS_CHALLENGE: Cloudflare challenged the synthetic browser before market selection');
-  }
+  await assertNoAccessChallenge(page, 'market selection');
 
   const currentCountry = await page.evaluate(() => String(window.Shopify?.country || '').toUpperCase());
   if (currentCountry === String(countryCode).toUpperCase()) return;
@@ -277,6 +285,7 @@ async function setMarket(page, baseUrl, countryCode) {
   if (result.status === 429) throw new Error(`MONITOR_RATE_LIMIT: Shopify localization remained rate limited for ${countryCode}`);
   if (!result.ok) throw new TestConfigStaleError(`Shopify localization rejected ${countryCode} (HTTP ${result.status})`);
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await assertNoAccessChallenge(page, 'market reload');
 }
 
 async function navigateToCart(page, baseUrl, { settleMs = 1_500 } = {}) {
@@ -313,6 +322,7 @@ async function ensureAvailable(page, baseUrl, handle, selector) {
     response = await page.goto(target, { waitUntil: 'domcontentloaded' });
     if (response?.status() !== 429) break;
   }
+  await assertNoAccessChallenge(page, `product ${handle} rendering`);
   if (!response || response.status() >= 400) throw new TestConfigStaleError(`product ${handle} returned HTTP ${response?.status() || 'network'}`);
   if (await page.locator('[data-apgo-cc-sold-out]:visible, button:has-text("Sold out"):visible').count()) {
     throw new TestConfigStaleError(`product ${handle} is sold out`);
@@ -327,6 +337,7 @@ module.exports = {
   expect,
   sites,
   TestConfigStaleError,
+  assertNoAccessChallenge,
   clearCart,
   cartJson,
   addItems,

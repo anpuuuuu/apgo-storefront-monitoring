@@ -1,9 +1,6 @@
-name: Storefront browser health
+name: Storefront browser health (legacy rollback)
 
 on:
-  schedule:
-    - cron: '7 * * * *'
-    - cron: '37 1,13 * * *'
   workflow_dispatch:
     inputs:
       suite:
@@ -11,17 +8,6 @@ on:
         type: choice
         options: [light, full]
         default: light
-  push:
-    branches: [main]
-    paths:
-      - 'assets/**'
-      - 'blocks/**'
-      - 'config/**'
-      - 'layout/**'
-      - 'locales/**'
-      - 'sections/**'
-      - 'snippets/**'
-      - 'templates/**'
 
 concurrency:
   group: storefront-health-${{ github.ref }}

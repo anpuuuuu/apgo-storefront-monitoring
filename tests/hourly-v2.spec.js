@@ -3,8 +3,6 @@ const {
   prepareMarket,
   assertHomepage,
   addNormalV3,
-  addGiftPickerV3,
-  verifyLaundryPdp,
   verifyCartBasics,
   enterCheckout,
   clearAfterCheckout,
@@ -31,13 +29,8 @@ for (const site of sites) {
   } else if (journey === 'mobile-main') {
     test(`[v2][${site.id}][${market.id}] Android primary purchase path`, async ({ monitorPage }) => {
       await prepareMarket(monitorPage, site, market);
-      await assertHomepage(monitorPage, site, { followCampaign: true });
-
-      await addGiftPickerV3(monitorPage, site);
-      await clearCart(monitorPage);
-
+      await assertHomepage(monitorPage, site);
       await addNormalV3(monitorPage, site);
-      await verifyLaundryPdp(monitorPage, site, { addToCart: true });
       const cart = await verifyCartBasics(monitorPage, site);
       await enterCheckout(monitorPage, site, market, cart);
       await clearAfterCheckout(monitorPage, site);

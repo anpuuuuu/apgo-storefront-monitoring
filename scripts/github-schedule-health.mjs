@@ -1,48 +1,48 @@
 #!/usr/bin/env node
-import { selectMeaningfulScheduledRun } from './github-schedule-health-lib.mjs';
+import { selectWorkflowFreshnessRun } from './github-schedule-health-lib.mjs';
 
 const token = process.env.GITHUB_TOKEN || '';
 const repository = process.env.GITHUB_REPOSITORY || '';
 if (!token || !repository) throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY are required');
 
 const checks = [
-  { workflow: 'site-health.yml', maxAgeMinutes: 130 },
-  { workflow: 'monitor-alerts.yml', maxAgeMinutes: 100 },
+  { workflow: 'site-health-v2.yml', maxAgeMinutes: 130, events: ['schedule', 'workflow_dispatch', 'push'], inputs: { cadence: 'hourly', retry_delay_seconds: '60' } },
+  { workflow: 'monitor-alerts.yml', maxAgeMinutes: 100, events: ['schedule', 'workflow_dispatch'], inputs: { mode: 'realtime', simulate_zero: 'false' } },
 ];
 const now = Date.now();
+const ref = process.env.GITHUB_REF_NAME || 'main';
 
-async function currentCommitAgeMinutes() {
-  const sha = process.env.GITHUB_SHA || '';
-  if (!sha) return Number.POSITIVE_INFINITY;
-  const response = await fetch(`https://api.github.com/repos/${repository}/commits/${sha}`, {
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: 'application/vnd.github+json',
-      'x-github-api-version': '2022-11-28',
-      'user-agent': 'APGO-HealthCheck/2.0',
-    },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`GitHub commit API ${response.status}: ${JSON.stringify(body)}`);
-  const committedAt = body.commit?.committer?.date || body.commit?.author?.date;
-  return committedAt ? (now - Date.parse(committedAt)) / 60_000 : Number.POSITIVE_INFINITY;
+function githubHeaders() {
+  return {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'content-type': 'application/json',
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'APGO-HealthCheck/2.0',
+  };
 }
 
-const rolloutAgeMinutes = await currentCommitAgeMinutes();
+async function dispatchRecovery(check, reason) {
+  const response = await fetch(`https://api.github.com/repos/${repository}/actions/workflows/${check.workflow}/dispatches`, {
+    method: 'POST',
+    headers: githubHeaders(),
+    body: JSON.stringify({ ref, inputs: check.inputs }),
+  });
+  if (response.status !== 204) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(`${check.workflow} recovery dispatch failed HTTP ${response.status}: ${JSON.stringify(body)}`);
+  }
+  console.log(JSON.stringify({ workflow: check.workflow, status: 'recovery_dispatched', reason, ref }));
+}
 
 for (const check of checks) {
-  const url = `https://api.github.com/repos/${repository}/actions/workflows/${check.workflow}/runs?event=schedule&per_page=20`;
+  const url = `https://api.github.com/repos/${repository}/actions/workflows/${check.workflow}/runs?per_page=20`;
   const response = await fetch(url, {
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: 'application/vnd.github+json',
-      'x-github-api-version': '2022-11-28',
-      'user-agent': 'APGO-HealthCheck/2.0',
-    },
+    headers: githubHeaders(),
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`GitHub runs API ${response.status}: ${JSON.stringify(body)}`);
-  const { run: latest, ignored } = selectMeaningfulScheduledRun(body.workflow_runs || []);
+  const { run: latest, ignored, active } = selectWorkflowFreshnessRun(body.workflow_runs || [], check.events);
   if (ignored.length) {
     console.log(JSON.stringify({
       workflow: check.workflow,
@@ -51,28 +51,36 @@ for (const check of checks) {
       message: 'Cancelled/skipped scheduled runs do not prove that the storefront monitor failed',
     }));
   }
-  if (!latest && rolloutAgeMinutes <= 180) {
+  if (active) {
+    const activeAgeMinutes = (now - Date.parse(active.created_at)) / 60_000;
     console.log(JSON.stringify({
       workflow: check.workflow,
-      status: 'startup_grace',
-      rolloutAgeMinutes,
-      message: 'Waiting for the first scheduled run after monitoring rollout',
+      status: 'recovery_in_progress',
+      event: active.event,
+      activeAgeMinutes,
+      url: active.html_url,
     }));
+    if (activeAgeMinutes <= check.maxAgeMinutes) continue;
+  }
+  if (!latest) {
+    await dispatchRecovery(check, 'no completed scheduled or recovery run');
     continue;
   }
-  if (!latest) throw new Error(`${check.workflow} has no completed scheduled run after startup grace`);
   const ageMinutes = (now - Date.parse(latest.updated_at)) / 60_000;
-  if (ageMinutes > check.maxAgeMinutes && rolloutAgeMinutes <= 180) {
-    console.log(JSON.stringify({
-      workflow: check.workflow,
-      status: 'startup_grace',
-      rolloutAgeMinutes,
-      previousScheduledRunAgeMinutes: ageMinutes,
-      message: 'Schedule was just enabled; waiting for its first post-rollout run',
-    }));
+  if (ageMinutes > check.maxAgeMinutes) {
+    await dispatchRecovery(check, `latest completed run is ${ageMinutes.toFixed(1)} minutes old`);
     continue;
   }
   console.log(JSON.stringify({ workflow: check.workflow, ageMinutes, conclusion: latest.conclusion, url: latest.html_url }));
-  if (ageMinutes > check.maxAgeMinutes) throw new Error(`${check.workflow} schedule is stale (${ageMinutes.toFixed(1)} minutes)`);
-  if (latest.conclusion !== 'success') throw new Error(`${check.workflow} latest scheduled run concluded ${latest.conclusion}`);
+  if (latest.conclusion !== 'success') {
+    // This watchdog owns schedule freshness only. The target workflow already
+    // classifies and reports its own execution failure; failing self-health as
+    // well would send a second Telegram alert for the same run.
+    console.log(JSON.stringify({
+      workflow: check.workflow,
+      status: 'fresh_non_success_run',
+      conclusion: latest.conclusion,
+      message: 'Target workflow owns its own failure notification',
+    }));
+  }
 }

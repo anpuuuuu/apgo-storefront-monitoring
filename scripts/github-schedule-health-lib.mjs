@@ -14,3 +14,9 @@ export function selectMeaningfulScheduledRun(workflowRuns = []) {
   return { run, ignored };
 }
 
+export function selectWorkflowFreshnessRun(workflowRuns = [], eligibleEvents = ['schedule', 'workflow_dispatch']) {
+  const eligible = workflowRuns.filter((run) => !run.event || eligibleEvents.includes(run.event));
+  const active = eligible.find((run) => run.status !== 'completed') || null;
+  return { ...selectMeaningfulScheduledRun(eligible), active };
+}
+

@@ -1,6 +1,7 @@
 const {
   expect,
   TestConfigStaleError,
+  assertNoAccessChallenge,
   clearCart,
   cartJson,
   clickCartAdd,
@@ -25,11 +26,12 @@ async function prepareMarket(page, site, market) {
 }
 
 async function assertHomepage(page, site, { followCampaign = false } = {}) {
-  await page.goto(site.baseUrl, { waitUntil: 'domcontentloaded' });
-  const challenge = page.getByText(/connection needs to be verified|verify you are human/i).first();
-  if (await challenge.isVisible().catch(() => false)) {
-    throw new Error('MONITOR_ACCESS_CHALLENGE: Cloudflare challenged the synthetic browser before storefront rendering');
+  const home = new URL(site.baseUrl);
+  const current = new URL(page.url());
+  if (current.origin !== home.origin || current.pathname !== '/') {
+    await page.goto(site.baseUrl, { waitUntil: 'domcontentloaded' });
   }
+  await assertNoAccessChallenge(page, 'homepage rendering');
   await expect(page.locator('header, [data-header-section]').first()).toBeVisible();
   for (const link of site.criticalLinks || []) {
     await expect(page.locator(`a[href*="${link.homepageHrefContains}"]:visible`).first(), `${link.id} homepage link`).toBeVisible();
@@ -44,6 +46,7 @@ async function assertHomepage(page, site, { followCampaign = false } = {}) {
     if (!campaign) throw new TestConfigStaleError(`${site.id} has no golden-bull critical link`);
     await page.locator(`a[href*="${campaign.homepageHrefContains}"]:visible`).first().click();
     await page.waitForURL(new RegExp(campaign.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), { timeout: 45_000 });
+    await assertNoAccessChallenge(page, 'campaign rendering');
     await expect(page.locator('[data-apgo-campaign-section]:visible').first()).toBeVisible({ timeout: 30_000 });
   }
 }
@@ -213,8 +216,21 @@ async function verifyCartBasics(page, site) {
   await assertHeaderCartCount(page, cart.item_count);
   const paidItems = cart.items.filter((item) => !item.properties?._free_gift && !item.properties?._gift_pick);
   if (paidItems.length > 1) {
-    const remove = row.locator('.cart-items__remove, [data-cart-remove], button[aria-label*="Remove" i]').first();
-    await remove.click();
+    const rowRemove = row.locator(
+      '.cart-items__remove:visible, [data-cart-remove]:visible, button[aria-label*="Remove" i]:visible'
+    ).first();
+    if (await rowRemove.isVisible().catch(() => false)) {
+      await rowRemove.click();
+    } else {
+      // The mobile cart intentionally hides the desktop row action. Select the
+      // line item and use the visible bulk action that a shopper sees instead.
+      const selection = row.getByRole('checkbox', { name: /select item for removal/i });
+      await selection.check();
+      const bulkRemove = page.getByRole('button', { name: 'Remove', exact: true }).filter({ visible: true }).first();
+      await expect(bulkRemove).toBeEnabled();
+      page.once('dialog', (dialog) => dialog.accept());
+      await bulkRemove.click();
+    }
     await expect.poll(async () => (await cartJson(page)).items.some((item) => item.key === firstNormal.key)).toBe(false);
     cart = await cartJson(page);
     await assertHeaderCartCount(page, cart.item_count);
@@ -223,7 +239,7 @@ async function verifyCartBasics(page, site) {
 }
 
 async function enterCheckout(page, site, market, expectedCart) {
-  const checkout = page.locator('button[name="checkout"], a[href*="/checkout"]').first();
+  const checkout = page.locator('button[name="checkout"]:visible, a[href*="/checkout"]:visible').first();
   await expect(checkout).toBeVisible();
   await Promise.all([
     page.waitForURL(/checkout|checkouts/i, { timeout: 60_000 }),

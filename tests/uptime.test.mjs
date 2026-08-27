@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { heartbeatSeverity } from '../cloudflare/worker/uptime.mjs';
+import { heartbeatSeverity, shouldAlertHeartbeat } from '../cloudflare/worker/uptime.mjs';
 import { normalizeHeartbeatStatus } from '../cloudflare/worker/index.mjs';
 
 test('heartbeat delay escalates only after two complete stale windows', () => {
@@ -11,6 +11,16 @@ test('heartbeat delay escalates only after two complete stale windows', () => {
   assert.equal(heartbeatSeverity(limit * 2, limit), 'warning');
   assert.equal(heartbeatSeverity(limit * 2 + 1, limit), 'critical');
   assert.equal(heartbeatSeverity(Number.POSITIVE_INFINITY, limit), 'critical');
+});
+
+test('heartbeat incident re-alerts on severity change, not every hour', () => {
+  const now = Date.now();
+  const realertMs = 6 * 60 * 60_000;
+  const state = { open: true, severity: 'critical', lastAlertMs: now - 60 * 60_000 };
+  assert.equal(shouldAlertHeartbeat('critical', state, now, realertMs), false);
+  assert.equal(shouldAlertHeartbeat('warning', state, now, realertMs), true);
+  assert.equal(shouldAlertHeartbeat('critical', { ...state, lastAlertMs: now - realertMs }, now, realertMs), true);
+  assert.equal(shouldAlertHeartbeat(null, state, now, realertMs), false);
 });
 
 test('Layer 2 failures can never be stored as a healthy heartbeat', () => {

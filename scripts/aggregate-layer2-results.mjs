@@ -5,7 +5,15 @@ import path from 'node:path';
 const root = path.resolve(process.env.MONITOR_RESULTS_ROOT || 'layer2-results');
 const outputPath = path.resolve(process.env.MONITOR_AGGREGATE_FILE || 'layer2-aggregate.json');
 const heartbeatPath = path.resolve(process.env.MONITOR_HEARTBEAT_DETAIL_FILE || 'layer2-heartbeat-detail.json');
-const expected = JSON.parse(process.env.MONITOR_EXPECTED_MATRIX || '{"include":[]}').include || [];
+const planResult = process.env.MONITOR_PLAN_RESULT || 'success';
+let expected = [];
+let matrixError = '';
+try {
+  expected = JSON.parse(process.env.MONITOR_EXPECTED_MATRIX || '{"include":[]}').include || [];
+} catch (error) {
+  matrixError = String(error?.message || error);
+}
+const planningFailed = planResult !== 'success' || Boolean(matrixError) || expected.length === 0;
 
 function walk(directory) {
   if (!fs.existsSync(directory)) return [];
@@ -22,14 +30,33 @@ const byId = new Map(results.map((result) => [result.id, result]));
 const missing = expected.map((entry) => entry.id).filter((id) => !byId.has(id));
 const failed = results.filter((result) => result.finalStatus === 'failed');
 const transient = results.filter((result) => result.finalStatus === 'transient');
-const status = failed.length || missing.length ? 'failed' : 'ok';
-const firstProblem = failed[0] || (missing[0] ? { id: missing[0], attempts: [{ error: 'journey result/heartbeat is missing' }] } : null);
-const problemError = firstProblem?.attempts?.find((attempt) => attempt.status === 'failed')?.error || '';
-const detail = firstProblem
-  ? `${firstProblem.id}: ${problemError || 'failed'} (missing=${missing.length}, failed=${failed.length})`
-  : `${results.length} journeys passed; transient=${transient.length}`;
+const status = planningFailed || failed.length || missing.length ? 'failed' : 'ok';
+const attemptSummary = (result) => (result.attempts || [])
+  .filter((attempt) => attempt.status === 'failed')
+  .map((attempt) => `#${attempt.attempt} ${attempt.classification || 'failed'}: ${attempt.error || 'failed'}`)
+  .join(' | ');
+const failedSummary = failed.slice(0, 2)
+  .map((result) => `${result.id} [${result.classification}]: ${attemptSummary(result)}`)
+  .join(' || ');
+const detail = planningFailed
+  ? `Layer 2 planning failed (plan=${planResult}, expected=${expected.length}${matrixError ? `, matrix=${matrixError}` : ''})`
+  : failed.length || missing.length
+    ? `journeys failed=${failed.length}, missing=${missing.length}; ${failedSummary || `missing: ${missing.slice(0, 3).join(', ')}`}`
+    : `${results.length} journeys passed; transient=${transient.length}`;
 const failureClassifications = new Set(failed.map((result) => result.classification));
-const alertTitle = missing.length
+const cadence = process.env.MONITOR_CADENCE || '';
+const challengeOnly = !planningFailed
+  && missing.length === 0
+  && failed.length > 0
+  && failureClassifications.size === 1
+  && failureClassifications.has('MONITOR_ACCESS_CHALLENGE');
+// A blocked synthetic runner is monitoring degradation, not evidence that
+// shoppers are down. Keep the workflow/heartbeat red, but page at most on the
+// daily full run. Mixed or real storefront failures still notify immediately.
+const notify = status === 'failed' && (!challengeOnly || cadence === 'full');
+const alertTitle = planningFailed
+  ? 'APGO Layer 2 test planning failed'
+  : missing.length
   ? 'APGO Layer 2 monitoring result missing'
     : failureClassifications.has('TEST_CONFIG_STALE')
       ? 'APGO Layer 2 test configuration is stale'
@@ -37,10 +64,15 @@ const alertTitle = missing.length
       ? 'APGO Layer 2 synthetic traffic was rate limited'
     : failureClassifications.size === 1 && failureClassifications.has('MONITOR_ACCESS_CHALLENGE')
       ? 'APGO Layer 2 synthetic browser was blocked'
-      : 'APGO Layer 2 storefront journey failed twice';
+      : 'APGO Layer 2 journeys failed after recheck';
 const aggregate = {
   generatedAt: new Date().toISOString(),
   status,
+  cadence,
+  challengeOnly,
+  notify,
+  planResult,
+  planningFailed,
   expectedCount: expected.length,
   receivedCount: results.length,
   missing,
@@ -50,7 +82,9 @@ const aggregate = {
 };
 fs.writeFileSync(outputPath, `${JSON.stringify(aggregate, null, 2)}\n`);
 fs.writeFileSync(heartbeatPath, `${JSON.stringify({
-  cadence: process.env.MONITOR_CADENCE || '',
+  cadence,
+  planResult,
+  planningFailed,
   expectedCount: expected.length,
   receivedCount: results.length,
   missing,
@@ -67,4 +101,5 @@ if (process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${status}\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `detail=${detail.replace(/[\r\n]+/g, ' ').slice(0, 500)}\n`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `alert_title=${alertTitle}\n`);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `notify=${notify}\n`);
 }

@@ -34,6 +34,9 @@ export const LIMITS = {
   failureThreshold: 2,
   slowThreshold: 3,
   uptimeRealertMs: 60 * 60_000,
+  // Heartbeat incidents already alert again when warning escalates to
+  // critical. Keep long incidents visible without paging every hour.
+  heartbeatRealertMs: 6 * 60 * 60_000,
   errorWindowMinutes: 10,
   errorMinOccurrences: 3,
   errorMinSessions: 2,

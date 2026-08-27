@@ -3,7 +3,6 @@ name: Monitoring self health
 on:
   schedule:
     - cron: '23 * * * *'
-    - cron: '43 0 * * *'
   workflow_dispatch:
     inputs:
       layer3_selftest:
@@ -17,7 +16,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   health:
@@ -45,8 +44,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node monitoring/scripts/github-schedule-health.mjs
-      - name: Run daily Layer 3 self-test
-        if: github.event.schedule == '43 0 * * *' || inputs.layer3_selftest == true
+      - name: Refresh Layer 3 beacon self-test
+        if: inputs.rollout_validation != true
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}

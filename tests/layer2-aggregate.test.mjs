@@ -16,7 +16,7 @@ const expectedJob = {
   journey: 'mobile-main',
 };
 
-function runAggregate(result) {
+function runAggregate(result, { planResult = 'success', expected = [expectedJob], cadence = 'hourly' } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'apgo-layer2-aggregate-'));
   const root = path.join(temp, 'results');
   fs.mkdirSync(root, { recursive: true });
@@ -32,7 +32,9 @@ function runAggregate(result) {
     env: {
       ...process.env,
       MONITOR_RESULTS_ROOT: root,
-      MONITOR_EXPECTED_MATRIX: JSON.stringify({ include: [expectedJob] }),
+      MONITOR_PLAN_RESULT: planResult,
+      MONITOR_CADENCE: cadence,
+      MONITOR_EXPECTED_MATRIX: JSON.stringify({ include: expected }),
       MONITOR_AGGREGATE_FILE: path.join(temp, 'aggregate.json'),
       MONITOR_HEARTBEAT_DETAIL_FILE: path.join(temp, 'heartbeat.json'),
       GITHUB_OUTPUT: githubOutput,
@@ -71,7 +73,14 @@ test('two access challenges use a distinct synthetic-browser alert', () => {
   };
   const { aggregate, output } = runAggregate(result);
   assert.equal(aggregate.status, 'failed');
+  assert.equal(aggregate.challengeOnly, true);
+  assert.equal(aggregate.notify, false);
   assert.match(output, /alert_title=APGO Layer 2 synthetic browser was blocked/);
+  assert.match(output, /notify=false/);
+
+  const daily = runAggregate(result, { cadence: 'full' });
+  assert.equal(daily.aggregate.notify, true);
+  assert.match(daily.output, /notify=true/);
 });
 
 test('repeated synthetic rate limits are not reported as storefront failures', () => {
@@ -94,4 +103,31 @@ test('missing journey result fails the aggregate heartbeat', () => {
   assert.equal(aggregate.status, 'failed');
   assert.deepEqual(aggregate.missing, [expectedJob.id]);
   assert.match(output, /alert_title=APGO Layer 2 monitoring result missing/);
+});
+
+test('failed or empty planning can never create a healthy heartbeat', () => {
+  const failedPlan = runAggregate(null, { planResult: 'failure', expected: [] });
+  assert.equal(failedPlan.aggregate.status, 'failed');
+  assert.equal(failedPlan.aggregate.planningFailed, true);
+  assert.match(failedPlan.output, /alert_title=APGO Layer 2 test planning failed/);
+
+  const emptyPlan = runAggregate(null, { expected: [] });
+  assert.equal(emptyPlan.aggregate.status, 'failed');
+  assert.equal(emptyPlan.aggregate.planningFailed, true);
+});
+
+test('mixed journey failures report final classifications and both attempts', () => {
+  const result = {
+    ...expectedJob,
+    finalStatus: 'failed',
+    classification: 'storefront_failure',
+    attempts: [
+      { attempt: 1, status: 'failed', classification: 'MONITOR_ACCESS_CHALLENGE', error: 'challenge' },
+      { attempt: 2, status: 'failed', classification: 'storefront_failure', error: 'campaign missing' },
+    ],
+  };
+  const { output } = runAggregate(result);
+  assert.match(output, /alert_title=APGO Layer 2 journeys failed after recheck/);
+  assert.match(output, /#1 MONITOR_ACCESS_CHALLENGE: challenge/);
+  assert.match(output, /#2 storefront_failure: campaign missing/);
 });

@@ -87,6 +87,14 @@ export function heartbeatSeverity(age, maxAge) {
   return age > maxAge * 2 ? 'critical' : 'warning';
 }
 
+export function shouldAlertHeartbeat(severity, state, now, realertMs) {
+  return Boolean(severity) && (
+    !state.open
+    || state.severity !== severity
+    || now - Number(state.lastAlertMs || 0) >= realertMs
+  );
+}
+
 async function checkStaleHeartbeats(env) {
   const rows = await listHeartbeats(env.DB);
   const byLayer = new Map(rows.map((row) => [row.layer, row]));
@@ -118,11 +126,7 @@ async function checkStaleHeartbeats(env) {
 
     const effectiveAge = row ? age : now - state.missingSinceMs;
     const severity = heartbeatSeverity(effectiveAge, maxAge);
-    const shouldAlert = severity && (
-      !state.open
-      || state.severity !== severity
-      || now - state.lastAlertMs >= LIMITS.uptimeRealertMs
-    );
+    const shouldAlert = shouldAlertHeartbeat(severity, state, now, LIMITS.heartbeatRealertMs);
     if (shouldAlert) {
       const critical = severity === 'critical';
       await sendTelegram(env, `${critical ? '🔴 [Monitoring Health]' : '🟠 [Monitoring Delayed]'} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\nLimit: ${Math.round(maxAge / 60_000)} minutes`);
