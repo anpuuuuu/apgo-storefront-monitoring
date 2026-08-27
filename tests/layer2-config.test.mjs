@@ -20,14 +20,18 @@ test('hourly matrix contains Android main and desktop smoke only', () => {
   assert.deepEqual(matrix.include.map((entry) => entry.journey).sort(), ['desktop-smoke', 'mobile-main']);
 });
 
-test('full matrix includes MY/SG and all three device projects', () => {
+test('full matrix includes MY/SG, core devices and social WebView profiles', () => {
   const matrix = buildLayer2Matrix(cloneConfig(), 'full');
   assert.deepEqual([...new Set(matrix.include.map((entry) => entry.market))].sort(), ['MY', 'SG']);
   assert.deepEqual([...new Set(matrix.include.map((entry) => entry.device))].sort(), [
     'android-chromium',
     'desktop-chromium',
+    'facebook-android',
+    'instagram-iphone',
     'iphone-webkit',
+    'whatsapp-android',
   ]);
+  assert.equal(matrix.include.filter((entry) => entry.journey === 'atomic-social-add').length, 3);
   assert(matrix.include.some((entry) => entry.journey === 'golden-bull'));
   assert(matrix.include.some((entry) => entry.journey === 'cart-offers-tab_5'));
   assert(matrix.include.some((entry) => entry.journey === 'cart-offers-safeguards'));

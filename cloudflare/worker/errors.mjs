@@ -37,7 +37,19 @@ export function isIgnoredUserAgent(userAgent) {
   return /(?:meta-externalads\/|facebookexternalhit\/|\bFacebot\b)/i.test(String(userAgent || ''));
 }
 
+export function classifyClientType(userAgent) {
+  const ua = String(userAgent || '');
+  if (/FB_IAB\/|FBAN\/|FBAV\/|FBIOS/i.test(ua)) return 'facebook';
+  if (/Instagram/i.test(ua)) return 'instagram';
+  if (/WA4A\/|WhatsApp/i.test(ua)) return 'whatsapp';
+  if (/;\s*wv\)|Version\/4\.0.*Mobile Safari/i.test(ua)) return 'android-webview';
+  if (/(?:iPhone|iPad|iPod).*AppleWebKit.*Mobile/i.test(ua) && !/Version\/[^ ]+.*Safari/i.test(ua)) return 'ios-webview';
+  if (/Mobile|Android|iPhone|iPad|iPod/i.test(ua)) return 'mobile-browser';
+  return 'desktop-browser';
+}
+
 export function classifyBrowserSignal({ kind, message, source, stage }) {
+  if (kind === 'cart' && stage === 'verified-success') return 'cart-recovered';
   if (kind === 'cart') return 'cart-network';
   const evidence = `${message || ''} ${source || ''} ${stage || ''}`;
   if (/\/shopifycloud\/shop-js\/modules\/|\/cdn\/wpm\/|#moveItemsToDefaultSlot|shop-(?:login|user-recognition|cart-sync)/i.test(evidence)) {
@@ -82,6 +94,7 @@ export function shouldAlertDigestRow(row) {
   const occurrences = Number(row.occurrences || 0);
   const sessions = Number(row.sessions || 0);
   const networks = Number(row.networks || 0);
+  if (category === 'cart-recovered') return false;
   if (category === 'shopify-platform') return occurrences >= 15 && sessions >= 15 && networks >= 5;
   if (category === 'font-resource') return sessions >= 20 && networks >= 5;
   if (category === 'cart-network') return occurrences >= 3 && sessions >= 3 && networks >= 2;
@@ -169,6 +182,13 @@ export async function receiveError(request, env) {
   const action = cleanText(data.action, 80);
   const stage = cleanText(data.stage, 80);
   const status = Number.isFinite(Number(data.status)) ? Math.trunc(Number(data.status)) : 0;
+  const durationMs = Math.min(120_000, Math.max(0, Math.trunc(Number(data.duration_ms) || 0)));
+  const visibilityState = ['visible', 'hidden', 'prerender', 'unloaded'].includes(String(data.visibility))
+    ? String(data.visibility)
+    : 'unknown';
+  const onlineState = [-1, 0, 1].includes(Number(data.online)) ? Number(data.online) : -1;
+  const pageLeaving = Number(data.page_leaving) === 1 ? 1 : 0;
+  const clientType = classifyClientType(ua);
   // Never trust a browser-supplied `critical` flag. A status of 0 is normally
   // a shopper connection drop, navigation abort or device/network issue. Only
   // a real Shopify Cart API 5xx response is eligible for immediate escalation.
@@ -193,10 +213,12 @@ export async function receiveError(request, env) {
   await env.DB.prepare(
     `INSERT INTO js_errors
      (signature, kind, message, source, line, col, stack, page_url, user_agent,
-      session_id, ip_hash, action, http_status, stage, critical)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)`
+      session_id, ip_hash, action, http_status, stage, critical, duration_ms,
+      visibility_state, online_state, page_leaving, client_type)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)`
   ).bind(signature, kind, message, source, line, col, cleanText(data.stack, 1000), cleanPath(data.url), ua,
-    cleanText(data.sid, 64), ipHash, action, status, stage, critical ? 1 : 0).run();
+    cleanText(data.sid, 64), ipHash, action, status, stage, critical ? 1 : 0, durationMs,
+    visibilityState, onlineState, pageLeaving, clientType).run();
 
   if (authorizedSelftest) await writeHeartbeat(env.DB, 'layer3', 'authenticated-selftest', 'ok', { signature, page: cleanPath(data.url) });
   if (critical) await alertCriticalCartError(env, {
@@ -228,26 +250,47 @@ export async function digestBrowserErrors(env) {
             GROUP_CONCAT(DISTINCT page_url) AS pages,
             MIN(source) AS source, MAX(action) AS action,
             MAX(stage) AS stage, MAX(http_status) AS http_status,
+            ROUND(AVG(duration_ms)) AS avg_duration_ms,
+            SUM(CASE WHEN online_state = 0 THEN 1 ELSE 0 END) AS offline_events,
+            SUM(CASE WHEN page_leaving = 1 THEN 1 ELSE 0 END) AS leaving_events,
+            GROUP_CONCAT(DISTINCT visibility_state) AS visibility_states,
             COUNT(DISTINCT CASE
-              WHEN instr(user_agent, 'FB_IAB/') > 0 THEN session_id
+              WHEN client_type = 'facebook'
+                OR (client_type IS NULL AND (instr(user_agent, 'FB_IAB/') > 0 OR instr(user_agent, 'FBAN/') > 0 OR instr(user_agent, 'FBAV/') > 0))
+              THEN session_id
             END) AS facebook_in_app_sessions,
             COUNT(DISTINCT CASE
-              WHEN instr(user_agent, 'FB_IAB/') = 0
-               AND (
-                 instr(user_agent, '; wv)') > 0
-                 OR (instr(user_agent, 'Version/4.0') > 0 AND instr(user_agent, 'Mobile Safari') > 0)
-               )
+              WHEN client_type = 'instagram' THEN session_id
+            END) AS instagram_in_app_sessions,
+            COUNT(DISTINCT CASE
+              WHEN client_type = 'whatsapp' THEN session_id
+            END) AS whatsapp_in_app_sessions,
+            COUNT(DISTINCT CASE
+              WHEN client_type = 'android-webview'
+                OR (client_type IS NULL
+                  AND instr(user_agent, 'FB_IAB/') = 0
+                  AND (
+                    instr(user_agent, '; wv)') > 0
+                    OR (instr(user_agent, 'Version/4.0') > 0 AND instr(user_agent, 'Mobile Safari') > 0)
+                  ))
               THEN session_id
             END) AS android_webview_sessions,
             COUNT(DISTINCT CASE
-              WHEN instr(user_agent, 'Mobile') > 0
-               AND instr(user_agent, 'FB_IAB/') = 0
-               AND instr(user_agent, '; wv)') = 0
-               AND NOT (instr(user_agent, 'Version/4.0') > 0 AND instr(user_agent, 'Mobile Safari') > 0)
+              WHEN client_type = 'ios-webview' THEN session_id
+            END) AS ios_webview_sessions,
+            COUNT(DISTINCT CASE
+              WHEN client_type = 'mobile-browser'
+                OR (client_type IS NULL
+                  AND instr(user_agent, 'Mobile') > 0
+                  AND instr(user_agent, 'FB_IAB/') = 0
+                  AND instr(user_agent, '; wv)') = 0
+                  AND NOT (instr(user_agent, 'Version/4.0') > 0 AND instr(user_agent, 'Mobile Safari') > 0))
               THEN session_id
             END) AS mobile_browser_sessions,
             COUNT(DISTINCT CASE
-              WHEN instr(user_agent, 'Mobile') = 0 THEN session_id
+              WHEN client_type = 'desktop-browser'
+                OR (client_type IS NULL AND instr(user_agent, 'Mobile') = 0)
+              THEN session_id
             END) AS desktop_browser_sessions
      FROM js_errors
      WHERE critical = 0 AND kind <> 'selftest' AND created_at > datetime('now', '-10 minutes')
@@ -323,7 +366,10 @@ export function buildBrowserDigest(rows, eligibleCount = rows.length) {
       : '');
     const clients = [
       ['Facebook in-app', Number(row.facebook_in_app_sessions || 0)],
+      ['Instagram in-app', Number(row.instagram_in_app_sessions || 0)],
+      ['WhatsApp in-app', Number(row.whatsapp_in_app_sessions || 0)],
       ['Android WebView', Number(row.android_webview_sessions || 0)],
+      ['iOS WebView', Number(row.ios_webview_sessions || 0)],
       ['Mobile browser', Number(row.mobile_browser_sessions || 0)],
       ['Desktop browser', Number(row.desktop_browser_sessions || 0)],
     ].filter(([, count]) => count > 0);
@@ -333,6 +379,9 @@ export function buildBrowserDigest(rows, eligibleCount = rows.length) {
       `Pages (${pages.length}): ${pageEvidence}`,
     ];
     if (clients.length) lines.push(`Clients: ${clients.map(([label, count]) => `${label} (${count})`).join(' · ')}`);
+    if (row.kind === 'cart') {
+      lines.push(`Diagnostics: avg ${Number(row.avg_duration_ms || 0)} ms · offline ${Number(row.offline_events || 0)} · leaving ${Number(row.leaving_events || 0)} · visibility ${String(row.visibility_states || 'unknown')}`);
+    }
     if (row.source) lines.push(`Source: ${String(row.source).slice(0, 220)}`);
     lines.push(`Signature: ${row.signature}`);
     sections.push(lines.join('\n'));

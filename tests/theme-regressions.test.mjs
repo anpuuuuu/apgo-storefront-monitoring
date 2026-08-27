@@ -20,6 +20,14 @@ test('PDP cart writes lock every purchase entry point and surface only real fail
   assert.match(script, /\.finally\(function \(\) \{[\s\S]*?cartRequestInFlight = false;[\s\S]*?setPurchaseRequestBusy\(false, btn\)/);
   assert.match(script, /function isSilentCartError[\s\S]*?choose-gifts/);
   assert.match(script, /function handleCartFailure/);
+  assert.match(script, /function confirmUnknownAddOutcome/);
+  assert.match(script, /quantityAfter < quantityBefore \+ quantity/);
+  assert.match(script, /cart add response was lost; cart state confirmed the add/);
+  const recoveryBlock = script.slice(
+    script.indexOf('function confirmUnknownAddOutcome'),
+    script.indexOf('function purchaseButtons'),
+  );
+  assert.doesNotMatch(recoveryBlock, /cart\/add\.js/);
   assert.match(script, /addToCart\(\{ btn: addBtn \}\)\.catch\(function \(error\) \{[\s\S]*?handleCartFailure\(error\)/);
   assert.match(script, /addToCart\(\{ btn: buyBtn, silent: true \}\)[\s\S]*?handleCartFailure\(error\)/);
   assert.match(script, /function commitFromConfirm[\s\S]*?handleCartFailure\(error\)/);

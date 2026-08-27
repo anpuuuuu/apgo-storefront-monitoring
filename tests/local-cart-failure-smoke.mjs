@@ -27,6 +27,7 @@ async function newPage() {
     viewport: { width: 1366, height: 900 },
   });
   const page = await context.newPage();
+  await page.addInitScript(() => { window.__apgoHealthCheck = true; });
   await page.route('**/*', (route) => {
     const url = route.request().url();
     if (blockedHosts.some((host) => url.includes(host))) return route.abort('blockedbyclient');
@@ -71,6 +72,11 @@ async function testPdpRequestLock() {
 async function testPdpNetworkFailureCopy() {
   const { context, page } = await newPage();
   await page.route('**/cart/add.js*', (route) => route.abort('failed'));
+  await page.route('**/cart.js*', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ item_count: 0, items: [], total_price: 0 }),
+  }));
   await injectLocalPicker(page);
 
   const addButton = page.locator('[data-apgo-cc-add]:visible').first();
@@ -82,6 +88,44 @@ async function testPdpNetworkFailureCopy() {
   assert.match(copy, /check your connection and try again/i);
   assert.doesNotMatch(copy, /Failed to fetch/i);
   assert.equal(await addButton.isEnabled(), true, 'Purchase actions must recover after a failed request');
+  await context.close();
+}
+
+async function testPdpLostResponseRecovery() {
+  const { context, page } = await newPage();
+  let addRequests = 0;
+  let committed = false;
+  let variantId = 0;
+  await page.route('**/cart/add.js*', (route) => {
+    addRequests += 1;
+    committed = true;
+    return route.abort('failed');
+  });
+  await page.route('**/cart.js*', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      item_count: committed ? 1 : 0,
+      total_price: committed ? 100 : 0,
+      items: committed ? [{ id: variantId, variant_id: variantId, quantity: 1 }] : [],
+    }),
+  }));
+
+  await injectLocalPicker(page);
+  variantId = await page.evaluate(() => Number(
+    document.querySelector('[data-apgo-cc-variant-id]')?.value
+    || document.querySelector('form[action*="/cart/add"] input[name="id"]')?.value
+  ));
+  assert(variantId > 0, 'Test product must expose a selected variant');
+
+  const addButton = page.locator('[data-apgo-cc-add]:visible').first();
+  await addButton.click();
+  const toast = page.locator('.apgo-cart-success-toast:not(.apgo-cart-success-toast--error)').first();
+  await toast.waitFor({ state: 'visible' });
+  assert.match(await toast.innerText(), /Added to cart/i);
+  assert.equal(await page.locator('.apgo-cart-success-toast--error').count(), 0);
+  assert.equal(addRequests, 1, 'A lost response must never replay the cart POST');
+  assert.equal(await addButton.isEnabled(), true, 'Purchase actions must unlock after cart verification');
   await context.close();
 }
 
@@ -186,6 +230,8 @@ try {
   console.log('PASS PDP global request lock');
   await testPdpNetworkFailureCopy();
   console.log('PASS PDP friendly network failure');
+  await testPdpLostResponseRecovery();
+  console.log('PASS PDP lost-response cart verification');
   await testCartQuantityFailureRecovery();
   console.log('PASS cart quantity failure recovery');
 } finally {

@@ -257,10 +257,14 @@ export function validateLayer2Config(config) {
     validateThemeContract(site);
     validateProductFixture(site, 'normalV3');
     validateProductFixture(site, 'giftPickerV3');
+    validateProductFixture(site, 'atomicBundle');
     validateProductFixture(site, 'laundryPdp', { variants: true });
     validateProductFixture(site, 'detergentPromo', { variants: true });
     if (!Number(site.fixtures.normalV3.expectedVariantId)) {
       throw new Layer2ConfigError(`${site.id}.normalV3.expectedVariantId is invalid`);
+    }
+    if (!Number(site.fixtures.atomicBundle.expectedVariantId) || !Number(site.fixtures.atomicBundle.expectedPriceMinor)) {
+      throw new Layer2ConfigError(`${site.id}.atomicBundle expected variant or price is invalid`);
     }
 
     const laundry = site.fixtures.laundryPdp;
@@ -397,6 +401,22 @@ export function buildLayer2Matrix(config, cadence = 'hourly') {
           flow: isExistingCommerceFlow ? promotion.type : promotion.id,
         }));
       }
+    }
+
+    // One exact Atomic Bundle add per social in-app browser profile. These
+    // projects emulate the UA + rendering engine combinations seen in Layer 3
+    // without multiplying every checkout/discount journey by three.
+    for (const deviceId of ['facebook-android', 'instagram-iphone', 'whatsapp-android']) {
+      const socialDevice = devices.find((device) => device.id === deviceId);
+      if (!socialDevice) throw new Layer2ConfigError(`full matrix needs ${deviceId}`);
+      include.push(matrixItem({
+        site,
+        market: primaryMarket,
+        device: socialDevice,
+        journey: 'atomic-social-add',
+        suite: 'full',
+        spec: 'tests/social-webview.spec.js',
+      }));
     }
 
     // Cross-device checks focus on interaction, cart summary and checkout.

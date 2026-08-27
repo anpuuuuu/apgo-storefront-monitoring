@@ -24,7 +24,12 @@ CREATE TABLE IF NOT EXISTS js_errors (
   action TEXT,
   http_status INTEGER NOT NULL DEFAULT 0,
   stage TEXT,
-  critical INTEGER NOT NULL DEFAULT 0
+  critical INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  visibility_state TEXT,
+  online_state INTEGER NOT NULL DEFAULT -1,
+  page_leaving INTEGER NOT NULL DEFAULT 0,
+  client_type TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_js_errors_created ON js_errors (created_at);
 CREATE INDEX IF NOT EXISTS idx_js_errors_sig ON js_errors (signature, created_at);

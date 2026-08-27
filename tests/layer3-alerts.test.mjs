@@ -5,6 +5,7 @@ import {
   browserRealertMs,
   buildBrowserDigest,
   classifyBrowserSignal,
+  classifyClientType,
   corsHeaders,
   isCriticalCartError,
   isIgnoredBrowserNoise,
@@ -64,9 +65,16 @@ test('browser digest combines signatures and reports omitted evidence', () => {
       page_url: '/pages/golden-bull-award',
       pages: '/pages/golden-bull-award,/cart',
       facebook_in_app_sessions: 2,
+      instagram_in_app_sessions: 1,
+      whatsapp_in_app_sessions: 1,
       android_webview_sessions: 1,
+      ios_webview_sessions: 0,
       mobile_browser_sessions: 0,
       desktop_browser_sessions: 1,
+      avg_duration_ms: 842,
+      offline_events: 1,
+      leaving_events: 2,
+      visibility_states: 'visible,hidden',
       source: 'https://apgo.my/assets/component.js',
     },
   ], 3);
@@ -75,12 +83,13 @@ test('browser digest combines signatures and reports omitted evidence', () => {
   assert.match(message, /THEME · 4 sessions · 3 networks · 7 events/);
   assert.match(message, /Required ref not found/);
   assert.match(message, /Pages \(2\): \/pages\/golden-bull-award \| \/cart/);
-  assert.match(message, /Facebook in-app \(2\) · Android WebView \(1\) · Desktop browser \(1\)/);
+  assert.match(message, /Facebook in-app \(2\) · Instagram in-app \(1\) · WhatsApp in-app \(1\) · Android WebView \(1\) · Desktop browser \(1\)/);
   assert.match(message, /\+ 2 more signatures retained in D1/);
 });
 
 test('browser signals are classified and noisy platform errors need stronger evidence', () => {
   assert.equal(classifyBrowserSignal({ kind: 'cart' }), 'cart-network');
+  assert.equal(classifyBrowserSignal({ kind: 'cart', stage: 'verified-success' }), 'cart-recovered');
   assert.equal(classifyBrowserSignal({ kind: 'resource', source: 'https://cdn.shopify.com/shopifycloud/shop-js/modules/loader.shop-login-button.js' }), 'shopify-platform');
   assert.equal(classifyBrowserSignal({ kind: 'resource', source: 'https://apgo.my/cdn/fonts/font.woff2' }), 'font-resource');
   assert.equal(classifyBrowserSignal({ kind: 'error', message: 'Required ref productCardLink not found' }), 'theme');
@@ -89,6 +98,7 @@ test('browser signals are classified and noisy platform errors need stronger evi
   assert.equal(shouldAlertDigestRow({ category: 'shopify-platform', occurrences: 15, sessions: 15, networks: 5 }), true);
   assert.equal(shouldAlertDigestRow({ category: 'cart-network', occurrences: 3, sessions: 3, networks: 1 }), false);
   assert.equal(shouldAlertDigestRow({ category: 'cart-network', occurrences: 3, sessions: 3, networks: 2 }), true);
+  assert.equal(shouldAlertDigestRow({ category: 'cart-recovered', occurrences: 100, sessions: 100, networks: 50 }), false);
   assert.equal(shouldAlertDigestRow({ category: 'theme', occurrences: 3, sessions: 3, networks: 2 }), true);
   assert.equal(browserRealertMs({ category: 'shopify-platform' }), 6 * 60 * 60_000);
 });
@@ -127,4 +137,13 @@ test('social crawlers are ignored without excluding real Facebook in-app shopper
   assert.equal(isIgnoredUserAgent('Mozilla/5.0 (compatible; Facebot/1.0)'), true);
   assert.equal(isIgnoredUserAgent('Mozilla/5.0 (Linux; Android 16) [FB_IAB/FB4A;FBAV/526.0.0.0.0;]'), false);
   assert.equal(isIgnoredUserAgent('Mozilla/5.0 (Linux; Android 15; Device Build/AP3A; wv) Version/4.0 Chrome/138 Mobile Safari/537.36'), false);
+});
+
+test('social apps and generic WebViews are classified separately', () => {
+  assert.equal(classifyClientType('Mozilla/5.0 [FB_IAB/FB4A;FBAV/575.1.0.55.73;]'), 'facebook');
+  assert.equal(classifyClientType('Mozilla/5.0 iPhone Instagram 444.0.0.31.65 Mobile Safari/604.1'), 'instagram');
+  assert.equal(classifyClientType('Mozilla/5.0 Android Mobile Safari/537.36 WA4A/2.26.32.83'), 'whatsapp');
+  assert.equal(classifyClientType('Mozilla/5.0 (Linux; Android 15; wv) Version/4.0 Chrome/138 Mobile Safari/537.36'), 'android-webview');
+  assert.equal(classifyClientType('Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 Mobile/22F76'), 'ios-webview');
+  assert.equal(classifyClientType('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140 Safari/537.36'), 'desktop-browser');
 });

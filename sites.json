@@ -38,6 +38,27 @@
           "profile": "iphone-14",
           "hourly": false,
           "daily": true
+        },
+        {
+          "id": "facebook-android",
+          "browser": "chromium",
+          "profile": "facebook-in-app",
+          "hourly": false,
+          "daily": false
+        },
+        {
+          "id": "instagram-iphone",
+          "browser": "webkit",
+          "profile": "instagram-in-app",
+          "hourly": false,
+          "daily": false
+        },
+        {
+          "id": "whatsapp-android",
+          "browser": "chromium",
+          "profile": "whatsapp-in-app",
+          "hourly": false,
+          "daily": false
         }
       ]
     }
@@ -112,6 +133,11 @@
             46516524417178,
             46516355006618
           ]
+        },
+        "atomicBundle": {
+          "handle": "✨atomic-coating-special-ltd-bundle-✨",
+          "expectedVariantId": 49007551250586,
+          "expectedPriceMinor": 6600
         },
       "laundryPdp": {
         "handle": "apgo-laundry-detergent-oceans海洋晨曦-copy",
@@ -199,7 +225,7 @@
             { "blockId": "offer_item_HxKrDn", "tabSlot": "tab_4", "product": "apgo-glass-cleaner-500ml", "variantId": "46901363081370", "priceMode": "promo", "promoPriceMy": "RM 15.8", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
             { "blockId": "offer_item_fwnJge", "tabSlot": "tab_4", "product": "apgo-microfiber-pro-car-coating-cloth-30cm-x-30cm-1-pcs", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 9.9", "promoPriceSg": "$ 3.9", "maxQuantity": 0 },
             { "blockId": "offer_item_cWQE7G", "tabSlot": "tab_5", "product": "apgo-car-interior-eco-friendly-cleaner", "variantId": "46971435679898", "priceMode": "promo", "promoPriceMy": "RM 18.8", "promoPriceSg": "$ 7.9", "maxQuantity": 0 },
-            { "blockId": "offer_item_anEBA6", "tabSlot": "tab_5", "product": "apgo-atomic-car-nano-coating-refill-pack-standard", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 15.9", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
+            { "blockId": "offer_item_anEBA6", "tabSlot": "tab_5", "product": "apgo-atomic-crystal-car-nano-coating-refill-pack", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 19.9", "promoPriceSg": "$ 8.8", "maxQuantity": 0 },
             { "blockId": "offer_item_VdcC9d", "tabSlot": "tab_5", "product": "apgo-car-wash-shampoo-special-formula-refill-pack", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 8.8", "promoPriceSg": "$ 3.9", "maxQuantity": 0 },
             { "blockId": "offer_item_9nMDRk", "tabSlot": "tab_5", "product": "apgo-glass-cleaner-500ml", "variantId": "46901363081370", "priceMode": "promo", "promoPriceMy": "RM 15.8", "promoPriceSg": "$ 6.9", "maxQuantity": 0 },
             { "blockId": "offer_item_Dat3yQ", "tabSlot": "tab_5", "product": "apgo-microfiber-pro-car-coating-cloth-30cm-x-30cm-1-pcs", "variantId": "", "priceMode": "promo", "promoPriceMy": "RM 9.9", "promoPriceSg": "$ 3.9", "maxQuantity": 0 }
