@@ -29,7 +29,7 @@ Create private App `APGO Storefront Monitor` with:
 
 Store the App ID as `MONITOR_GITHUB_APP_ID`; store the PEM and Webhook Secret as `MONITOR_GITHUB_APP_PRIVATE_KEY` and `MONITOR_GITHUB_WEBHOOK_SECRET`. The Dispatcher validates the raw request body, repository ID, `refs/heads/main`, full SHA and delivery ID before requesting a one-hour installation token scoped to the central Repo.
 
-Create KV namespace `apgo-monitor-dispatch-deliveries`, replace the zero placeholder in `workers/dispatcher/wrangler.jsonc`, then deploy the Dispatcher manually. Duplicate deliveries remain deduplicated for seven days.
+KV namespace `apgo-monitor-dispatch-deliveries` is bound as `DELIVERIES` in `workers/dispatcher/wrangler.jsonc`. Deploy the Dispatcher manually after its GitHub App secrets exist. Duplicate deliveries remain deduplicated for seven days.
 
 ## WIF
 
@@ -39,8 +39,8 @@ Create provider `apgo-storefront-monitoring` in project `helical-canto-505209-j7
 
 1. Export D1 with Wrangler and preserve the artifact.
 2. Apply `workers/error-monitor/migrations/0004-site-namespace.sql`.
-3. Set old token as `MONITOR_HEARTBEAT_TOKEN_CURRENT` and new token as `MONITOR_HEARTBEAT_TOKEN`.
-4. Deploy Error Worker once with both token secrets. New writes use `apgo-my:layerN`; `/health` temporarily reads new keys first and legacy keys second.
+3. A new central `MONITOR_HEARTBEAT_TOKEN` is created and the running Worker receives it as `MONITOR_HEARTBEAT_TOKEN_NEXT`; its existing `MONITOR_HEARTBEAT_TOKEN` remains the old Theme token.
+4. Deploy Error Worker without replacing its existing secrets. New writes use `apgo-my:layerN`; `/health` temporarily reads new keys first and legacy keys second.
 5. After Cutover stability, remove the current/old token and legacy WIF binding. Do not delete D1 history.
 
 ## Shadow and Cutover
