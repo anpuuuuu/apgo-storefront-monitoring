@@ -1,15 +1,10 @@
+import { MONITOR_SITES } from '../site-catalog.generated.mjs';
+
 const MAX_BODY_BYTES = 256 * 1024;
 const DELIVERY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const GITHUB_API = 'https://api.github.com';
 
-export const SOURCE_SITES = new Map([
-  ['1154313539', {
-    siteId: 'apgo-my',
-    label: 'APGO MY',
-    repository: 'anpuuuuu/apgo-theme',
-    branchRef: 'refs/heads/main',
-  }],
-]);
+export const SOURCE_SITES = new Map(MONITOR_SITES.map((site) => [site.repositoryId, { ...site, siteId: site.id }]));
 
 function responseJson(body, status = 200) {
   return Response.json(body, { status, headers: { 'cache-control': 'no-store' } });

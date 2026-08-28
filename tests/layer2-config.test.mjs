@@ -45,6 +45,17 @@ test('duplicate promotion ids fail as TEST_CONFIG_STALE', () => {
   assert.throws(() => validateLayer2Config(config), Layer2ConfigError);
 });
 
+test('duplicate immutable repository ids fail as TEST_CONFIG_STALE', () => {
+  const config = cloneConfig();
+  const duplicate = structuredClone(config.sites[0]);
+  duplicate.id = 'apgo-tw';
+  duplicate.siteId = 'apgo-tw';
+  duplicate.repository = 'anpuuuuu/apgo-tw-theme';
+  duplicate.storefrontOrigins = ['https://apgo.com.tw'];
+  config.sites.push(duplicate);
+  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*repository id/);
+});
+
 test('missing configured variant fails as TEST_CONFIG_STALE', () => {
   const config = cloneConfig();
   delete config.sites[0].fixtures.laundryPdp.variants.Lavender;
