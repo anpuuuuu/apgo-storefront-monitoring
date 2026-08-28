@@ -46,13 +46,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Check Worker and Layer 1 heartbeat
-        if: inputs.rollout_validation != true
         env:
           MONITOR_SITE_ID: ${{ matrix.siteId }}
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
         run: node scripts/worker-health.mjs
       - name: Refresh Layer 3 self-test
-        if: inputs.rollout_validation != true && (github.event_name == 'schedule' || inputs.layer3_selftest == true)
+        if: github.event_name == 'schedule' || inputs.layer3_selftest == true
         env:
           MONITOR_SITE_ID: ${{ matrix.siteId }}
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
