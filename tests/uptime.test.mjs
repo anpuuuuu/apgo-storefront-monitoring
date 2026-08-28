@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { heartbeatSeverity, shouldAlertHeartbeat } from '../cloudflare/worker/uptime.mjs';
-import { normalizeHeartbeatStatus } from '../cloudflare/worker/index.mjs';
+import { heartbeatSeverity, shouldAlertHeartbeat } from '../workers/error-monitor/uptime.mjs';
+import { normalizeHeartbeatStatus } from '../workers/error-monitor/index.mjs';
 
 test('heartbeat delay escalates only after two complete stale windows', () => {
   const limit = 90 * 60_000;

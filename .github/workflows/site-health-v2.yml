@@ -1,37 +1,38 @@
-name: Storefront browser health v2
+name: Layer 2 storefront browser monitoring
 
 on:
   schedule:
     - cron: "37 1 * * *"
   workflow_dispatch:
     inputs:
+      site_id:
+        description: Registered site id
+        required: true
+        default: apgo-my
       cadence:
         description: Layer 2 journey set
         type: choice
         options: [post-deploy, daily]
         default: post-deploy
+      source_repo:
+        description: Exact Theme repository
+        default: anpuuuuu/apgo-theme
+      source_repository_id:
+        description: Immutable Theme repository id
+        default: "1154313539"
+      source_sha:
+        description: Full Theme SHA for post-deploy
+        default: ""
+      delivery_id:
+        description: GitHub webhook delivery id
+        default: manual
       retry_delay_seconds:
-        description: Delay before fresh-session recheck
         type: number
         default: 60
-  push:
-    branches: [main]
-    paths:
-      - "assets/**"
-      - "blocks/**"
-      - "config/**"
-      - "layout/**"
-      - "sections/**"
-      - "snippets/**"
-      - "templates/**"
-      - "monitoring/**"
-      - ".github/workflows/site-health-v2.yml"
 
-# Only the latest storefront commit needs a post-deploy check. Daily runs use
-# a separate lane, so a theme push cannot cancel the required daily heartbeat.
 concurrency:
-  group: storefront-health-v2-${{ github.event_name == 'push' && 'post-deploy' || 'daily' }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: layer2-${{ inputs.cadence == 'post-deploy' && format('post-deploy-{0}', inputs.site_id) || format('daily-{0}', inputs.site_id || 'apgo-my') }}
+  cancel-in-progress: ${{ inputs.cadence == 'post-deploy' }}
 
 permissions:
   contents: read
@@ -39,43 +40,61 @@ permissions:
 
 jobs:
   plan:
+    if: github.event_name != 'schedule' || vars.MONITOR_SCHEDULE_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     outputs:
       cadence: ${{ steps.select.outputs.cadence }}
+      site_id: ${{ steps.select.outputs.site_id }}
       matrix: ${{ steps.matrix.outputs.matrix }}
+      source_repo: ${{ steps.source.outputs.repository }}
+      source_sha: ${{ steps.source.outputs.sha }}
       plan_error: ${{ steps.discover.outputs.error }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Select cadence
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Select site and cadence
         id: select
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          INPUT_SITE: ${{ inputs.site_id }}
           INPUT_CADENCE: ${{ inputs.cadence }}
         run: |
-          cadence=daily
-          if [ "$EVENT_NAME" = push ]; then cadence=post-deploy; fi
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then cadence="${INPUT_CADENCE:-post-deploy}"; fi
-          echo "cadence=$cadence" >> "$GITHUB_OUTPUT"
-      - name: Wait for the pushed Shopify theme to settle
-        if: github.event_name == 'push'
-        run: |
-          for minute in 1 2 3; do
-            echo "Waiting for storefront deployment ($minute/3)..."
-            sleep 60
-          done
-      - name: Require GA4 discovery configuration
+          echo "site_id=${INPUT_SITE:-apgo-my}" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = schedule ]; then echo "cadence=daily" >> "$GITHUB_OUTPUT"; else echo "cadence=${INPUT_CADENCE:-post-deploy}" >> "$GITHUB_OUTPUT"; fi
+      - name: Resolve and verify exact Theme source
+        id: source
         env:
-          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
-          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GITHUB_TOKEN: ${{ github.token }}
+          MONITOR_SITE_ID: ${{ steps.select.outputs.site_id }}
+          MONITOR_CADENCE: ${{ steps.select.outputs.cadence }}
+          MONITOR_SOURCE_REPO: ${{ inputs.source_repo }}
+          MONITOR_SOURCE_REPOSITORY_ID: ${{ inputs.source_repository_id }}
+          MONITOR_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: node scripts/resolve-theme-source.mjs
+      - name: Wait for Shopify Theme deployment
+        if: steps.select.outputs.cadence == 'post-deploy'
         run: |
-          test -n "$GA4_PROPERTY_ID" || { echo "::error::GA4_PROPERTY_ID is required"; exit 1; }
-          test -n "$GCP_WIF_PROVIDER" || { echo "::error::GCP_WIF_PROVIDER is required"; exit 1; }
-      - name: Authenticate GA4 discovery with Google OIDC/WIF
+          for minute in 1 2 3; do echo "Waiting for storefront deployment ($minute/3)..."; sleep 60; done
+      - name: Checkout exact Theme commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ steps.source.outputs.sha }}
+          path: workspaces/${{ steps.select.outputs.site_id }}/theme
+      - name: Validate monitoring and Theme contracts
+        env:
+          MONITOR_SITE_ID: ${{ steps.select.outputs.site_id }}
+          MONITOR_THEME_ROOT: ${{ github.workspace }}/workspaces/${{ steps.select.outputs.site_id }}/theme
+        run: |
+          node scripts/layer2-config.mjs validate config/sites.json
+          npm run test:theme-contract
+      - name: Authenticate GA4 discovery through OIDC/WIF
         id: google-auth
         uses: google-github-actions/auth@v3
         with:
@@ -85,113 +104,93 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
           create_credentials_file: false
-      - name: Discover paid advertising landing pages from GA4
+      - name: Discover paid advertising Landing Pages
         id: discover
-        working-directory: monitoring
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
-          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          MONITOR_SITE_ID: ${{ steps.select.outputs.site_id }}
         shell: bash
         run: |
           set +e
-          output="$(node scripts/discover-ad-targets.mjs sites.json ad-targets.json 2>&1)"
+          output="$(node scripts/discover-ad-targets.mjs config/sites.json ad-targets.json 2>&1)"
           status=$?
           set -e
           echo "$output"
-          if [ "$status" -ne 0 ]; then
-            detail="$(echo "$output" | tr '\r\n' ' ' | cut -c1-500)"
-            echo "error=$detail" >> "$GITHUB_OUTPUT"
-            exit "$status"
-          fi
-      - name: Validate runtime contract and build dynamic journey matrix
+          if [ "$status" -ne 0 ]; then detail="$(echo "$output" | tr '\r\n' ' ' | cut -c1-500)"; echo "error=$detail" >> "$GITHUB_OUTPUT"; exit "$status"; fi
+      - name: Build serial Batch plan
         id: matrix
-        working-directory: monitoring
         env:
-          CADENCE: ${{ steps.select.outputs.cadence }}
+          MONITOR_SITE_ID: ${{ steps.select.outputs.site_id }}
+          MONITOR_THEME_ROOT: ${{ github.workspace }}/workspaces/${{ steps.select.outputs.site_id }}/theme
         shell: bash
         run: |
-          node scripts/layer2-config.mjs validate
-          matrix="$(node scripts/layer2-config.mjs matrix sites.json "$CADENCE" ad-targets.json)"
+          matrix="$(node scripts/layer2-config.mjs matrix config/sites.json '${{ steps.select.outputs.cadence }}' ad-targets.json)"
+          printf '%s\n' "$matrix" > layer2-matrix.json
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-      - name: Upload discovered advertising targets
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: layer2-ad-targets-${{ github.run_id }}
-          path: monitoring/ad-targets.json
+          name: layer2-plan-${{ github.run_id }}
+          path: |
+            ad-targets.json
+            layer2-matrix.json
           retention-days: 14
           if-no-files-found: error
 
-  browser:
+  browser-batch:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 55
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    defaults:
-      run:
-        working-directory: monitoring
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
       - run: npm ci --no-audit --no-fund
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-v2-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('monitoring/package-lock.json') }}
-      - name: Install browser engine
-        run: timeout 360 npx playwright install --with-deps ${{ matrix.browser }} || npx playwright install ${{ matrix.browser }}
-      - name: Run journey and one explicit fresh-session recheck when needed
+          key: playwright-central-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install each browser engine once
+        run: timeout 720 npx playwright install --with-deps chromium webkit || npx playwright install chromium webkit
+      - uses: actions/download-artifact@v4
+        with:
+          name: layer2-plan-${{ github.run_id }}
+          path: .
+      - name: Run all Journeys strictly serially
         env:
-          MONITOR_V2: "1"
-          MONITOR_JOB_ID: ${{ matrix.id }}
-          MONITOR_SITE: ${{ matrix.site }}
-          MONITOR_MARKET: ${{ matrix.market }}
-          MONITOR_DEVICE: ${{ matrix.device }}
-          MONITOR_JOURNEY: ${{ matrix.journey }}
-          MONITOR_SUITE: ${{ matrix.suite }}
-          MONITOR_FLOW: ${{ matrix.flow }}
-          MONITOR_RULE: ${{ matrix.rule }}
-          MONITOR_SPEC: ${{ matrix.spec }}
-          MONITOR_LANDING_PATH: ${{ matrix.landingPath }}
-          MONITOR_CHANNEL: ${{ matrix.channel }}
-          MONITOR_AD_SESSIONS: ${{ matrix.sessions }}
-          MONITOR_AD_ADD_TO_CARTS: ${{ matrix.addToCarts }}
-          MONITOR_AD_CHECKOUTS: ${{ matrix.checkouts }}
-          MONITOR_COMMIT: ${{ github.sha }}
-          MONITOR_RETRY_DELAY_SECONDS: ${{ inputs.retry_delay_seconds }}
+          MONITOR_MATRIX_FILE: layer2-matrix.json
+          MONITOR_ARTIFACTS_DIR: artifacts
+          MONITOR_COMMIT: ${{ needs.plan.outputs.source_sha }}
+          MONITOR_SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+          MONITOR_RETRY_DELAY_SECONDS: ${{ inputs.retry_delay_seconds || 60 }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node scripts/run-layer2-journey.mjs
-      - name: Upload evidence and journey result
+        run: node scripts/run-layer2-batch.mjs
+      - name: Upload evidence and results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: layer2-v2-${{ matrix.id }}-${{ github.run_id }}
-          path: monitoring/artifacts/
+          name: layer2-batch-${{ github.run_id }}
+          path: artifacts/
           retention-days: 7
           if-no-files-found: error
 
   finalize:
-    if: always()
-    needs: [plan, browser]
+    if: always() && needs.plan.result != 'skipped'
+    needs: [plan, browser-batch]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Download every journey result
+      - uses: actions/download-artifact@v4
         continue-on-error: true
-        uses: actions/download-artifact@v4
         with:
-          pattern: layer2-v2-*-${{ github.run_id }}
+          name: layer2-batch-${{ github.run_id }}
           path: layer2-results
-      - name: Aggregate results and require every planned journey result
-        if: always()
+      - name: Aggregate and require every planned Journey
         id: aggregate
         env:
           MONITOR_PLAN_RESULT: ${{ needs.plan.result }}
@@ -201,46 +200,36 @@ jobs:
           MONITOR_AGGREGATE_FILE: layer2-aggregate.json
           MONITOR_HEARTBEAT_DETAIL_FILE: layer2-heartbeat-detail.json
           MONITOR_CADENCE: ${{ needs.plan.outputs.cadence }}
-        run: node monitoring/scripts/aggregate-layer2-results.mjs
-      - name: Require daily heartbeat configuration
-        if: needs.plan.outputs.cadence == 'daily'
+        run: node scripts/aggregate-layer2-results.mjs
+      - name: Write only Live Daily heartbeat
+        if: needs.plan.outputs.cadence == 'daily' && vars.MONITOR_MODE == 'live'
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
-        run: |
-          test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
-          test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
-      - name: Write the daily Layer 2 heartbeat only
-        if: needs.plan.outputs.cadence == 'daily'
-        env:
-          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
-          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          MONITOR_SITE_ID: ${{ needs.plan.outputs.site_id }}
           MONITOR_LAYER: layer2
           MONITOR_STATUS: ${{ steps.aggregate.outputs.status }}
-          MONITOR_SOURCE: playwright-v2-daily
+          MONITOR_SOURCE: playwright-central-daily
           MONITOR_SUITE: daily
           MONITOR_DETAIL_JSON_FILE: layer2-heartbeat-detail.json
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/write-heartbeat.mjs
-      - name: Notify only after both attempts fail or a journey is missing
-        if: always() && steps.aggregate.outputs.notify == 'true'
+        run: node scripts/write-heartbeat.mjs
+      - name: Notify only in Live mode after both attempts fail
+        if: steps.aggregate.outputs.notify == 'true' && vars.MONITOR_MODE == 'live'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_TITLE: ${{ steps.aggregate.outputs.alert_title }}
           ALERT_DETAIL: ${{ steps.aggregate.outputs.detail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/workflow-failure-notify.mjs
-      - name: Fail workflow for missing or twice-failed journeys
+        run: node scripts/workflow-failure-notify.mjs
+      - name: Fail missing or twice-failed Journeys
         if: steps.aggregate.outputs.status == 'failed'
-        run: |
-          echo "::error::${{ steps.aggregate.outputs.detail }}"
-          exit 1
-      - name: Upload aggregate summary
+        run: exit 1
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: layer2-v2-summary-${{ github.run_id }}
+          name: layer2-summary-${{ github.run_id }}
           path: |
             layer2-aggregate.json
             layer2-heartbeat-detail.json

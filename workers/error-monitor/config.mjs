@@ -1,9 +1,31 @@
-export const STORE_ORIGINS = ['https://apgo.my', 'https://www.apgo.my'];
-export const SHOPIFY_ORIGIN = /^https:\/\/[a-z0-9-]+\.myshopify\.com$/;
+export const SITES = [
+  {
+    id: 'apgo-my',
+    label: 'APGO MY',
+    origins: ['https://apgo.my', 'https://www.apgo.my'],
+    baseUrl: 'https://apgo.my',
+    enabledLayers: ['layer1', 'layer2', 'layer3', 'layer4'],
+  },
+];
+
+export const STORE_ORIGINS = SITES.flatMap((site) => site.origins);
+
+export function siteForOrigin(origin) {
+  return SITES.find((site) => site.origins.includes(origin)) || null;
+}
+
+export function siteById(siteId) {
+  return SITES.find((site) => site.id === siteId) || null;
+}
+
+export function siteKey(siteId, value) {
+  return `${siteId}:${value}`;
+}
 
 export const UPTIME_TARGETS = [
   {
-    id: 'homepage',
+    siteId: 'apgo-my',
+    id: 'apgo-my:homepage',
     url: 'https://apgo.my/',
     validate: async (response) => {
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
@@ -14,7 +36,8 @@ export const UPTIME_TARGETS = [
     },
   },
   {
-    id: 'cart-api',
+    siteId: 'apgo-my',
+    id: 'apgo-my:cart-api',
     url: 'https://apgo.my/cart.js',
     validate: async (response) => {
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);

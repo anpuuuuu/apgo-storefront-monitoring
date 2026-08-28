@@ -1,18 +1,21 @@
 {
-  "name": "apgo-site-monitoring",
+  "name": "apgo-storefront-monitoring",
   "private": true,
   "description": "Synthetic health checks for APGO storefronts (add-to-cart and critical flows)",
   "scripts": {
     "test": "playwright test",
-    "test:worker": "node --test tests/github-schedule-health.test.mjs tests/layer3-alerts.test.mjs tests/uptime.test.mjs tests/theme-regressions.test.mjs",
+    "test:worker": "node --test tests/github-schedule-health.test.mjs tests/layer3-alerts.test.mjs tests/uptime.test.mjs tests/dispatcher.test.mjs",
+    "test:theme-contract": "node --test tests/theme-regressions.test.mjs",
     "test:cart-failures": "node tests/local-cart-failure-smoke.mjs",
     "test:layer3": "node --test tests/layer3-alerts.test.mjs",
     "test:light": "cross-env MONITOR_SUITE=light playwright test",
     "test:full": "cross-env MONITOR_SUITE=full playwright test",
     "test:layer2-config": "node --test tests/ad-discovery.test.mjs tests/layer2-config.test.mjs tests/layer2-aggregate.test.mjs",
     "validate:layer2": "node scripts/layer2-config.mjs validate",
-    "matrix:layer2": "node scripts/layer2-config.mjs matrix sites.json",
-    "check:worker": "wrangler deploy --dry-run --config cloudflare/worker/wrangler.jsonc"
+    "matrix:layer2": "node scripts/layer2-config.mjs matrix config/sites.json",
+    "check:worker": "wrangler deploy --dry-run --config workers/error-monitor/wrangler.jsonc",
+    "check:dispatcher": "wrangler deploy --dry-run --config workers/dispatcher/wrangler.jsonc",
+    "ci": "npm run test:layer2-config && npm run test:worker && npm run check:worker && npm run check:dispatcher"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

@@ -1,4 +1,4 @@
-import { HEARTBEAT_LIMITS } from './config.mjs';
+import { HEARTBEAT_LIMITS, SITES, siteById, siteKey } from './config.mjs';
 import { listHeartbeats, writeHeartbeat } from './db.mjs';
 import { corsHeaders, digestBrowserErrors, receiveError } from './errors.mjs';
 import { bearerToken, secretMatches } from './security.mjs';
@@ -21,22 +21,39 @@ async function health(env) {
     status: row.status,
     observedAt: row.observed_at,
     ageSeconds: Math.max(0, Math.floor((now - Date.parse(row.observed_at)) / 1000)),
-    stale: !HEARTBEAT_LIMITS[row.layer] || now - Date.parse(row.observed_at) > HEARTBEAT_LIMITS[row.layer],
+    stale: !HEARTBEAT_LIMITS[String(row.layer).split(':').at(-1)]
+      || now - Date.parse(row.observed_at) > HEARTBEAT_LIMITS[String(row.layer).split(':').at(-1)],
   }));
-  const layer1 = statuses.find((row) => row.layer === 'layer1');
-  const ok = Boolean(layer1 && !layer1.stale && layer1.status === 'ok');
-  return json({ ok, service: 'apgo-monitoring', now: new Date(now).toISOString(), heartbeats: statuses }, ok ? 200 : 503);
+  const sites = SITES.map((site) => ({
+    siteId: site.id,
+    label: site.label,
+    layers: site.enabledLayers.map((layer) => {
+      const row = statuses.find((entry) => entry.layer === siteKey(site.id, layer))
+        || statuses.find((entry) => entry.layer === layer);
+      return row ? { ...row, layer, storageKey: row.layer, legacyFallback: row.layer === layer } : { layer, missing: true, stale: true };
+    }),
+  }));
+  const ok = sites.every((site) => {
+    const layer1 = site.layers.find((row) => row.layer === 'layer1');
+    return Boolean(layer1 && !layer1.stale && layer1.status === 'ok');
+  });
+  return json({ ok, service: 'apgo-monitoring', now: new Date(now).toISOString(), sites, heartbeats: statuses }, ok ? 200 : 503);
 }
 
 async function heartbeat(request, env) {
-  if (!await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
+  const candidate = bearerToken(request);
+  const authenticated = await secretMatches(candidate, env.MONITOR_HEARTBEAT_TOKEN)
+    || await secretMatches(candidate, env.MONITOR_HEARTBEAT_TOKEN_NEXT);
+  if (!authenticated) return json({ ok: false, error: 'unauthorized' }, 401);
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: 'invalid JSON' }, 400); }
   if (!['layer1', 'layer2', 'layer3', 'layer4'].includes(body.layer)) return json({ ok: false, error: 'invalid layer' }, 400);
+  const site = siteById(String(body.siteId || ''));
+  if (!site || !site.enabledLayers.includes(body.layer)) return json({ ok: false, error: 'invalid siteId or disabled layer' }, 400);
   const normalizedStatus = normalizeHeartbeatStatus(body.status);
-  await writeHeartbeat(env.DB, body.layer, String(body.source || 'github-actions').slice(0, 100), normalizedStatus,
+  await writeHeartbeat(env.DB, site.id, body.layer, String(body.source || 'github-actions').slice(0, 100), normalizedStatus,
     body.detail && typeof body.detail === 'object' ? body.detail : {});
-  return json({ ok: true }, 202);
+  return json({ ok: true, siteId: site.id, layer: body.layer }, 202);
 }
 
 export default {

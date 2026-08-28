@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS state (
 
 CREATE TABLE IF NOT EXISTS js_errors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id TEXT NOT NULL DEFAULT 'apgo-my',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   signature TEXT NOT NULL,
   message TEXT NOT NULL,
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS js_errors (
 CREATE INDEX IF NOT EXISTS idx_js_errors_created ON js_errors (created_at);
 CREATE INDEX IF NOT EXISTS idx_js_errors_sig ON js_errors (signature, created_at);
 CREATE INDEX IF NOT EXISTS idx_js_errors_ip ON js_errors (ip_hash, created_at);
+CREATE INDEX IF NOT EXISTS idx_js_errors_site_sig_created ON js_errors (site_id, signature, created_at);
 
 CREATE TABLE IF NOT EXISTS known_signatures (
   signature TEXT PRIMARY KEY,

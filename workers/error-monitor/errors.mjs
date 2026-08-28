@@ -1,10 +1,10 @@
-import { LIMITS, SHOPIFY_ORIGIN, STORE_ORIGINS } from './config.mjs';
+import { LIMITS, siteForOrigin, siteKey } from './config.mjs';
 import { getState, logAlert, setState, writeHeartbeat } from './db.mjs';
 import { bearerToken, cleanPath, cleanSource, secretMatches, sha256Hex } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
 
 export function originAllowed(origin) {
-  return STORE_ORIGINS.includes(origin) || SHOPIFY_ORIGIN.test(origin);
+  return Boolean(siteForOrigin(origin));
 }
 
 export function corsHeaders(origin) {
@@ -80,13 +80,13 @@ export function normalizeSignatureText(text) {
     .replace(/\d{4,}/g, '<n>');
 }
 
-export function normalizedBrowserSignatureInput({ kind, message, source, line, action, stage }) {
+export function normalizedBrowserSignatureInput({ siteId = '', kind, message, source, line, action, stage }) {
   const normalizedMessage = String(message || '').replace(/^Uncaught\s+/i, '').trim();
   const category = classifyBrowserSignal({ kind, message: normalizedMessage, source, stage });
   if (category === 'shopify-platform') {
-    return `${category}|${platformFamily(`${normalizedMessage} ${source || ''}`)}`;
+    return `${siteId}|${category}|${platformFamily(`${normalizedMessage} ${source || ''}`)}`;
   }
-  return `${kind}|${normalizeSignatureText(normalizedMessage)}|${source || ''}|${Number(line) || 0}|${action || ''}|${stage || ''}`;
+  return `${siteId}|${kind}|${normalizeSignatureText(normalizedMessage)}|${source || ''}|${Number(line) || 0}|${action || ''}|${stage || ''}`;
 }
 
 export function shouldAlertDigestRow(row) {
@@ -162,6 +162,8 @@ export async function receiveError(request, env) {
     try { refOrigin = new URL(request.headers.get('referer') || '').origin; } catch { refOrigin = ''; }
   }
   if (!refOrigin || !originAllowed(refOrigin)) return new Response(null, { status: 403, headers });
+  const site = siteForOrigin(refOrigin);
+  if (!site) return new Response(null, { status: 403, headers });
 
   let raw;
   try { raw = await readLimitedText(request, LIMITS.bodyBytes); }
@@ -194,9 +196,13 @@ export async function receiveError(request, env) {
   // a real Shopify Cart API 5xx response is eligible for immediate escalation.
   const critical = isCriticalCartError({ kind, status, stage });
   const authorizedSelftest = kind === 'selftest'
-    && await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN);
+    && (
+      await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN)
+      || await secretMatches(bearerToken(request), env.MONITOR_HEARTBEAT_TOKEN_NEXT)
+    );
   if (isIgnoredBrowserNoise({ kind, message })) return new Response(null, { status: 204, headers });
   const signature = (await sha256Hex(normalizedBrowserSignatureInput({
+    siteId: site.id,
     kind,
     message,
     source,
@@ -206,22 +212,24 @@ export async function receiveError(request, env) {
   }))).slice(0, 32);
 
   const rate = await env.DB.prepare(
-    "SELECT COUNT(*) AS c FROM js_errors WHERE ip_hash = ?1 AND created_at > datetime('now', '-60 seconds')"
-  ).bind(ipHash).first();
+    "SELECT COUNT(*) AS c FROM js_errors WHERE site_id = ?1 AND ip_hash = ?2 AND created_at > datetime('now', '-60 seconds')"
+  ).bind(site.id, ipHash).first();
   if (Number(rate?.c || 0) >= LIMITS.perIpPerMinute) return new Response(null, { status: 429, headers });
 
   await env.DB.prepare(
     `INSERT INTO js_errors
-     (signature, kind, message, source, line, col, stack, page_url, user_agent,
+     (site_id, signature, kind, message, source, line, col, stack, page_url, user_agent,
       session_id, ip_hash, action, http_status, stage, critical, duration_ms,
       visibility_state, online_state, page_leaving, client_type)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)`
-  ).bind(signature, kind, message, source, line, col, cleanText(data.stack, 1000), cleanPath(data.url), ua,
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)`
+  ).bind(site.id, signature, kind, message, source, line, col, cleanText(data.stack, 1000), cleanPath(data.url), ua,
     cleanText(data.sid, 64), ipHash, action, status, stage, critical ? 1 : 0, durationMs,
     visibilityState, onlineState, pageLeaving, clientType).run();
 
-  if (authorizedSelftest) await writeHeartbeat(env.DB, 'layer3', 'authenticated-selftest', 'ok', { signature, page: cleanPath(data.url) });
+  if (authorizedSelftest) await writeHeartbeat(env.DB, site.id, 'layer3', 'authenticated-selftest', 'ok', { signature, page: cleanPath(data.url) });
   if (critical) await alertCriticalCartError(env, {
+    siteId: site.id,
+    siteLabel: site.label,
     signature,
     message,
     action,
@@ -233,17 +241,17 @@ export async function receiveError(request, env) {
 }
 
 async function alertCriticalCartError(env, detail) {
-  const key = `critical-cart:${detail.signature}`;
+  const key = siteKey(detail.siteId, `critical-cart:${detail.signature}`);
   const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
   if (Date.now() - state.lastAlertMs < LIMITS.errorRealertMs) return;
-  await sendTelegram(env, `🔴 [Layer 3 Critical Cart Error]\n${detail.action || detail.stage}: ${detail.message}\nHTTP ${detail.status}\nPage: ${detail.page_url}\nSignature: ${detail.signature}`);
-  await logAlert(env.DB, 'layer3', 'critical-cart', detail);
+  await sendTelegram(env, `🔴 [${detail.siteLabel}][Layer 3 Critical Cart Error]\n${detail.action || detail.stage}: ${detail.message}\nHTTP ${detail.status}\nPage: ${detail.page_url}\nSignature: ${detail.signature}`);
+  await logAlert(env.DB, siteKey(detail.siteId, 'layer3'), 'critical-cart', detail);
   await setState(env.DB, key, { lastAlertMs: Date.now() });
 }
 
 export async function digestBrowserErrors(env) {
   const rows = await env.DB.prepare(
-    `SELECT signature, kind, COUNT(*) AS occurrences,
+    `SELECT site_id, signature, kind, COUNT(*) AS occurrences,
             COUNT(DISTINCT session_id) AS sessions,
             COUNT(DISTINCT ip_hash) AS networks,
             MIN(message) AS message, MIN(page_url) AS page_url,
@@ -294,7 +302,7 @@ export async function digestBrowserErrors(env) {
             END) AS desktop_browser_sessions
      FROM js_errors
      WHERE critical = 0 AND kind <> 'selftest' AND created_at > datetime('now', '-10 minutes')
-     GROUP BY signature
+     GROUP BY site_id, signature
      HAVING (kind = 'resource' AND COUNT(*) >= ?3 AND COUNT(DISTINCT session_id) >= ?4)
          OR (kind <> 'resource' AND COUNT(*) >= ?1 AND COUNT(DISTINCT session_id) >= ?2)
      ORDER BY occurrences DESC
@@ -312,7 +320,7 @@ export async function digestBrowserErrors(env) {
     if (!shouldAlertDigestRow(row)) continue;
     const known = await env.DB.prepare('SELECT muted FROM known_signatures WHERE signature = ?1').bind(row.signature).first();
     if (known?.muted) continue;
-    const key = `js-alert:${row.signature}`;
+    const key = siteKey(row.site_id, `js-alert:${row.signature}`);
     const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
     if (Date.now() - state.lastAlertMs < browserRealertMs(row)) continue;
     pending.push(row);
@@ -322,7 +330,7 @@ export async function digestBrowserErrors(env) {
 
   const selected = pending.slice(0, LIMITS.errorDigestMaxItems);
   await sendTelegram(env, buildBrowserDigest(selected, pending.length));
-  await logAlert(env.DB, 'layer3', 'browser-digest', {
+  await logAlert(env.DB, 'multi-site:layer3', 'browser-digest', {
     signatures: selected.map((row) => row.signature),
     omitted: Math.max(0, pending.length - selected.length),
     rows: selected,
@@ -334,7 +342,7 @@ export async function digestBrowserErrors(env) {
       `INSERT INTO state (key, value, updated_at)
        VALUES (?1, ?2, datetime('now'))
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
-    ).bind(`js-alert:${row.signature}`, JSON.stringify({ lastAlertMs: alertedAt })),
+    ).bind(siteKey(row.site_id, `js-alert:${row.signature}`), JSON.stringify({ lastAlertMs: alertedAt })),
     env.DB.prepare(
       `INSERT INTO known_signatures (signature, sample_message, last_alerted_at)
        VALUES (?1, ?2, datetime('now'))
@@ -346,8 +354,9 @@ export async function digestBrowserErrors(env) {
 }
 
 export function buildBrowserDigest(rows, eligibleCount = rows.length) {
+  const labels = [...new Set(rows.map((row) => row.site_id === 'apgo-my' ? 'APGO MY' : row.site_id).filter(Boolean))];
   const sections = [[
-    '🟠 [Layer 3 Browser Error Digest]',
+    `🟠 [${labels.join(', ') || 'UNKNOWN SITE'}][Layer 3 Browser Error Digest]`,
     `${eligibleCount} eligible signatures / 10 min`,
   ].join('\n')];
 

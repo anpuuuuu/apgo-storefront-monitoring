@@ -1,10 +1,10 @@
-# APGO 四层网站监控
+# APGO Central Storefront Monitoring
 
-目标：约 10 分钟内确认整站/API 故障，约 1 小时内发现购物流程故障，并用 GA4 检查业务漏斗异常。所有正式告警送到现有 Telegram 群。
+公开中央 Repo：`anpuuuuu/apgo-storefront-monitoring`。目标是约 10 分钟内确认整站/API 故障、每日与每次 Theme 更新后验证真实购物路径，并用 GA4 检查业务漏斗。配置与状态从第一天使用 Site Namespace；首个站点为 `apgo-my`。
 
 | Layer | 负责内容 | 频率 | 执行位置 |
 |---|---|---|---|
-| 1 | Homepage + `/cart.js` 存活、速度、恢复 | Cloudflare 每 5 分钟 | `cloudflare/worker/` |
+| 1 | Homepage + `/cart.js` 存活、速度、恢复 | Cloudflare 每 5 分钟 | `workers/error-monitor/` |
 | 2 | 广告 Landing Page 与真实浏览器购物流程 | 每日 09:37 MYT；每次 Theme 更新后 | `site-health-v2.yml` |
 | 3 | 第一方 JS、资源、Cart API 错误 | 实时收集；Worker 每 5 分钟聚合 | Theme snippet + Worker |
 | 4 | GA4 实时事件与每日完整漏斗 | 每 30 分钟；每日 12:17/14:47 MYT | `monitor-alerts.yml` |
@@ -20,7 +20,7 @@
 
 ## Layer 2
 
-配置集中在 `sites.json`。每天通过现有 WIF 只读 GA4 最近 3 天的付费 Landing Page，去除 UTM 后合并并优先选择有 ATC/Checkout 的页面，最多检查 10 个；GA4/Auth 失败明确报告 `AD_DISCOVERY_FAILED`。
+配置集中在 `config/sites.json`。每天通过 WIF 只读 GA4 最近 3 天的付费 Landing Page，去除 UTM 后合并并优先选择有 ATC/Checkout 的页面，最多检查 10 个；GA4/Auth 失败明确报告 `AD_DISCOVERY_FAILED`。
 
 - 每天 MYT 09:37：Paid Social 使用 Facebook Android 与 Instagram iPhone WebView；其他付费渠道使用 Pixel 7 与 iPhone Safari；Desktop 每个市场只跑基础 Smoke。
 - 每次 `main` Theme 更新后等待 3 分钟，再对当前广告页面执行 Android＋iPhone Add → Cart → Checkout；连续 Push 只保留最新 Commit。
@@ -28,7 +28,7 @@
 - Theme Contract 改为结构校验：确认 Tab/Offer/Promotion 字段和引用有效，但不再复制保存每个后台 Block 的固定预期。
 - 广告 Journey 在运行时发现页面上的 Promotion、Gift Picker、Cart Offer 和限购状态，验证选项不会被重新渲染清空，并逐项比对 Cart Snapshot 与 Checkout。
 - 第一次失败保存证据，等待 60 秒后以全新 Browser Context 复测；第二次成功记为 `transient/flaky` 且不发正式告警，两次失败才告警。Cloudflare 持续挑战与 Fixture 过期有独立分类。
-- 每个矩阵 Job 独立 Runner 且 `max-parallel=1`，避免同时制造大量 Cart API 请求。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
+- 所有 Journey 在一个 Batch Runner 内严格串行；Chromium 与 WebKit 各安装一次，每个 Journey 使用全新 Browser Context 并保留独立证据。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
 - Shopify `429` 优先尊重 `Retry-After`，否则使用 15/45/90 秒退避；持续 429 明确报告为 `MONITOR_RATE_LIMIT`，不归类为商品配置失效，也不自动重跑整套真实写入。
 - 失败上传 Screenshot、Trace、Console、Network 和最终 Cart JSON；关闭 Video，避免单次失败产生数百 MB 无效文件。
@@ -36,9 +36,8 @@
 本地：
 
 ```powershell
-cd monitoring
 npm ci
-npx playwright install chromium
+npx playwright install chromium webkit
 npm run test:light
 npm run test:full
 npm run validate:layer2
@@ -53,7 +52,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 - 收集 `window.error`、第一方资源加载失败、`unhandledrejection`、Cart API 失败和 Theme 主动触发的 `apgo:cart-error`。
 - 只发送清理后的 path，不发送 query、姓名、邮箱、地址或 cart token。
-- Worker 只接受 APGO/Shopify Origin，限制 8KB、10 条/IP/分钟；IP 每日散列。
+- Worker 只接受 `config` 中明确登记并由 Worker 映射至 Site ID 的 Storefront Origin，限制 8KB、10 条/IP/分钟；IP 每日散列。
 - JS、Promise 与一般 Cart Error：10 分钟内至少 3 次且至少 2 个 Session 才进入告警；资源错误采用较高的 8 次、5 个 Session 门槛。
 - 每个 Cron 周期只发送一条 Digest，最多列出 6 个 Signature；其余证据继续保留在 D1，不再为每个失败资源各发一条 Telegram。
 - Digest 会列出同一 Signature 影响的所有页面（最多显示 3 个）、不同网络数量，以及 Facebook 内置浏览器、Android WebView、一般手机浏览器和桌面浏览器的 Session 分布，避免把跨页面问题误认为单一商品页故障。
@@ -80,7 +79,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 每日报告计算三个转化率、Purchasers、Transactions、Revenue、AOV，并拆 MY/SG、device、洗衣精、Aurora、其他 Product、Campaign Page。异常需低于同星期 28 天基准的 50%，且满足最低 ATC/Checkout 样本；12:17 先记录，14:47 仍异常才确认。
 
-`alerts-config.json` 默认 `observe`。前 14 天只写 `would_alert`；复盘后人工改为 `armed`。
+`config/alerts-config.json` 默认 `observe`。前 14 天只写 `would_alert`；复盘后人工改为 `armed`。
 
 ## Heartbeat 与自监控
 
@@ -97,21 +96,23 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 ## Secrets 与 Variables
 
-Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`。
+Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`。
 
-Variables：`GA4_PROPERTY_ID`、`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`。
+Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
 
 任何必要值缺失都必须失败，不再“跳过后显示绿色”。
 
 ## Worker 部署与回退
 
 1. `npm run check:worker`。
-2. 手动运行 `Deploy APGO monitoring worker`；它先应用 D1 Migration，再部署 Worker。
+2. 手动运行 `Deploy monitoring Workers`；D1 Migration 必须另外勾选批准，不会随 Push 自动执行。
 3. 从日志取得 `workers.dev` URL，填进 `MONITOR_WORKER_URL`、`alerts-config.json`、`sites.json`、Theme snippet。
 4. 首次上线时保持 `CRON_ENABLED=false`，以 `rollout_validation=true` 手动运行 self-health，验证 Beacon、Layer 3 Heartbeat、D1 和 Telegram。
 5. 手动跑 Layer 2、Layer 3 self-test、Layer 4 validate；全部通过后才将 `CRON_ENABLED` 改为 `true`。
 6. Cron 开启后等待实际的 5 分钟触发，确认 `/health` 返回 200 且包含新鲜的 Layer 1 Heartbeat，再启用 GitHub Browser/Self-health schedules。
 
-当前上线状态（2026-08-21）：Worker Cron、Browser schedules、Self-health schedules 与 GA4 Observe schedules 已启用；MY/SG 六条完整购物流程及正常 Self-health 已通过。旧 GitHub Uptime 会与 Layer 1 并行 24 小时，确认稳定后才移除其 schedule。
+中央迁移期默认 `MONITOR_MODE=shadow` 且 `MONITOR_SCHEDULE_ENABLED` 不启用。旧 Theme Repo 继续负责正式告警与 Heartbeat；中央 Repo 的手动验证成功后才进入 48 小时 Shadow，之后由人工 Cutover。
+
+完整迁移、GitHub App、WIF、Secrets 与回退步骤见 `docs/MIGRATION.md`。
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。

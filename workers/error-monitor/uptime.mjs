@@ -1,4 +1,4 @@
-import { HEARTBEAT_CRITICAL_LIMITS, HEARTBEAT_LIMITS, LIMITS, UPTIME_TARGETS } from './config.mjs';
+import { HEARTBEAT_CRITICAL_LIMITS, HEARTBEAT_LIMITS, LIMITS, SITES, UPTIME_TARGETS, siteKey } from './config.mjs';
 import { getState, listHeartbeats, logAlert, setState, writeHeartbeat } from './db.mjs';
 import { sendTelegram } from './telegram.mjs';
 
@@ -9,7 +9,7 @@ async function probe(target) {
   try {
     const response = await fetch(target.url, {
       headers: {
-        accept: target.id === 'cart-api' ? 'application/json' : 'text/html',
+        accept: target.id.endsWith(':cart-api') ? 'application/json' : 'text/html',
         'user-agent': 'APGO-HealthCheck/2.0 Cloudflare-Cron',
       },
       redirect: 'follow',
@@ -34,6 +34,8 @@ async function probe(target) {
 
 async function updateTargetState(env, sample) {
   const key = `uptime:${sample.id}`;
+  const site = SITES.find((entry) => sample.id.startsWith(`${entry.id}:`));
+  const label = site?.label || sample.id.split(':')[0];
   const state = (await getState(env.DB, key)) || {
     failures: 0,
     slowSamples: 0,
@@ -46,8 +48,8 @@ async function updateTargetState(env, sample) {
 
   if (sample.ok) {
     if (state.incidentOpen) {
-      await sendTelegram(env, `🟢 [Layer 1 Recovery] ${sample.id} has recovered\nHTTP ${sample.status} · ${sample.latencyMs} ms\n${sample.url}`);
-      await logAlert(env.DB, 'layer1', 'recovery', sample);
+      await sendTelegram(env, `🟢 [${label}][Layer 1 Recovery] ${sample.id} has recovered\nHTTP ${sample.status} · ${sample.latencyMs} ms\n${sample.url}`);
+      await logAlert(env.DB, siteKey(site?.id || 'unknown', 'layer1'), 'recovery', sample);
     }
     state.failures = 0;
     state.incidentOpen = false;
@@ -57,8 +59,8 @@ async function updateTargetState(env, sample) {
       !state.incidentOpen || now - state.lastAlertMs >= LIMITS.uptimeRealertMs
     );
     if (shouldAlert) {
-      await sendTelegram(env, `🔴 [Layer 1] ${sample.id} failed ${state.failures} consecutive probes\n${sample.error}\n${sample.url}`);
-      await logAlert(env.DB, 'layer1', 'down', { ...sample, failures: state.failures });
+      await sendTelegram(env, `🔴 [${label}][Layer 1] ${sample.id} failed ${state.failures} consecutive probes\n${sample.error}\n${sample.url}`);
+      await logAlert(env.DB, siteKey(site?.id || 'unknown', 'layer1'), 'down', { ...sample, failures: state.failures });
       state.incidentOpen = true;
       state.lastAlertMs = now;
     }
@@ -70,8 +72,8 @@ async function updateTargetState(env, sample) {
   if (state.slowSamples >= LIMITS.slowThreshold && (
     !state.slowIncidentOpen || now - state.lastSlowAlertMs >= LIMITS.uptimeRealertMs
   )) {
-    await sendTelegram(env, `🟠 [Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`);
-    await logAlert(env.DB, 'layer1', 'slow', { ...sample, slowSamples: state.slowSamples });
+    await sendTelegram(env, `🟠 [${label}][Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`);
+    await logAlert(env.DB, siteKey(site?.id || 'unknown', 'layer1'), 'slow', { ...sample, slowSamples: state.slowSamples });
     state.slowIncidentOpen = true;
     state.lastSlowAlertMs = now;
   } else if (sample.latencyMs <= LIMITS.slowMs) {
@@ -99,11 +101,11 @@ async function checkStaleHeartbeats(env) {
   const rows = await listHeartbeats(env.DB);
   const byLayer = new Map(rows.map((row) => [row.layer, row]));
   const now = Date.now();
-  for (const [layer, maxAge] of Object.entries(HEARTBEAT_LIMITS)) {
-    if (layer === 'layer1') continue;
-    const row = byLayer.get(layer);
+  for (const site of SITES) for (const [layer, maxAge] of Object.entries(HEARTBEAT_LIMITS)) {
+    if (layer === 'layer1' || !site.enabledLayers.includes(layer)) continue;
+    const row = byLayer.get(siteKey(site.id, layer)) || byLayer.get(layer);
     const age = row ? now - Date.parse(row.observed_at) : Number.POSITIVE_INFINITY;
-    const stateKey = `heartbeat-alert:${layer}`;
+    const stateKey = siteKey(site.id, `heartbeat-alert:${layer}`);
     const state = (await getState(env.DB, stateKey)) || {
       open: false,
       severity: null,
@@ -130,8 +132,9 @@ async function checkStaleHeartbeats(env) {
     const shouldAlert = shouldAlertHeartbeat(severity, state, now, LIMITS.heartbeatRealertMs);
     if (shouldAlert) {
       const critical = severity === 'critical';
-      await sendTelegram(env, `${critical ? '🔴 [Monitoring Health]' : '🟠 [Monitoring Delayed]'} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\n${critical ? 'Critical' : 'Warning'} limit: ${Math.round((critical ? criticalAge : maxAge) / 60_000)} minutes`);
-      await logAlert(env.DB, 'self-health', critical ? 'stale' : 'delayed', {
+      await sendTelegram(env, `${critical ? `🔴 [${site.label}][Monitoring Health]` : `🟠 [${site.label}][Monitoring Delayed]`} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\n${critical ? 'Critical' : 'Warning'} limit: ${Math.round((critical ? criticalAge : maxAge) / 60_000)} minutes`);
+      await logAlert(env.DB, siteKey(site.id, 'self-health'), critical ? 'stale' : 'delayed', {
+        siteId: site.id,
         layer,
         severity,
         last: row?.observed_at || null,
@@ -141,8 +144,8 @@ async function checkStaleHeartbeats(env) {
       });
       await setState(env.DB, stateKey, { ...state, open: true, severity, lastAlertMs: now });
     } else if (!severity && state.open) {
-      await sendTelegram(env, `🟢 [Monitoring Recovery] ${layer} heartbeat resumed\n${row.observed_at}`);
-      await logAlert(env.DB, 'self-health', 'recovery', { layer, observedAt: row.observed_at });
+      await sendTelegram(env, `🟢 [${site.label}][Monitoring Recovery] ${layer} heartbeat resumed\n${row.observed_at}`);
+      await logAlert(env.DB, siteKey(site.id, 'self-health'), 'recovery', { siteId: site.id, layer, observedAt: row.observed_at });
       await setState(env.DB, stateKey, { ...state, open: false, severity: null, lastAlertMs: state.lastAlertMs });
     } else {
       await setState(env.DB, stateKey, state);
@@ -166,7 +169,10 @@ export async function runScheduledUptime(env, scheduledTime) {
     await updateTargetState(env, sample);
   }
 
-  await writeHeartbeat(env.DB, 'layer1', 'cloudflare-cron', 'ok', { scheduledTime, samples });
+  for (const site of SITES) {
+    const siteSamples = samples.filter((sample) => sample.id.startsWith(`${site.id}:`));
+    if (siteSamples.length) await writeHeartbeat(env.DB, site.id, 'layer1', 'cloudflare-cron', 'ok', { scheduledTime, samples: siteSamples });
+  }
   await checkStaleHeartbeats(env);
   await env.DB.batch([
     env.DB.prepare("DELETE FROM uptime_samples WHERE created_at < datetime('now', '-30 days')"),

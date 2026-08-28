@@ -6,11 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       layer3_selftest:
-        description: Also run Layer 3 beacon self-test
         type: boolean
         default: true
       rollout_validation:
-        description: Skip Layer 1 and schedule freshness while Cron is intentionally disabled
         type: boolean
         default: false
 
@@ -19,42 +17,52 @@ permissions:
   actions: write
 
 jobs:
-  health:
+  plan:
+    if: github.event_name != 'schedule' || vars.MONITOR_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: matrix
+        run: echo "matrix=$(node scripts/site-matrix.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Check central Workflow freshness once
+        if: inputs.rollout_validation != true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/github-schedule-health.mjs
+
+  site-health:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Require health configuration
-        env:
-          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
-          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
-        run: |
-          test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
-          test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
+        with: { node-version: 24 }
       - name: Check Worker and Layer 1 heartbeat
         if: inputs.rollout_validation != true
         env:
+          MONITOR_SITE_ID: ${{ matrix.siteId }}
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
-        run: node monitoring/scripts/worker-health.mjs
-      - name: Check scheduled workflow freshness
-        if: inputs.rollout_validation != true
+        run: node scripts/worker-health.mjs
+      - name: Refresh Layer 3 self-test
+        if: inputs.rollout_validation != true && (github.event_name == 'schedule' || inputs.layer3_selftest == true)
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node monitoring/scripts/github-schedule-health.mjs
-      - name: Refresh Layer 3 beacon self-test
-        if: inputs.rollout_validation != true
-        env:
+          MONITOR_SITE_ID: ${{ matrix.siteId }}
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
-        run: node monitoring/scripts/layer3-self-test.mjs
-      - name: Notify self-monitoring failure
-        if: failure()
+        run: node scripts/layer3-self-test.mjs
+      - name: Notify failure only in Live mode
+        if: failure() && vars.MONITOR_MODE == 'live'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          ALERT_TITLE: APGO monitoring self-health failed
+          ALERT_TITLE: ${{ matrix.label }} monitoring self-health failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/workflow-failure-notify.mjs
+        run: node scripts/workflow-failure-notify.mjs

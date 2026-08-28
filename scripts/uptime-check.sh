@@ -9,9 +9,9 @@
 # the probe still alerts — worst case duplicates, never silence.
 set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG="$ROOT/monitoring/alerts-config.json"
-SITES="$ROOT/monitoring/sites.json"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="$ROOT/config/alerts-config.json"
+SITES="$ROOT/config/sites.json"
 
 TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TG_CHAT="${TELEGRAM_CHAT_ID:-}"

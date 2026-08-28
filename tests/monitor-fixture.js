@@ -2,7 +2,7 @@ const { test: base, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sites.json'), 'utf8'));
+const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'sites.json'), 'utf8'));
 const requestedSite = process.env.MONITOR_SITE || '';
 const sites = config.sites.filter((site) => site.enabled
   && site.type === 'shopify'
