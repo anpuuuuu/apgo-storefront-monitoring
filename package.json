@@ -6,6 +6,8 @@
     "test": "playwright test",
     "test:worker": "node --test tests/github-schedule-health.test.mjs tests/layer3-alerts.test.mjs tests/uptime.test.mjs tests/dispatcher.test.mjs",
     "test:theme-contract": "node --test tests/theme-regressions.test.mjs",
+    "generate:sites": "node scripts/generate-worker-sites.mjs",
+    "generate:check": "node scripts/generate-worker-sites.mjs --check",
     "test:cart-failures": "node tests/local-cart-failure-smoke.mjs",
     "test:layer3": "node --test tests/layer3-alerts.test.mjs",
     "test:light": "cross-env MONITOR_SUITE=light playwright test",
@@ -15,7 +17,7 @@
     "matrix:layer2": "node scripts/layer2-config.mjs matrix config/sites.json",
     "check:worker": "wrangler deploy --dry-run --config workers/error-monitor/wrangler.jsonc",
     "check:dispatcher": "wrangler deploy --dry-run --config workers/dispatcher/wrangler.jsonc",
-    "ci": "npm run test:layer2-config && npm run test:worker && npm run check:worker && npm run check:dispatcher"
+    "ci": "npm run generate:check && npm run test:layer2-config && npm run test:worker && npm run check:worker && npm run check:dispatcher"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

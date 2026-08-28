@@ -187,12 +187,20 @@ export function validateLayer2Config(config, { legacy = false, contract = Boolea
   const enabledSites = (config.sites || []).filter((site) => site.enabled && site.type === 'shopify');
   if (!enabledSites.length) throw new Layer2ConfigError('no enabled Shopify sites');
   unique(enabledSites, 'site');
+  unique(enabledSites, 'site repository id', (site) => String(site.repositoryId || ''));
+  unique(enabledSites, 'site repository', (site) => site.repository);
+  const origins = enabledSites.flatMap((site) => (site.storefrontOrigins || []).map((origin) => ({ id: origin, site: site.id })));
+  unique(origins, 'storefront origin', (entry) => entry.id);
 
   for (const site of enabledSites) {
+    if (site.siteId !== site.id) throw new Layer2ConfigError(`${site.id}.siteId must equal id`);
     required(site.repository, `${site.id}.repository`);
     required(site.repositoryId, `${site.id}.repositoryId`);
     required(site.defaultBranch, `${site.id}.defaultBranch`);
     required(site.ga4PropertyId, `${site.id}.ga4PropertyId`);
+    if (!Array.isArray(site.storefrontOrigins) || !site.storefrontOrigins.length) {
+      throw new Layer2ConfigError(`${site.id}.storefrontOrigins must not be empty`);
+    }
     if (!/^\d+$/.test(String(site.repositoryId))) {
       throw new Layer2ConfigError(`${site.id}.repositoryId must be an immutable numeric GitHub repository id`);
     }

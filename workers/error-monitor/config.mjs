@@ -1,12 +1,6 @@
-export const SITES = [
-  {
-    id: 'apgo-my',
-    label: 'APGO MY',
-    origins: ['https://apgo.my', 'https://www.apgo.my'],
-    baseUrl: 'https://apgo.my',
-    enabledLayers: ['layer1', 'layer2', 'layer3', 'layer4'],
-  },
-];
+import { MONITOR_SITES } from '../site-catalog.generated.mjs';
+
+export const SITES = MONITOR_SITES;
 
 export const STORE_ORIGINS = SITES.flatMap((site) => site.origins);
 
@@ -22,11 +16,11 @@ export function siteKey(siteId, value) {
   return `${siteId}:${value}`;
 }
 
-export const UPTIME_TARGETS = [
+export const UPTIME_TARGETS = SITES.filter((site) => site.enabledLayers.includes('layer1')).flatMap((site) => [
   {
-    siteId: 'apgo-my',
-    id: 'apgo-my:homepage',
-    url: 'https://apgo.my/',
+    siteId: site.id,
+    id: `${site.id}:homepage`,
+    url: `${site.baseUrl.replace(/\/$/, '')}/`,
     validate: async (response) => {
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       const body = await response.text();
@@ -36,9 +30,9 @@ export const UPTIME_TARGETS = [
     },
   },
   {
-    siteId: 'apgo-my',
-    id: 'apgo-my:cart-api',
-    url: 'https://apgo.my/cart.js',
+    siteId: site.id,
+    id: `${site.id}:cart-api`,
+    url: `${site.baseUrl.replace(/\/$/, '')}/cart.js`,
     validate: async (response) => {
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       const cart = await response.json();
@@ -47,7 +41,7 @@ export const UPTIME_TARGETS = [
       }
     },
   },
-];
+]);
 
 export const LIMITS = {
   bodyBytes: 8_192,
