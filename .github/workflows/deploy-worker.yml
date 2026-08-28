@@ -58,16 +58,6 @@ jobs:
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           workingDirectory: workers/error-monitor
           command: deploy --config wrangler.jsonc
-          secrets: |
-            TELEGRAM_BOT_TOKEN
-            TELEGRAM_CHAT_ID
-            MONITOR_HEARTBEAT_TOKEN
-            MONITOR_HEARTBEAT_TOKEN_NEXT
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN_CURRENT }}
-          MONITOR_HEARTBEAT_TOKEN_NEXT: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
       - name: Deploy Dispatcher
         if: inputs.worker == 'dispatcher'
         uses: cloudflare/wrangler-action@v3
