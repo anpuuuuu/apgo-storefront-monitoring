@@ -1,52 +1,96 @@
-# APGO Monitoring Handoff
+# APGO Central Monitoring Handoff
 
-## 当前设计
+Updated: 2026-08-28 (MYT)
 
-- 分支：`codex/monitoring-v2`。
-- 分支与 `main` 已同步到本文件所述监控实现。
-- Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已部署；`2135fec` 暂停的 Layer 3 接入已修正。
-- Worker `CRON_ENABLED=true`；5 分钟 Layer 1 已实际触发并写入 D1，`/health` 返回 200。
-- Layer 2 V2 为 GA4 广告优先巡检：每天 MYT 09:37 与每次 `main` 更新后运行，自动发现近 3 天付费 Landing Page，并用 Android/iPhone 验证运行时 Promotion、Gift、Cart Offer、Cart 与 Checkout；旧 Layer 2 只保留手动回退。
-- 旧 GitHub Uptime 继续并行到 Cloudflare Cron 满 24 小时，之后才关闭其 schedule。
-- GA4 为 `observe`，从 2026-08-20 起至少观察 14 天；API/Auth/Workflow 故障从第一天正式通知。
+## Current state
 
-## 基础设施
+- Central public repository: `anpuuuuu/apgo-storefront-monitoring` (`1349617089`).
+- Theme repository: `anpuuuuu/apgo-theme` (`1154313539`).
+- Migration source tag: `monitoring-migration-source-fa976c1`.
+- Central `main` is protected: PR required, `test` required, force-push/deletion disabled.
+- Central mode is deliberately safe: `MONITOR_MODE=shadow` and `MONITOR_SCHEDULE_ENABLED=false`.
+- Existing Theme Repo workflows remain the official alert source. Do not disable them yet.
+- No Shopify product, discount, inventory, tracking or customer-facing Theme behavior was changed by this migration.
 
-- Repo：`anpuuuuu/apgo-theme`
-- D1：`apgo-monitoring` / `c75e84af-67df-4761-a559-2b0c1d904989`
-- Worker：`apgo-error-monitor`
-- GA4 Property：`547019474`
-- WIF Provider：repo variable `GCP_WIF_PROVIDER`
-- Service Account：`codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`
-- `MONITOR_HEARTBEAT_TOKEN` 已创建为 GitHub Secret；不要输出或写进文件。
+## Completed
 
-## 剩余人工关卡
+- Monitoring Git history was filtered from the Theme Repo and preserved in the central Repo.
+- Multi-site layout, site catalog generation, exact Theme SHA validation and Theme Contract support are implemented.
+- Layer 2 uses one serial batch runner with fresh Browser Context/evidence per journey.
+- Layer 4 and Self-health use site matrices and site-namespaced state.
+- Existing `apgo-error-monitor` URL and D1 database remain in service.
+- D1 backup was exported before the forward-only namespace migration.
+- `js_errors.site_id` was added and historical rows were backfilled as `apgo-my`; no table/history was dropped.
+- Error Worker supports origin-to-site mapping, namespaced signatures/state/alerts and Current/Next heartbeat token transition.
+- Dispatcher Worker and seven-day delivery-deduplication KV were deployed.
+- Invalid Dispatcher signatures return 401; Layer 3 authenticated self-test and namespaced Layer 1 heartbeat were verified.
+- Unit, contract, Worker dry-run, YAML and GitHub `monitoring-ci` checks pass.
+- GitHub secret scanning and push protection are enabled with no current alerts.
 
-1. ~~移除旧 Uptime schedule~~ ✅ 2026-08-24 已完成（并行 3 天、Worker 每 5 分钟 cron 稳定写入 D1、无漏跑；uptime.yml 保留手动 dispatch 作诊断用）。
-2. 保持 GA4 `observe` 满 14 天（至 ~9/3），审查 `would_alert`、阈值与误报记录后，再由用户决定是否切换为 `armed`。
-3. 上线后手动运行 Daily 与 Post-deploy 各三轮并观察 48 小时；GA4 新广告需先产生可读取流量才会自动进入巡检。
-4. `Missing shadow root`（`assets/critical.js:102` OverflowList）修不修等 Wade 决定：每天 ~25 访客、全在商品页、不挡购买；成因 = 老 iOS 15 不支持声明式 Shadow DOM + 新浏览器上疑似客户端重渲染丢失 shadow root。选项：(a) connectedCallback 防御式降级不 throw（小改）；(b) 深查 morph 重渲染路径正确修复；(c) 静音签名不修。
+## Production resources
 
-## 2026-08-24 变更记录
+- Error Worker: `https://apgo-error-monitor.wadeyeh.workers.dev`
+- Dispatcher: `https://apgo-monitor-dispatcher.wadeyeh.workers.dev`
+- D1: `apgo-monitoring` / `c75e84af-67df-4761-a559-2b0c1d904989`
+- Dispatcher KV: `apgo-monitor-dispatch-deliveries` / `640c1b6bdbd442c18c28ba6c83a63566`
+- GA4 Property: `547019474`
+- GCP project: `helical-canto-505209-j7` (`223821071753`)
+- GA4 service account: `codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com`
 
-- Worker 签名计算前把 message 中的 URL/≥8 位 hex/≥4 位数字归一化（`normalizeSignatureText`，errors.mjs），修复一类错误裂成 45 个签名的碎片化；分类逻辑仍用原文。旧 `js-alert:*` 冷却与 `known_signatures` 旧签名成为无害孤儿，重复告警若出现属一次性重置。
-- codex 8/21-23 已修的真 bug（有回归测试）：`productCardLink` ref 缺失、PDP 加购并发锁、cart 数量更新失败恢复。老浏览器 `#moveItemsToDefaultSlot` SyntaxError 判定为 Shopify 官方 shop-js 问题,已归类 platform 家族降噪。
+## Remaining external setup
 
-## 环境事实（agent 换人时省弯路）
+### GitHub App
 
-- 沙箱连不上 apgo.my（代理 403）、GitHub artifact blob 也被挡 → 实测靠 Actions 跑 + GitHub MCP/`GITHUB_TOKEN` 读日志。
-- Cloudflare MCP 能查/改 D1（静音：`UPDATE known_signatures SET muted=1 WHERE signature='<sig>'`），不能部署 Worker → 部署走 deploy-worker.yml。
-- Shopify MCP 等 Wade 在 claude.ai 重新授权 apgo.my 店（曾连台湾店已吊销）。
-- Wade：非技术、中文、看 Telegram 群「网站检测系统」；改 theme/武装 L4 要他点头。
+Create private App `APGO Storefront Monitor` and install it only on the Theme and central repositories.
 
-## 不可误报原则
+- Permissions: Contents Read, Actions Write, Metadata Read.
+- Event: Push.
+- Webhook: `https://apgo-monitor-dispatcher.wadeyeh.workers.dev/github/webhook`.
+- Central variable: `MONITOR_GITHUB_APP_ID`.
+- Central secrets: `MONITOR_GITHUB_APP_PRIVATE_KEY`, `MONITOR_GITHUB_WEBHOOK_SECRET`.
+- Dispatcher Worker secrets: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, Telegram token/chat ID.
 
-- 缺 Secret/Variable、WIF 401/403/429、GA 查询错误、D1 错误、Heartbeat 没写入均让 Workflow 非零失败。
-- Fixture 下架/售罄/Selector 失效用 `TEST_CONFIG_STALE`。
-- Browser Test 必须阻止 Analytics 且不得提交 Checkout。
-- 不修改 Shopify 商品、库存、折扣或 AIOD 规则。
+The Dispatcher currently has no GitHub App secrets, so real Theme Push dispatch is not active yet.
 
-## 24 小时与 14 天人工关卡
+### Google WIF
 
-- Cloudflare Cron 连续稳定 24 小时不是代码测试能代替的；确认后才关闭旧 Uptime schedule。
-- GA4 observe 连续 14 天后检查 `alert_log` 的 `would_alert`，确认误报率后由用户决定 `armed`。
+Create provider `apgo-storefront-monitoring` restricted to immutable repository ID `1349617089`, grant its principal `roles/iam.workloadIdentityUser` on the existing GA4 reader service account, and set the complete provider resource as `GCP_WIF_PROVIDER`.
+
+The local Google session currently requires interactive reauthentication. Do not create a JSON key. Keep the old Theme provider during Shadow.
+
+### Remaining central secrets
+
+- New least-privilege `CF_API_TOKEN` scoped only to the two Workers, D1 and KV.
+- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (copy from the secure owner record or rotate; existing secret values cannot be read back).
+
+Never copy credentials into this public Repo, logs or artifacts.
+
+## Required validation before Shadow
+
+1. Verify a signed Theme `main` Push dispatches the exact full SHA once and duplicate delivery IDs are ignored.
+2. Manually run Layer 2 Daily three times and Post-deploy three times.
+3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider.
+4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts.
+5. Confirm Browser artifacts contain no Cart token, customer data or credentials.
+
+Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
+
+## Cutover and rollback
+
+After 48 hours of matching central/Theme results:
+
+1. Disable the six Theme monitoring workflows.
+2. Set central `MONITOR_MODE=live`.
+3. Observe another 48 hours for missing/duplicate Push, schedules, alerts and heartbeat.
+4. Remove Theme `monitoring/**` and old workflows only after stability; retain the Layer 3 Theme snippet/layout/cart-error code and a pointer to this Repo.
+5. Revoke the old WIF binding and old Cloudflare/GitHub secrets after the final stability window.
+
+Rollback: re-enable Theme workflows, set central mode back to `shadow`, and deploy the Error Worker commit preceding namespace rollout. Do not reverse or drop D1 data.
+
+## Safety rules
+
+- Unknown Site/Repository ID/SHA/config must fail as `TEST_CONFIG_STALE`; never fall back to another site or latest Theme Head.
+- GA4/WIF/D1/heartbeat failures must exit non-zero; never skip and show green.
+- Browser tests block analytics and must stop before submitting Checkout/payment.
+- No JSON service-account key, long-lived PAT or credential may enter source, D1 or artifacts.
+- Preserve the local D1 backup until cutover and rollback windows are complete.
