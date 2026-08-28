@@ -1,18 +1,15 @@
 name: Storefront browser health v2
 
-# V2 runs beside the legacy Layer 2 schedule for the 48-hour rollout window.
-# The legacy workflow remains the rollback path until that observation passes.
 on:
   schedule:
-    - cron: '7 * * * *'
-    - cron: '37 1 * * *'
+    - cron: "37 1 * * *"
   workflow_dispatch:
     inputs:
       cadence:
         description: Layer 2 journey set
         type: choice
-        options: [hourly, full]
-        default: hourly
+        options: [post-deploy, daily]
+        default: post-deploy
       retry_delay_seconds:
         description: Delay before fresh-session recheck
         type: number
@@ -20,50 +17,109 @@ on:
   push:
     branches: [main]
     paths:
-      - 'assets/**'
-      - 'blocks/**'
-      - 'config/**'
-      - 'layout/**'
-      - 'sections/**'
-      - 'snippets/**'
-      - 'templates/**'
-      - 'monitoring/**'
-      - '.github/workflows/site-health-v2.yml'
+      - "assets/**"
+      - "blocks/**"
+      - "config/**"
+      - "layout/**"
+      - "sections/**"
+      - "snippets/**"
+      - "templates/**"
+      - "monitoring/**"
+      - ".github/workflows/site-health-v2.yml"
 
+# Only the latest storefront commit needs a post-deploy check. Daily runs use
+# a separate lane, so a theme push cannot cancel the required daily heartbeat.
 concurrency:
-  group: storefront-health-v2-${{ github.ref }}
-  cancel-in-progress: false
+  group: storefront-health-v2-${{ github.event_name == 'push' && 'post-deploy' || 'daily' }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     outputs:
-      cadence: ${{ steps.matrix.outputs.cadence }}
+      cadence: ${{ steps.select.outputs.cadence }}
       matrix: ${{ steps.matrix.outputs.matrix }}
+      plan_error: ${{ steps.discover.outputs.error }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Validate fixtures and build Site × Market × Device × Journey matrix
+      - name: Select cadence
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_CADENCE: ${{ inputs.cadence }}
+        run: |
+          cadence=daily
+          if [ "$EVENT_NAME" = push ]; then cadence=post-deploy; fi
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then cadence="${INPUT_CADENCE:-post-deploy}"; fi
+          echo "cadence=$cadence" >> "$GITHUB_OUTPUT"
+      - name: Wait for the pushed Shopify theme to settle
+        if: github.event_name == 'push'
+        run: |
+          for minute in 1 2 3; do
+            echo "Waiting for storefront deployment ($minute/3)..."
+            sleep 60
+          done
+      - name: Require GA4 discovery configuration
+        env:
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          test -n "$GA4_PROPERTY_ID" || { echo "::error::GA4_PROPERTY_ID is required"; exit 1; }
+          test -n "$GCP_WIF_PROVIDER" || { echo "::error::GCP_WIF_PROVIDER is required"; exit 1; }
+      - name: Authenticate GA4 discovery with Google OIDC/WIF
+        id: google-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: helical-canto-505209-j7
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
+          create_credentials_file: false
+      - name: Discover paid advertising landing pages from GA4
+        id: discover
+        working-directory: monitoring
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+        shell: bash
+        run: |
+          set +e
+          output="$(node scripts/discover-ad-targets.mjs sites.json ad-targets.json 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          if [ "$status" -ne 0 ]; then
+            detail="$(echo "$output" | tr '\r\n' ' ' | cut -c1-500)"
+            echo "error=$detail" >> "$GITHUB_OUTPUT"
+            exit "$status"
+          fi
+      - name: Validate runtime contract and build dynamic journey matrix
         id: matrix
         working-directory: monitoring
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
-          INPUT_CADENCE: ${{ inputs.cadence }}
+          CADENCE: ${{ steps.select.outputs.cadence }}
         shell: bash
         run: |
-          CADENCE=hourly
-          if [ "$SCHEDULE" = '37 1 * * *' ]; then CADENCE=full; fi
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then CADENCE="${INPUT_CADENCE:-hourly}"; fi
           node scripts/layer2-config.mjs validate
-          matrix="$(node scripts/layer2-config.mjs matrix sites.json "$CADENCE")"
-          echo "cadence=$CADENCE" >> "$GITHUB_OUTPUT"
+          matrix="$(node scripts/layer2-config.mjs matrix sites.json "$CADENCE" ad-targets.json)"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+      - name: Upload discovered advertising targets
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer2-ad-targets-${{ github.run_id }}
+          path: monitoring/ad-targets.json
+          retention-days: 14
+          if-no-files-found: error
 
   browser:
     needs: plan
@@ -89,9 +145,8 @@ jobs:
       - name: Install browser engine
         run: timeout 360 npx playwright install --with-deps ${{ matrix.browser }} || npx playwright install ${{ matrix.browser }}
       - name: Run journey and one explicit fresh-session recheck when needed
-        id: journey
         env:
-          MONITOR_V2: '1'
+          MONITOR_V2: "1"
           MONITOR_JOB_ID: ${{ matrix.id }}
           MONITOR_SITE: ${{ matrix.site }}
           MONITOR_MARKET: ${{ matrix.market }}
@@ -101,10 +156,16 @@ jobs:
           MONITOR_FLOW: ${{ matrix.flow }}
           MONITOR_RULE: ${{ matrix.rule }}
           MONITOR_SPEC: ${{ matrix.spec }}
+          MONITOR_LANDING_PATH: ${{ matrix.landingPath }}
+          MONITOR_CHANNEL: ${{ matrix.channel }}
+          MONITOR_AD_SESSIONS: ${{ matrix.sessions }}
+          MONITOR_AD_ADD_TO_CARTS: ${{ matrix.addToCarts }}
+          MONITOR_AD_CHECKOUTS: ${{ matrix.checkouts }}
+          MONITOR_COMMIT: ${{ github.sha }}
           MONITOR_RETRY_DELAY_SECONDS: ${{ inputs.retry_delay_seconds }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/run-layer2-journey.mjs
-      - name: Upload failed/transient evidence and journey heartbeat result
+      - name: Upload evidence and journey result
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -129,32 +190,35 @@ jobs:
         with:
           pattern: layer2-v2-*-${{ github.run_id }}
           path: layer2-results
-      - name: Aggregate results and require every planned journey heartbeat
+      - name: Aggregate results and require every planned journey result
         if: always()
         id: aggregate
         env:
           MONITOR_PLAN_RESULT: ${{ needs.plan.result }}
+          MONITOR_PLAN_ERROR: ${{ needs.plan.outputs.plan_error }}
           MONITOR_RESULTS_ROOT: layer2-results
           MONITOR_EXPECTED_MATRIX: ${{ needs.plan.outputs.matrix }}
           MONITOR_AGGREGATE_FILE: layer2-aggregate.json
           MONITOR_HEARTBEAT_DETAIL_FILE: layer2-heartbeat-detail.json
           MONITOR_CADENCE: ${{ needs.plan.outputs.cadence }}
         run: node monitoring/scripts/aggregate-layer2-results.mjs
-      - name: Require heartbeat configuration
+      - name: Require daily heartbeat configuration
+        if: needs.plan.outputs.cadence == 'daily'
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
         run: |
           test -n "$MONITOR_WORKER_URL" || { echo "::error::MONITOR_WORKER_URL is required"; exit 1; }
           test -n "$MONITOR_HEARTBEAT_TOKEN" || { echo "::error::MONITOR_HEARTBEAT_TOKEN is required"; exit 1; }
-      - name: Write aggregate Layer 2 heartbeat
+      - name: Write the daily Layer 2 heartbeat only
+        if: needs.plan.outputs.cadence == 'daily'
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
           MONITOR_LAYER: layer2
           MONITOR_STATUS: ${{ steps.aggregate.outputs.status }}
-          MONITOR_SOURCE: playwright-v2-${{ needs.plan.outputs.cadence }}
-          MONITOR_SUITE: ${{ needs.plan.outputs.cadence }}
+          MONITOR_SOURCE: playwright-v2-daily
+          MONITOR_SUITE: daily
           MONITOR_DETAIL_JSON_FILE: layer2-heartbeat-detail.json
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node monitoring/scripts/write-heartbeat.mjs

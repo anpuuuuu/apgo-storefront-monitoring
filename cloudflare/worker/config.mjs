@@ -48,7 +48,14 @@ export const LIMITS = {
 
 export const HEARTBEAT_LIMITS = {
   layer1: 15 * 60_000,
-  layer2: 2 * 60 * 60_000,
+  // Layer 2 now runs once daily. Post-deploy checks deliberately do not
+  // refresh this heartbeat, so a successful theme push cannot hide a missed
+  // daily commerce run.
+  layer2: 30 * 60 * 60_000,
   layer3: 26 * 60 * 60_000,
   layer4: 90 * 60_000,
+};
+
+export const HEARTBEAT_CRITICAL_LIMITS = {
+  layer2: 36 * 60 * 60_000,
 };

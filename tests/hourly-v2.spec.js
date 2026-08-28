@@ -27,7 +27,7 @@ for (const site of sites) {
       await clearCart(monitorPage);
     });
   } else if (journey === 'mobile-main') {
-    test(`[v2][${site.id}][${market.id}] Android primary purchase path`, async ({ monitorPage }) => {
+    test(`[v2][${site.id}][${market.id}] Mobile primary purchase path`, async ({ monitorPage }) => {
       await prepareMarket(monitorPage, site, market);
       await assertHomepage(monitorPage, site);
       await addNormalV3(monitorPage, site);

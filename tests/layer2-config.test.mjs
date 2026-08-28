@@ -15,27 +15,28 @@ test('current Layer 2 configuration is valid', () => {
   assert.doesNotThrow(() => validateLayer2Config(cloneConfig()));
 });
 
-test('hourly matrix contains Android main and desktop smoke only', () => {
-  const matrix = buildLayer2Matrix(cloneConfig(), 'hourly');
-  assert.deepEqual(matrix.include.map((entry) => entry.journey).sort(), ['desktop-smoke', 'mobile-main']);
+test('dynamic Layer 2 is not blocked by an obsolete legacy product fixture', () => {
+  const config = cloneConfig();
+  delete config.sites[0].fixtures.laundryPdp;
+  assert.doesNotThrow(() => validateLayer2Config(config));
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*laundryPdp/);
 });
 
-test('full matrix includes MY/SG, core devices and social WebView profiles', () => {
-  const matrix = buildLayer2Matrix(cloneConfig(), 'full');
-  assert.deepEqual([...new Set(matrix.include.map((entry) => entry.market))].sort(), ['MY', 'SG']);
-  assert.deepEqual([...new Set(matrix.include.map((entry) => entry.device))].sort(), [
-    'android-chromium',
-    'desktop-chromium',
-    'facebook-android',
-    'instagram-iphone',
-    'iphone-webkit',
-    'whatsapp-android',
-  ]);
-  assert.equal(matrix.include.filter((entry) => entry.journey === 'atomic-social-add').length, 3);
-  assert(matrix.include.some((entry) => entry.journey === 'golden-bull'));
-  assert(matrix.include.some((entry) => entry.journey === 'cart-offers-tab_5'));
-  assert(matrix.include.some((entry) => entry.journey === 'cart-offers-safeguards'));
-  assert(matrix.include.filter((entry) => entry.flow === 'cart-offers').every((entry) => entry.rule));
+test('post-deploy matrix falls back to Android and iPhone when GA4 has no paid pages', () => {
+  const matrix = buildLayer2Matrix(cloneConfig(), 'post-deploy', []);
+  assert.deepEqual(matrix.include.map((entry) => entry.device).sort(), ['android-chromium', 'iphone-webkit']);
+  assert(matrix.include.every((entry) => entry.journey === 'mobile-main'));
+});
+
+test('daily matrix sends paid social pages to both social mobile profiles and keeps desktop smoke', () => {
+  const matrix = buildLayer2Matrix(cloneConfig(), 'daily', [{
+    site: 'apgo-my', market: 'MY', landingPath: '/products/demo', channel: 'Paid Social',
+    sessions: 8, addToCarts: 2, checkouts: 1,
+  }]);
+  const adJobs = matrix.include.filter((entry) => entry.flow === 'ad-landing');
+  assert.deepEqual(adJobs.map((entry) => entry.device).sort(), ['facebook-android', 'instagram-iphone']);
+  assert.equal(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').length, 2);
+  assert(adJobs.every((entry) => entry.landingPath === '/products/demo'));
 });
 
 test('duplicate promotion ids fail as TEST_CONFIG_STALE', () => {
@@ -47,67 +48,67 @@ test('duplicate promotion ids fail as TEST_CONFIG_STALE', () => {
 test('missing configured variant fails as TEST_CONFIG_STALE', () => {
   const config = cloneConfig();
   delete config.sites[0].fixtures.laundryPdp.variants.Lavender;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*Lavender/);
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*Lavender/);
 });
 
 test('missing storefront scent option value fails as TEST_CONFIG_STALE', () => {
   const config = cloneConfig();
   delete config.sites[0].fixtures.laundryPdp.optionValues.Lavender;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*optionValues\.Lavender/);
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*optionValues\.Lavender/);
 });
 
 test('complex detergent promotion requires expected market tiers', () => {
   const config = cloneConfig();
   config.sites[0].markets[0].detergentPromotionTiers = [];
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*expected tiers/);
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*expected tiers/);
 });
 
 test('complex detergent promotion requires an expected market amount', () => {
   const config = cloneConfig();
   delete config.sites[0].markets[1].detergentPaidUnitPriceMinor;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*paid unit price/);
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*paid unit price/);
 });
 
 test('normal PDP fixture requires a stable variant id', () => {
   const config = cloneConfig();
   delete config.sites[0].fixtures.normalV3.expectedVariantId;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*normalV3.*VariantId/);
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*normalV3.*VariantId/);
 });
 
 test('Glaze fixture requires market-specific expected offer prices', () => {
   const config = cloneConfig();
   delete config.sites[0].fixtures.glaze.firstOfferPriceMinor.SG;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*firstOfferPriceMinor.SG/);
+  assert.throws(() => validateLayer2Config(config, { legacy: true }), /TEST_CONFIG_STALE.*firstOfferPriceMinor.SG/);
 });
 
-test('an enabled theme tab missing from the coverage contract is stale', () => {
+test('runtime validation no longer requires a mirrored cart tab list', () => {
   const config = cloneConfig();
   config.sites[0].themeContract.cartOffers.tabs.shift();
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*enabled cart-offer tabs/);
+  assert.doesNotThrow(() => validateLayer2Config(config));
 });
 
-test('an enabled theme offer missing from the coverage contract is stale', () => {
+test('runtime validation no longer requires a mirrored cart offer list', () => {
   const config = cloneConfig();
   config.sites[0].themeContract.cartOffers.offers.shift();
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*enabled cart-offer items/);
+  assert.doesNotThrow(() => validateLayer2Config(config));
 });
 
-test('cart offer business-rule drift is stale even when the block still exists', () => {
+test('runtime validation does not hard-code an offer quantity rule', () => {
   const config = cloneConfig();
   config.sites[0].themeContract.cartOffers.offers[0].maxQuantity = 0;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*cart offer glaze_paint/);
+  assert.doesNotThrow(() => validateLayer2Config(config));
 });
 
-test('an enabled Golden Bull block missing from the coverage contract is stale', () => {
+test('runtime validation no longer requires a mirrored promotion block list', () => {
   const config = cloneConfig();
   config.sites[0].themeContract.goldenBullBlocks.pop();
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*enabled Golden Bull blocks/);
+  assert.doesNotThrow(() => validateLayer2Config(config));
 });
 
-test('Golden Bull banner and counter drift is stale even when the block remains enabled', () => {
+test('runtime validation does not hard-code Golden Bull banner state', () => {
   const config = cloneConfig();
   const block = config.sites[0].themeContract.goldenBullBlocks.find((entry) => entry.blockId === 'promo_banner_aurora');
   block.banner = 'shopify://shop_images/wrong-banner.png';
   block.counterEnabled = true;
-  assert.throws(() => validateLayer2Config(config), /TEST_CONFIG_STALE.*promo_banner_aurora behaviour/);
+  assert.doesNotThrow(() => validateLayer2Config(config));
 });

@@ -16,7 +16,7 @@ const expectedJob = {
   journey: 'mobile-main',
 };
 
-function runAggregate(result, { planResult = 'success', expected = [expectedJob], cadence = 'hourly' } = {}) {
+function runAggregate(result, { planResult = 'success', planError = '', expected = [expectedJob], cadence = 'post-deploy' } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'apgo-layer2-aggregate-'));
   const root = path.join(temp, 'results');
   fs.mkdirSync(root, { recursive: true });
@@ -33,6 +33,7 @@ function runAggregate(result, { planResult = 'success', expected = [expectedJob]
       ...process.env,
       MONITOR_RESULTS_ROOT: root,
       MONITOR_PLAN_RESULT: planResult,
+      MONITOR_PLAN_ERROR: planError,
       MONITOR_CADENCE: cadence,
       MONITOR_EXPECTED_MATRIX: JSON.stringify({ include: expected }),
       MONITOR_AGGREGATE_FILE: path.join(temp, 'aggregate.json'),
@@ -78,7 +79,7 @@ test('two access challenges use a distinct synthetic-browser alert', () => {
   assert.match(output, /alert_title=APGO Layer 2 synthetic browser was blocked/);
   assert.match(output, /notify=false/);
 
-  const daily = runAggregate(result, { cadence: 'full' });
+  const daily = runAggregate(result, { cadence: 'daily' });
   assert.equal(daily.aggregate.notify, true);
   assert.match(daily.output, /notify=true/);
 });
@@ -114,6 +115,15 @@ test('failed or empty planning can never create a healthy heartbeat', () => {
   const emptyPlan = runAggregate(null, { expected: [] });
   assert.equal(emptyPlan.aggregate.status, 'failed');
   assert.equal(emptyPlan.aggregate.planningFailed, true);
+});
+
+test('GA4 discovery failures keep their own alert classification', () => {
+  const failed = runAggregate(null, {
+    planResult: 'failure',
+    planError: 'AD_DISCOVERY_FAILED: GA4 runReport HTTP 403',
+    expected: [],
+  });
+  assert.match(failed.output, /alert_title=APGO Layer 2 GA4 advertising discovery failed/);
 });
 
 test('mixed journey failures report final classifications and both attempts', () => {

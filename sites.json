@@ -17,47 +17,68 @@
     ],
     "layer2": {
       "retryDelayMs": 60000,
+      "adDiscovery": {
+        "enabled": true,
+        "lookbackDays": 3,
+        "maxLandingPages": 10,
+        "minimumSessions": 1,
+        "paidChannels": [
+          "Paid Social",
+          "Paid Search",
+          "Cross-network",
+          "Display",
+          "Paid Shopping",
+          "Paid Video",
+          "Audio"
+        ],
+        "countryMarketMap": {
+          "Malaysia": "MY",
+          "Singapore": "SG"
+        },
+        "paidSocialDevices": ["facebook-android", "instagram-iphone"],
+        "otherPaidDevices": ["android-chromium", "iphone-webkit"]
+      },
       "devices": [
         {
           "id": "desktop-chromium",
           "browser": "chromium",
           "profile": "desktop",
-          "hourly": true,
+          "postDeploy": false,
           "daily": true
         },
         {
           "id": "android-chromium",
           "browser": "chromium",
           "profile": "pixel-7",
-          "hourly": true,
+          "postDeploy": true,
           "daily": true
         },
         {
           "id": "iphone-webkit",
           "browser": "webkit",
           "profile": "iphone-14",
-          "hourly": false,
+          "postDeploy": true,
           "daily": true
         },
         {
           "id": "facebook-android",
           "browser": "chromium",
           "profile": "facebook-in-app",
-          "hourly": false,
-          "daily": false
+          "postDeploy": true,
+          "daily": true
         },
         {
           "id": "instagram-iphone",
           "browser": "webkit",
           "profile": "instagram-in-app",
-          "hourly": false,
-          "daily": false
+          "postDeploy": true,
+          "daily": true
         },
         {
           "id": "whatsapp-android",
           "browser": "chromium",
           "profile": "whatsapp-in-app",
-          "hourly": false,
+          "postDeploy": false,
           "daily": false
         }
       ]

@@ -6,7 +6,7 @@
 - 分支与 `main` 已同步到本文件所述监控实现。
 - Worker/D1、Layer 2、Layer 3、Layer 4、Heartbeat 与 Workflows 已部署；`2135fec` 暂停的 Layer 3 接入已修正。
 - Worker `CRON_ENABLED=true`；5 分钟 Layer 1 已实际触发并写入 D1，`/health` 返回 200。
-- Layer 2 V2 已加入 Theme Coverage Contract、5 个 Cart Offer 全覆盖、Golden Bull 精确市场清单、六香味 PDP、Gift/批量删除与精确 Checkout 断言。V2 Schedule 为每小时核心检查和每天 MYT 09:37 全量检查；旧 Layer 2 保留 48 小时并行观察后再关闭。
+- Layer 2 V2 为 GA4 广告优先巡检：每天 MYT 09:37 与每次 `main` 更新后运行，自动发现近 3 天付费 Landing Page，并用 Android/iPhone 验证运行时 Promotion、Gift、Cart Offer、Cart 与 Checkout；旧 Layer 2 只保留手动回退。
 - 旧 GitHub Uptime 继续并行到 Cloudflare Cron 满 24 小时，之后才关闭其 schedule。
 - GA4 为 `observe`，从 2026-08-20 起至少观察 14 天；API/Auth/Workflow 故障从第一天正式通知。
 
@@ -24,7 +24,7 @@
 
 1. ~~移除旧 Uptime schedule~~ ✅ 2026-08-24 已完成（并行 3 天、Worker 每 5 分钟 cron 稳定写入 D1、无漏跑；uptime.yml 保留手动 dispatch 作诊断用）。
 2. 保持 GA4 `observe` 满 14 天（至 ~9/3），审查 `would_alert`、阈值与误报记录后，再由用户决定是否切换为 `armed`。
-3. 商品、Variant、价格、赠品或 AIOD 规则变更时，先更新 `sites.json` Fixture，并手动跑完整 Browser suite。
+3. 上线后手动运行 Daily 与 Post-deploy 各三轮并观察 48 小时；GA4 新广告需先产生可读取流量才会自动进入巡检。
 4. `Missing shadow root`（`assets/critical.js:102` OverflowList）修不修等 Wade 决定：每天 ~25 访客、全在商品页、不挡购买；成因 = 老 iOS 15 不支持声明式 Shadow DOM + 新浏览器上疑似客户端重渲染丢失 shadow root。选项：(a) connectedCallback 防御式降级不 throw（小改）；(b) 深查 morph 重渲染路径正确修复；(c) 静音签名不修。
 
 ## 2026-08-24 变更记录

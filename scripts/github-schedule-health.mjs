@@ -6,7 +6,8 @@ const repository = process.env.GITHUB_REPOSITORY || '';
 if (!token || !repository) throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY are required');
 
 const checks = [
-  { workflow: 'site-health-v2.yml', maxAgeMinutes: 130, events: ['schedule', 'workflow_dispatch', 'push'], inputs: { cadence: 'hourly', retry_delay_seconds: '60' } },
+  // Post-deploy successes must not hide a missed daily commerce run.
+  { workflow: 'site-health-v2.yml', maxAgeMinutes: 30 * 60, events: ['schedule', 'workflow_dispatch'], inputs: { cadence: 'daily', retry_delay_seconds: '60' } },
   { workflow: 'monitor-alerts.yml', maxAgeMinutes: 100, events: ['schedule', 'workflow_dispatch'], inputs: { mode: 'realtime', simulate_zero: 'false' } },
 ];
 const now = Date.now();

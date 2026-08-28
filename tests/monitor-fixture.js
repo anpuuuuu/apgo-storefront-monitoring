@@ -92,12 +92,20 @@ async function cartJson(page) {
 }
 
 function cartSignature(cart) {
+  // Discount/gift apps can re-key a Shopify cart line while recalculating it.
+  // That internal key is not customer-visible and must not keep an otherwise
+  // identical cart "unstable" forever.
   return JSON.stringify((cart.items || []).map((item) => ({
-    key: item.key,
+    variantId: item.variant_id,
+    productId: item.product_id,
     quantity: item.quantity,
     finalLinePrice: item.final_line_price,
     properties: item.properties || {},
-  })));
+  })).sort((a, b) => (
+    Number(a.variantId) - Number(b.variantId)
+    || Number(a.finalLinePrice) - Number(b.finalLinePrice)
+    || JSON.stringify(a.properties).localeCompare(JSON.stringify(b.properties))
+  )));
 }
 
 async function waitForCartStable(page, { timeoutMs = 20_000, intervalMs = 1_500, stableSamples = 2 } = {}) {

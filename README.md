@@ -5,7 +5,7 @@
 | Layer | 负责内容 | 频率 | 执行位置 |
 |---|---|---|---|
 | 1 | Homepage + `/cart.js` 存活、速度、恢复 | Cloudflare 每 5 分钟 | `cloudflare/worker/` |
-| 2 | MY/SG 真实浏览器购物流程 | Android 主巡检每小时；完整每日两次 | `site-health-v2.yml`（分阶段上线） |
+| 2 | 广告 Landing Page 与真实浏览器购物流程 | 每日 09:37 MYT；每次 Theme 更新后 | `site-health-v2.yml` |
 | 3 | 第一方 JS、资源、Cart API 错误 | 实时收集；Worker 每 5 分钟聚合 | Theme snippet + Worker |
 | 4 | GA4 实时事件与每日完整漏斗 | 每 30 分钟；每日 12:17/14:47 MYT | `monitor-alerts.yml` |
 
@@ -20,15 +20,15 @@
 
 ## Layer 2
 
-配置全部集中在 `sites.json`，商品、Variant、市场金额或促销预期过期时抛出 `TEST_CONFIG_STALE`，不会伪装成网站故障。矩阵由 `scripts/layer2-config.mjs` 从配置动态产生，不再写死 APGO Job。
+配置集中在 `sites.json`。每天通过现有 WIF 只读 GA4 最近 3 天的付费 Landing Page，去除 UTM 后合并并优先选择有 ATC/Checkout 的页面，最多检查 10 个；GA4/Auth 失败明确报告 `AD_DISCOVERY_FAILED`。
 
-- 每小时/Push：Pixel 7 等效 Android 执行 Homepage → 活动入口 → Gift Picker/普通 V3/洗衣精 PDP → Cart → Checkout；Desktop Chromium 执行基础 Smoke。
-- 每天 MYT 09:37 完整运行：Android 验证 Detergent、全部 5 个 Cart Offer Tab、Gift Picker、批量删除和 Golden Bull；Desktop Chromium、Android Chromium 与 iPhone WebKit 分别验证 MY/SG 核心 Cart/Checkout。
-- `sites.json.themeContract` 与 Theme JSON 严格比对所有启用 Tab、25 个 Offer 和 Golden Bull Block；新增、删除、启用或修改而未同步监控预期时报告 `TEST_CONFIG_STALE`。
-- Cart Offer 每个 Tab 使用独立 Matrix Job，并以最多 3 个商品的全新 Browser Context/Cart Token 分片；逐项验证 Trigger、Variant、市场价、实际结算、限购/不限量、`ADD`/`SELECT OPTIONS` 和 Trigger 失效。
-- Golden Bull 按 MY/SG 精确 Block 清单验证，而非只抽第一个；所有 Banner/CTA 做通用检查，每个普通 Promo 的 Add 与 Buy Now 都执行。
+- 每天 MYT 09:37：Paid Social 使用 Facebook Android 与 Instagram iPhone WebView；其他付费渠道使用 Pixel 7 与 iPhone Safari；Desktop 每个市场只跑基础 Smoke。
+- 每次 `main` Theme 更新后等待 3 分钟，再对当前广告页面执行 Android＋iPhone Add → Cart → Checkout；连续 Push 只保留最新 Commit。
+- 没有付费 Landing Page 时仍执行 Android＋iPhone 核心购买流程，不会产生空的绿色结果。
+- Theme Contract 改为结构校验：确认 Tab/Offer/Promotion 字段和引用有效，但不再复制保存每个后台 Block 的固定预期。
+- 广告 Journey 在运行时发现页面上的 Promotion、Gift Picker、Cart Offer 和限购状态，验证选项不会被重新渲染清空，并逐项比对 Cart Snapshot 与 Checkout。
 - 第一次失败保存证据，等待 60 秒后以全新 Browser Context 复测；第二次成功记为 `transient/flaky` 且不发正式告警，两次失败才告警。Cloudflare 持续挑战与 Fixture 过期有独立分类。
-- 每个矩阵 Job 独立 Runner 且 `max-parallel=1`，避免同时制造大量 Cart API 请求。全部预期 Journey 都返回结果后才写包含 Site/Market/Device/Journey 摘要的 Layer 2 Heartbeat。
+- 每个矩阵 Job 独立 Runner 且 `max-parallel=1`，避免同时制造大量 Cart API 请求。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
 - Shopify `429` 优先尊重 `Retry-After`，否则使用 15/45/90 秒退避；持续 429 明确报告为 `MONITOR_RATE_LIMIT`，不归类为商品配置失效，也不自动重跑整套真实写入。
 - 失败上传 Screenshot、Trace、Console、Network 和最终 Cart JSON；关闭 Video，避免单次失败产生数百 MB 无效文件。
@@ -45,7 +45,7 @@ npm run validate:layer2
 npm run test:layer2-config
 ```
 
-V2 已配置每小时第 7 分钟的核心巡检与每天 MYT 09:37 的完整巡检。上线后与旧 Layer 2 Schedule 并行 48 小时；确认无误报、限流和 Heartbeat 缺失后，才关闭旧 Schedule，旧 Workflow 保留手动回退入口。
+V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 保留手动回退入口，不设 Schedule。
 
 ## Layer 3
 
@@ -87,7 +87,7 @@ V2 已配置每小时第 7 分钟的核心巡检与每天 MYT 09:37 的完整巡
 | Layer | Stale |
 |---|---:|
 | 1 | 15 分钟 |
-| 2 | 2 小时 |
+| 2 | 30 小时 Warning；36 小时 Critical |
 | 3 | 26 小时 |
 | 4 | 90 分钟 |
 

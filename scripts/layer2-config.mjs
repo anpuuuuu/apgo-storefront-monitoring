@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -50,12 +51,6 @@ function loadThemeJson(relativePath, label) {
   }
 }
 
-function equalJson(actual, expected, label) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Layer2ConfigError(`${label} drifted (theme=${JSON.stringify(actual)}, monitor=${JSON.stringify(expected)})`);
-  }
-}
-
 function sectionByType(template, type, label) {
   const matches = Object.entries(template.sections || {}).filter(([, section]) => section.type === type);
   if (matches.length !== 1) throw new Layer2ConfigError(`${label} needs exactly one ${type} section`);
@@ -88,131 +83,51 @@ function validateThemeContract(site) {
 
   const cartTemplate = loadThemeJson(contract.cartTemplate, `${site.id}.themeContract.cartTemplate`);
   const cartSection = sectionByType(cartTemplate, 'cart-offers-tabs', `${site.id} cart template`);
-  const actualTabs = Object.entries(cartSection.blocks || {})
+  const tabs = Object.entries(cartSection.blocks || {})
     .filter(([, block]) => block.type === 'tab' && block.settings?.enabled && !block.disabled)
-    .map(([blockId, block]) => ({ blockId, block }));
-  const actualOffers = Object.entries(cartSection.blocks || {})
+    .map(([blockId, block]) => ({ blockId, settings: block.settings || {} }));
+  const offers = Object.entries(cartSection.blocks || {})
     .filter(([, block]) => block.type === 'offer_item' && !block.disabled)
-    .map(([blockId, block]) => ({ blockId, block }));
-  const expectedTabs = contract.cartOffers?.tabs || [];
-  const expectedOffers = contract.cartOffers?.offers || [];
-  unique(expectedTabs, `${site.id} cart-offer tab`, (entry) => entry.blockId);
-  unique(expectedOffers, `${site.id} cart-offer item`, (entry) => entry.blockId);
-  equalJson(actualTabs.map((entry) => entry.blockId), expectedTabs.map((entry) => entry.blockId), `${site.id} enabled cart-offer tabs and order`);
-  equalJson(actualOffers.map((entry) => entry.blockId), expectedOffers.map((entry) => entry.blockId), `${site.id} enabled cart-offer items and order`);
-
-  for (const expected of expectedTabs) {
-    const actual = actualTabs.find((entry) => entry.blockId === expected.blockId)?.block?.settings;
-    if (!actual) throw new Layer2ConfigError(`${site.id} cart tab ${expected.blockId} is not enabled`);
-    equalJson({
-      slot: actual.slot,
-      label: actual.label,
-      audience: actual.audience,
-      triggerProducts: actual.trigger_products || [],
-      triggerMinQuantity: Number(actual.trigger_min_quantity || 1),
-    }, {
-      slot: expected.slot,
-      label: expected.label,
-      audience: expected.audience,
-      triggerProducts: expected.triggerProducts || [],
-      triggerMinQuantity: Number(expected.triggerMinQuantity || 1),
-    }, `${site.id} cart tab ${expected.blockId}`);
+    .map(([blockId, block]) => ({ blockId, settings: block.settings || {} }));
+  unique(tabs, `${site.id} enabled cart tab`, (entry) => entry.blockId);
+  unique(offers, `${site.id} enabled cart offer`, (entry) => entry.blockId);
+  unique(tabs, `${site.id} enabled cart tab slot`, (entry) => entry.settings.slot);
+  const slots = new Set(tabs.map((entry) => entry.settings.slot));
+  for (const tab of tabs) {
+    required(tab.settings.slot, `${site.id} cart tab ${tab.blockId}.slot`);
+    required(tab.settings.label, `${site.id} cart tab ${tab.blockId}.label`);
+    if (tab.settings.audience === 'trigger' && !(tab.settings.trigger_products || []).length) {
+      throw new Layer2ConfigError(`${site.id} cart tab ${tab.blockId} is trigger-based without trigger products`);
+    }
   }
-
-  const knownSlots = new Set(expectedTabs.map((entry) => entry.slot));
-  for (const expected of expectedOffers) {
-    if (!knownSlots.has(expected.tabSlot)) throw new Layer2ConfigError(`${site.id} offer ${expected.blockId} references unknown tab slot ${expected.tabSlot}`);
-    const actual = actualOffers.find((entry) => entry.blockId === expected.blockId)?.block?.settings;
-    if (!actual) throw new Layer2ConfigError(`${site.id} cart offer ${expected.blockId} is not enabled`);
-    equalJson({
-      tabSlot: actual.tab_slot,
-      product: actual.product || '',
-      variantId: String(actual.variant_id || ''),
-      priceMode: actual.price_mode,
-      promoPriceMy: actual.promo_price_my || '',
-      promoPriceSg: actual.promo_price_sg || '',
-      maxQuantity: Number(actual.max_quantity || 0),
-    }, {
-      tabSlot: expected.tabSlot,
-      product: expected.product || '',
-      variantId: String(expected.variantId || ''),
-      priceMode: expected.priceMode,
-      promoPriceMy: expected.promoPriceMy || '',
-      promoPriceSg: expected.promoPriceSg || '',
-      maxQuantity: Number(expected.maxQuantity || 0),
-    }, `${site.id} cart offer ${expected.blockId}`);
+  for (const offer of offers) {
+    required(offer.settings.tab_slot, `${site.id} cart offer ${offer.blockId}.tab_slot`);
+    if (!slots.has(offer.settings.tab_slot)) {
+      throw new Layer2ConfigError(`${site.id} cart offer ${offer.blockId} references missing tab ${offer.settings.tab_slot}`);
+    }
+    required(offer.settings.product, `${site.id} cart offer ${offer.blockId}.product`);
+    if (!['actual', 'promo'].includes(offer.settings.price_mode)) {
+      throw new Layer2ConfigError(`${site.id} cart offer ${offer.blockId} has invalid price mode`);
+    }
   }
 
   const eventTemplate = loadThemeJson(contract.goldenBullTemplate, `${site.id}.themeContract.goldenBullTemplate`);
   const eventSection = sectionByType(eventTemplate, 'apgo-event-collection-grid', `${site.id} Golden Bull template`);
-  const enabledBlocks = Object.entries(eventSection.blocks || {})
+  const blocks = Object.entries(eventSection.blocks || {})
     .filter(([, block]) => !block.disabled)
     .map(([blockId, block]) => ({ blockId, block }));
-  const expectedBlocks = contract.goldenBullBlocks || [];
-  unique(expectedBlocks, `${site.id} Golden Bull block`, (entry) => entry.blockId);
-  equalJson(enabledBlocks.map((entry) => entry.blockId), expectedBlocks.map((entry) => entry.blockId), `${site.id} enabled Golden Bull blocks and order`);
-  for (const expected of expectedBlocks) {
-    const actual = enabledBlocks.find((entry) => entry.blockId === expected.blockId)?.block;
-    if (!actual) throw new Layer2ConfigError(`${site.id} Golden Bull block ${expected.blockId} is not enabled`);
-    const settings = actual.settings || {};
-    equalJson(actual.type, expected.type, `${site.id} Golden Bull block ${expected.blockId} type`);
-    equalJson(settings.market_visibility || 'both', expected.marketVisibility || 'both', `${site.id} Golden Bull block ${expected.blockId} market`);
-    equalJson(expectedGoldenBullMarkets(actual), expected.renderMarkets || [], `${site.id} Golden Bull block ${expected.blockId} rendered markets`);
-    if (actual.type === 'promo_banner') {
-      equalJson({
-        ctaMode: settings.cta_mode,
-        singleCtaLabel: settings.single_cta_label || '',
-        banner: settings.banner || '',
-        bannerSg: settings.banner_sg || '',
-        product: settings.product || '',
-        variantId: String(settings.variant_id || ''),
-        productSg: settings.product_sg || '',
-        variantIdSg: String(settings.variant_id_sg || ''),
-        giftEnabled: Boolean(settings.gift_enabled),
-        giftPool: settings.gift_pool || [],
-        giftCount: Number(settings.gift_count || 0),
-        counterEnabled: Boolean(settings.show_counter),
-        counterMilestoneTotal: String(settings.counter_milestone_total || ''),
-        counterReleaseTotal: String(settings.counter_release_total || ''),
-        counterManualDeduction: String(settings.counter_manual_deduction || ''),
-        counterFlowBaseline: String(settings.counter_flow_baseline || ''),
-      }, {
-        ctaMode: expected.ctaMode,
-        singleCtaLabel: expected.singleCtaLabel || '',
-        banner: expected.banner || '',
-        bannerSg: expected.bannerSg || '',
-        product: expected.product || '',
-        variantId: String(expected.variantId || ''),
-        productSg: expected.productSg || '',
-        variantIdSg: String(expected.variantIdSg || ''),
-        giftEnabled: Boolean(expected.giftEnabled),
-        giftPool: expected.giftPool || [],
-        giftCount: Number(expected.giftCount || 0),
-        counterEnabled: Boolean(expected.counterEnabled),
-        counterMilestoneTotal: String(expected.counterMilestoneTotal || ''),
-        counterReleaseTotal: String(expected.counterReleaseTotal || ''),
-        counterManualDeduction: String(expected.counterManualDeduction || ''),
-        counterFlowBaseline: String(expected.counterFlowBaseline || ''),
-      }, `${site.id} Golden Bull block ${expected.blockId} behaviour`);
+  unique(blocks, `${site.id} enabled Golden Bull block`, (entry) => entry.blockId);
+  for (const { blockId, block } of blocks) {
+    const settings = block.settings || {};
+    if (!['promo_banner', 'product_carousel', 'featured_stage'].includes(block.type)) {
+      throw new Layer2ConfigError(`${site.id} Golden Bull block ${blockId} has unsupported type ${block.type}`);
     }
-    if (actual.type === 'product_carousel') {
-      equalJson({
-        banner: settings.banner || '',
-        bannerSg: settings.banner_sg || '',
-        products: settings.products || [],
-        variantIds: settings.variant_ids || '',
-        hideCompareAt: Boolean(settings.hide_compare_at),
-        showPromoLimit: Boolean(settings.show_promo_limit),
-        showScrollCue: Boolean(settings.show_scroll_cue),
-      }, {
-        banner: expected.banner || '',
-        bannerSg: expected.bannerSg || '',
-        products: expected.products || [],
-        variantIds: expected.variantIds || '',
-        hideCompareAt: Boolean(expected.hideCompareAt),
-        showPromoLimit: Boolean(expected.showPromoLimit),
-        showScrollCue: Boolean(expected.showScrollCue),
-      }, `${site.id} Golden Bull block ${expected.blockId} behaviour`);
+    const markets = expectedGoldenBullMarkets(block);
+    if (block.type === 'promo_banner' && markets.length) {
+      required(settings.cta_mode, `${site.id} Golden Bull block ${blockId}.cta_mode`);
+    }
+    if (block.type === 'product_carousel' && markets.length && !(settings.products || []).length) {
+      throw new Layer2ConfigError(`${site.id} Golden Bull carousel ${blockId} has no products`);
     }
   }
 }
@@ -229,9 +144,22 @@ function validateProductFixture(site, name, { variants = false } = {}) {
   }
 }
 
-export function validateLayer2Config(config) {
+export function validateLayer2Config(config, { legacy = false } = {}) {
   const layer2 = config.monitoring?.layer2;
   required(layer2, 'monitoring.layer2');
+  const discovery = layer2.adDiscovery;
+  required(discovery, 'monitoring.layer2.adDiscovery');
+  if (discovery.enabled) {
+    if (!Number(discovery.lookbackDays) || !Number(discovery.maxLandingPages)) {
+      throw new Layer2ConfigError('adDiscovery lookbackDays and maxLandingPages must be positive');
+    }
+    if (!Array.isArray(discovery.paidChannels) || !discovery.paidChannels.length) {
+      throw new Layer2ConfigError('adDiscovery paidChannels must not be empty');
+    }
+    if (!Object.keys(discovery.countryMarketMap || {}).length) {
+      throw new Layer2ConfigError('adDiscovery countryMarketMap must not be empty');
+    }
+  }
   if (!Array.isArray(layer2.devices) || layer2.devices.length < 2) {
     throw new Layer2ConfigError('monitoring.layer2.devices must contain at least desktop and mobile');
   }
@@ -243,6 +171,10 @@ export function validateLayer2Config(config) {
       throw new Layer2ConfigError(`device ${device.id} uses unsupported browser ${device.browser}`);
     }
   }
+  const deviceIds = new Set(layer2.devices.map((device) => device.id));
+  for (const id of [...(discovery.paidSocialDevices || []), ...(discovery.otherPaidDevices || [])]) {
+    if (!deviceIds.has(id)) throw new Layer2ConfigError(`adDiscovery references unknown device ${id}`);
+  }
 
   const enabledSites = (config.sites || []).filter((site) => site.enabled && site.type === 'shopify');
   if (!enabledSites.length) throw new Layer2ConfigError('no enabled Shopify sites');
@@ -253,8 +185,15 @@ export function validateLayer2Config(config) {
     unique(site.markets || [], `${site.id} market`);
     unique(site.criticalLinks || [], `${site.id} critical link`);
     unique(site.promotions || [], `${site.id} promotion`);
-    required(site.fixtures?.apiCheckVariantId, `${site.id}.fixtures.apiCheckVariantId`);
+    for (const market of site.markets || []) {
+      required(market.countryCode, `${site.id}.${market.id}.countryCode`);
+      required(market.currency, `${site.id}.${market.id}.currency`);
+      required(market.priceMarker, `${site.id}.${market.id}.priceMarker`);
+    }
     validateThemeContract(site);
+    if (!legacy) continue;
+
+    required(site.fixtures?.apiCheckVariantId, `${site.id}.fixtures.apiCheckVariantId`);
     validateProductFixture(site, 'normalV3');
     validateProductFixture(site, 'giftPickerV3');
     validateProductFixture(site, 'atomicBundle');
@@ -345,8 +284,8 @@ function matrixItem({ site, market, device, journey, suite, spec, flow = '', rul
   };
 }
 
-export function buildLayer2Matrix(config, cadence = 'hourly') {
-  validateLayer2Config(config);
+function buildLegacyLayer2Matrix(config, cadence = 'hourly') {
+  validateLayer2Config(config, { legacy: true });
   const devices = config.monitoring.layer2.devices;
   const enabledSites = config.sites.filter((site) => site.enabled && site.type === 'shopify');
   const include = [];
@@ -431,6 +370,85 @@ export function buildLayer2Matrix(config, cadence = 'hourly') {
   return { include };
 }
 
+function targetId(target) {
+  return createHash('sha256')
+    .update(`${target.site}|${target.market}|${target.channel}|${target.landingPath}`)
+    .digest('hex')
+    .slice(0, 10);
+}
+
+function adMatrixItem(site, market, device, target, cadence) {
+  return {
+    ...matrixItem({
+      site,
+      market,
+      device,
+      journey: `ad-${targetId(target)}`,
+      suite: cadence === 'daily' ? 'full' : 'light',
+      spec: 'tests/ad-landing.spec.js',
+      flow: 'ad-landing',
+    }),
+    landingPath: target.landingPath,
+    channel: target.channel,
+    sessions: Number(target.sessions || 0),
+    addToCarts: Number(target.addToCarts || 0),
+    checkouts: Number(target.checkouts || 0),
+  };
+}
+
+export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = []) {
+  validateLayer2Config(config);
+  if (cadence === 'hourly' || cadence === 'full') return buildLegacyLayer2Matrix(config, cadence);
+  if (!['daily', 'post-deploy'].includes(cadence)) throw new Layer2ConfigError(`unknown cadence ${cadence}`);
+
+  const devices = config.monitoring.layer2.devices;
+  const discovery = config.monitoring.layer2.adDiscovery;
+  const enabledSites = config.sites.filter((site) => site.enabled && site.type === 'shopify');
+  const include = [];
+
+  for (const site of enabledSites) {
+    const targets = (adTargets || []).filter((target) => target.site === site.id);
+    const primaryMarket = site.markets.find((market) => market.id === 'MY') || site.markets[0];
+
+    if (cadence === 'daily') {
+      const desktop = devices.find((device) => device.id === 'desktop-chromium' && device.daily);
+      if (!desktop) throw new Layer2ConfigError('daily matrix needs desktop-chromium');
+      for (const market of site.markets) {
+        include.push(matrixItem({
+          site, market, device: desktop, journey: 'desktop-smoke', suite: 'light', spec: 'tests/hourly-v2.spec.js',
+        }));
+      }
+    }
+
+    for (const target of targets) {
+      const market = site.markets.find((entry) => entry.id === target.market);
+      if (!market) throw new Layer2ConfigError(`ad target references unknown market ${target.market}`);
+      const ids = target.channel === 'Paid Social' ? discovery.paidSocialDevices : discovery.otherPaidDevices;
+      for (const id of ids) {
+        const device = devices.find((entry) => entry.id === id && entry[cadence === 'daily' ? 'daily' : 'postDeploy']);
+        if (!device) throw new Layer2ConfigError(`${cadence} ad target requires enabled device ${id}`);
+        include.push(adMatrixItem(site, market, device, target, cadence));
+      }
+    }
+
+    // GA4 may legitimately return no paid landing pages. Keep a real mobile
+    // purchase check so a no-ad day never turns Layer 2 into a no-op.
+    if (!targets.length) {
+      for (const id of ['android-chromium', 'iphone-webkit']) {
+        const flag = cadence === 'daily' ? 'daily' : 'postDeploy';
+        const device = devices.find((entry) => entry.id === id && entry[flag]);
+        if (!device) throw new Layer2ConfigError(`${cadence} fallback requires ${id}`);
+        include.push(matrixItem({
+          site, market: primaryMarket, device, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js',
+        }));
+      }
+    }
+  }
+
+  unique(include, 'matrix job');
+  return { include };
+}
+
 function main() {
   const command = process.argv[2] || 'validate';
   const configPath = process.argv[3] ? path.resolve(process.argv[3]) : defaultConfigPath;
@@ -441,8 +459,14 @@ function main() {
     return;
   }
   if (command === 'matrix') {
-    const cadence = process.argv[4] || process.env.MONITOR_CADENCE || 'hourly';
-    console.log(JSON.stringify(buildLayer2Matrix(config, cadence)));
+    const cadence = process.argv[4] || process.env.MONITOR_CADENCE || 'post-deploy';
+    const targetsPath = process.argv[5] || process.env.MONITOR_AD_TARGETS_FILE || '';
+    let targets = [];
+    if (targetsPath) {
+      const parsed = JSON.parse(fs.readFileSync(path.resolve(targetsPath), 'utf8'));
+      targets = Array.isArray(parsed) ? parsed : (parsed.targets || []);
+    }
+    console.log(JSON.stringify(buildLayer2Matrix(config, cadence, targets)));
     return;
   }
   throw new Error(`Unknown command: ${command}`);

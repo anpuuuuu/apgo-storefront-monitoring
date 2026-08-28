@@ -13,6 +13,15 @@ test('heartbeat delay escalates only after two complete stale windows', () => {
   assert.equal(heartbeatSeverity(Number.POSITIVE_INFINITY, limit), 'critical');
 });
 
+test('daily Layer 2 heartbeat warns at 30 hours and becomes critical at 36 hours', () => {
+  const warning = 30 * 60 * 60_000;
+  const critical = 36 * 60 * 60_000;
+  assert.equal(heartbeatSeverity(warning, warning, critical), null);
+  assert.equal(heartbeatSeverity(warning + 1, warning, critical), 'warning');
+  assert.equal(heartbeatSeverity(critical, warning, critical), 'warning');
+  assert.equal(heartbeatSeverity(critical + 1, warning, critical), 'critical');
+});
+
 test('heartbeat incident re-alerts on severity change, not every hour', () => {
   const now = Date.now();
   const realertMs = 6 * 60 * 60_000;

@@ -1,4 +1,4 @@
-import { HEARTBEAT_LIMITS, LIMITS, UPTIME_TARGETS } from './config.mjs';
+import { HEARTBEAT_CRITICAL_LIMITS, HEARTBEAT_LIMITS, LIMITS, UPTIME_TARGETS } from './config.mjs';
 import { getState, listHeartbeats, logAlert, setState, writeHeartbeat } from './db.mjs';
 import { sendTelegram } from './telegram.mjs';
 
@@ -82,9 +82,9 @@ async function updateTargetState(env, sample) {
   await setState(env.DB, key, state);
 }
 
-export function heartbeatSeverity(age, maxAge) {
+export function heartbeatSeverity(age, maxAge, criticalAge = maxAge * 2) {
   if (!(age > maxAge)) return null;
-  return age > maxAge * 2 ? 'critical' : 'warning';
+  return age > criticalAge ? 'critical' : 'warning';
 }
 
 export function shouldAlertHeartbeat(severity, state, now, realertMs) {
@@ -125,16 +125,18 @@ async function checkStaleHeartbeats(env) {
     }
 
     const effectiveAge = row ? age : now - state.missingSinceMs;
-    const severity = heartbeatSeverity(effectiveAge, maxAge);
+    const criticalAge = HEARTBEAT_CRITICAL_LIMITS[layer] || maxAge * 2;
+    const severity = heartbeatSeverity(effectiveAge, maxAge, criticalAge);
     const shouldAlert = shouldAlertHeartbeat(severity, state, now, LIMITS.heartbeatRealertMs);
     if (shouldAlert) {
       const critical = severity === 'critical';
-      await sendTelegram(env, `${critical ? '🔴 [Monitoring Health]' : '🟠 [Monitoring Delayed]'} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\nLimit: ${Math.round(maxAge / 60_000)} minutes`);
+      await sendTelegram(env, `${critical ? '🔴 [Monitoring Health]' : '🟠 [Monitoring Delayed]'} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\n${critical ? 'Critical' : 'Warning'} limit: ${Math.round((critical ? criticalAge : maxAge) / 60_000)} minutes`);
       await logAlert(env.DB, 'self-health', critical ? 'stale' : 'delayed', {
         layer,
         severity,
         last: row?.observed_at || null,
         maxAge,
+        criticalAge,
         age: effectiveAge,
       });
       await setState(env.DB, stateKey, { ...state, open: true, severity, lastAlertMs: now });

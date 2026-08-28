@@ -6,6 +6,7 @@ const root = path.resolve(process.env.MONITOR_RESULTS_ROOT || 'layer2-results');
 const outputPath = path.resolve(process.env.MONITOR_AGGREGATE_FILE || 'layer2-aggregate.json');
 const heartbeatPath = path.resolve(process.env.MONITOR_HEARTBEAT_DETAIL_FILE || 'layer2-heartbeat-detail.json');
 const planResult = process.env.MONITOR_PLAN_RESULT || 'success';
+const planError = process.env.MONITOR_PLAN_ERROR || '';
 let expected = [];
 let matrixError = '';
 try {
@@ -36,10 +37,10 @@ const attemptSummary = (result) => (result.attempts || [])
   .map((attempt) => `#${attempt.attempt} ${attempt.classification || 'failed'}: ${attempt.error || 'failed'}`)
   .join(' | ');
 const failedSummary = failed.slice(0, 2)
-  .map((result) => `${result.id} [${result.classification}]: ${attemptSummary(result)}`)
+  .map((result) => `${result.id}${result.landingPath ? ` ${result.channel || 'Paid'} ${result.landingPath}` : ''} [${result.classification}]: ${attemptSummary(result)}`)
   .join(' || ');
 const detail = planningFailed
-  ? `Layer 2 planning failed (plan=${planResult}, expected=${expected.length}${matrixError ? `, matrix=${matrixError}` : ''})`
+  ? `Layer 2 planning failed (plan=${planResult}, expected=${expected.length}${planError ? `, error=${planError}` : ''}${matrixError ? `, matrix=${matrixError}` : ''})`
   : failed.length || missing.length
     ? `journeys failed=${failed.length}, missing=${missing.length}; ${failedSummary || `missing: ${missing.slice(0, 3).join(', ')}`}`
     : `${results.length} journeys passed; transient=${transient.length}`;
@@ -53,9 +54,11 @@ const challengeOnly = !planningFailed
 // A blocked synthetic runner is monitoring degradation, not evidence that
 // shoppers are down. Keep the workflow/heartbeat red, but page at most on the
 // daily full run. Mixed or real storefront failures still notify immediately.
-const notify = status === 'failed' && (!challengeOnly || cadence === 'full');
+const notify = status === 'failed' && (!challengeOnly || cadence === 'daily');
 const alertTitle = planningFailed
-  ? 'APGO Layer 2 test planning failed'
+  ? planError.includes('AD_DISCOVERY_FAILED')
+    ? 'APGO Layer 2 GA4 advertising discovery failed'
+    : 'APGO Layer 2 test planning failed'
   : missing.length
   ? 'APGO Layer 2 monitoring result missing'
     : failureClassifications.has('TEST_CONFIG_STALE')
@@ -93,6 +96,9 @@ fs.writeFileSync(heartbeatPath, `${JSON.stringify({
     status: result.finalStatus,
     attempts: result.attempts.length,
     classification: result.classification,
+    landingPath: result.landingPath || '',
+    channel: result.channel || '',
+    commit: result.commit || '',
   })),
 }, null, 2)}\n`);
 console.log(JSON.stringify({ status, detail, expected: expected.length, received: results.length, failed: failed.length, transient: transient.length, missing }));

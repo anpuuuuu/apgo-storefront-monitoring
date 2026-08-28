@@ -32,10 +32,9 @@ test('workflow freshness accepts dispatch recovery and exposes an active run', (
   assert.equal(result.run, recovery);
 });
 
-test('Layer 2 freshness can count a successful push without changing GA4 semantics', () => {
+test('Layer 2 daily freshness ignores successful post-deploy pushes', () => {
   const push = { id: 8, event: 'push', status: 'completed', conclusion: 'success' };
   const schedule = { id: 7, event: 'schedule', status: 'completed', conclusion: 'success' };
-  assert.equal(selectWorkflowFreshnessRun([push, schedule], ['schedule', 'workflow_dispatch', 'push']).run, push);
   assert.equal(selectWorkflowFreshnessRun([push, schedule]).run, schedule);
 });
 
