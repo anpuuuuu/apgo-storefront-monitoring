@@ -7,7 +7,7 @@
 
 ## GitHub Secrets
 
-打开 [GitHub Actions secrets](https://github.com/anpuuuuu/apgo-theme/settings/secrets/actions)，确认存在：
+打开 [Central Repo Actions secrets](https://github.com/anpuuuuu/apgo-storefront-monitoring/settings/secrets/actions)，重新建立所需值；GitHub 无法读取旧 Repo 的 Secret。
 
 | Name | 用途 |
 |---|---|
@@ -19,9 +19,11 @@
 
 Cloudflare API Token 最少需要 Account / Workers Scripts / Edit 与 Account / D1 / Edit。Token 不要写入文件、Workflow 日志或对话。
 
+中央迁移还需要 `MONITOR_HEARTBEAT_TOKEN_CURRENT`（旧 Token，过渡后删除）、Dispatcher GitHub App PEM 与 Webhook Secret。完整顺序见 `docs/MIGRATION.md`。
+
 ## 首次部署
 
-1. 手动运行 [Deploy APGO monitoring worker](https://github.com/anpuuuuu/apgo-theme/actions/workflows/deploy-worker.yml)。
+1. 手动运行 [Deploy monitoring Workers](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/workflows/deploy-worker.yml)。
 2. Workflow 先应用 D1 Migration，再部署 Worker。
 3. 第一次部署保持 `CRON_ENABLED=false`，避免未验证前正式告警。
 4. 从日志取得 `workers.dev` URL，设置 Repository Variable `MONITOR_WORKER_URL`。

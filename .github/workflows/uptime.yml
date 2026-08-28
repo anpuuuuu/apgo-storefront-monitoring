@@ -1,5 +1,5 @@
 # Layer 1 DIAGNOSTIC probe. The production Layer-1 uptime check moved into
-# the Cloudflare Worker cron (every 5 min, see monitoring/cloudflare/worker/);
+# the Cloudflare Worker cron (every 5 min, see workers/error-monitor/);
 # this workflow kept its schedule for the planned 24h parallel run after that
 # migration (README: Worker 部署与回退) and the schedule is now removed.
 # It remains manually dispatchable for diagnostics and secret-path testing.
@@ -16,9 +16,9 @@ on:
     branches: [main, 'claude/**']
     paths:
       - '.github/workflows/uptime.yml'
-      - 'monitoring/scripts/uptime-check.sh'
-      - 'monitoring/alerts-config.json'
-      - 'monitoring/sites.json'
+      - 'scripts/uptime-check.sh'
+      - 'config/alerts-config.json'
+      - 'config/sites.json'
 
 permissions:
   contents: read
@@ -42,4 +42,4 @@ jobs:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           FORCE_FAIL: ${{ inputs.force_fail || 'false' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: bash monitoring/scripts/uptime-check.sh
+        run: bash scripts/uptime-check.sh

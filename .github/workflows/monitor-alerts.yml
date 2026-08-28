@@ -1,4 +1,4 @@
-name: GA4 business monitoring
+name: Layer 4 GA4 business monitoring
 
 on:
   schedule:
@@ -8,12 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Check to run
         type: choice
         options: [realtime, daily-primary, daily-confirm, validate]
         default: realtime
       simulate_zero:
-        description: Simulate add_to_cart zero
         type: boolean
         default: false
 
@@ -22,26 +20,41 @@ permissions:
   id-token: write
 
 jobs:
+  plan:
+    if: github.event_name != 'schedule' || vars.MONITOR_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      mode: ${{ steps.select.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: matrix
+        run: echo "matrix=$(node scripts/site-matrix.mjs 4)" >> "$GITHUB_OUTPUT"
+      - id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
+        run: |
+          mode=realtime
+          if [ "$SCHEDULE" = '17 4 * * *' ]; then mode=daily-primary; fi
+          if [ "$SCHEDULE" = '47 6 * * *' ]; then mode=daily-confirm; fi
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then mode="${INPUT_MODE:-realtime}"; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
   ga4:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Require monitoring configuration
-        env:
-          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
-          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
-          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
-          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: |
-          for name in GA4_PROPERTY_ID GCP_WIF_PROVIDER MONITOR_WORKER_URL MONITOR_HEARTBEAT_TOKEN CF_API_TOKEN CF_ACCOUNT_ID; do
-            if [ -z "${!name}" ]; then echo "::error::$name is required"; exit 1; fi
-          done
+        with: { node-version: 24 }
       - name: Authenticate with Google OIDC/WIF
         id: google-auth
         uses: google-github-actions/auth@v3
@@ -52,22 +65,12 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
           create_credentials_file: false
-      - name: Select GA4 check
-        id: select
+      - name: Run namespaced GA4 monitor
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
-          INPUT_MODE: ${{ inputs.mode }}
-        run: |
-          mode=realtime
-          if [ "$SCHEDULE" = '17 4 * * *' ]; then mode=daily-primary; fi
-          if [ "$SCHEDULE" = '47 6 * * *' ]; then mode=daily-confirm; fi
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then mode="$INPUT_MODE"; fi
-          echo "value=$mode" >> "$GITHUB_OUTPUT"
-      - name: Run GA4 monitoring
-        env:
+          MONITOR_SITE_ID: ${{ matrix.siteId }}
+          MONITOR_MODE: ${{ vars.MONITOR_MODE || 'shadow' }}
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
-          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          GA4_PROPERTY_ID: ${{ matrix.propertyId }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
@@ -77,17 +80,17 @@ jobs:
           SIMULATE_ZERO: ${{ inputs.simulate_zero || 'false' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          case '${{ steps.select.outputs.value }}' in
-            validate) VALIDATE_GA4=true node monitoring/scripts/ga4-anomaly.mjs ;;
-            daily-primary) DAILY_STAGE=primary node monitoring/scripts/ga4-daily-funnel.mjs ;;
-            daily-confirm) DAILY_STAGE=confirm node monitoring/scripts/ga4-daily-funnel.mjs ;;
-            *) node monitoring/scripts/ga4-anomaly.mjs ;;
+          case '${{ needs.plan.outputs.mode }}' in
+            validate) VALIDATE_GA4=true node scripts/ga4-anomaly.mjs ;;
+            daily-primary) DAILY_STAGE=primary node scripts/ga4-daily-funnel.mjs ;;
+            daily-confirm) DAILY_STAGE=confirm node scripts/ga4-daily-funnel.mjs ;;
+            *) node scripts/ga4-anomaly.mjs ;;
           esac
-      - name: Notify workflow or authentication failure
-        if: failure()
+      - name: Notify execution failure only in Live mode
+        if: failure() && vars.MONITOR_MODE == 'live'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          ALERT_TITLE: APGO Layer 4 GA4 monitor failed
+          ALERT_TITLE: ${{ matrix.label }} Layer 4 GA4 monitor failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/workflow-failure-notify.mjs
+        run: node scripts/workflow-failure-notify.mjs

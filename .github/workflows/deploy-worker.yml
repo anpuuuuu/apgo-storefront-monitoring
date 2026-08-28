@@ -1,81 +1,93 @@
-name: Deploy APGO monitoring worker
+name: Deploy monitoring Workers
 
 on:
-  workflow_dispatch: {}
-  push:
-    branches: [main]
-    paths:
-      - 'monitoring/cloudflare/worker/**'
-      - '.github/workflows/deploy-worker.yml'
+  workflow_dispatch:
+    inputs:
+      worker:
+        type: choice
+        options: [error-monitor, dispatcher]
+        default: dispatcher
+      apply_d1_migration:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   deploy:
+    environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Require deployment secrets
-        env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
-        run: |
-          for name in CF_API_TOKEN CF_ACCOUNT_ID TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID MONITOR_HEARTBEAT_TOKEN; do
-            if [ -z "${!name}" ]; then echo "::error::$name is required"; exit 1; fi
-          done
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: monitoring/package-lock.json
-      - name: Install Worker tooling
-        working-directory: monitoring
-        run: npm ci --no-audit --no-fund
-      - name: Test Layer 3 alert policy
-        working-directory: monitoring
-        run: npm run test:layer3
-      - name: Validate Worker bundle
-        working-directory: monitoring
-        run: npm run check:worker
-      - name: Back up remote D1 before migrations
-        working-directory: monitoring
+      - run: npm ci --no-audit --no-fund
+      - name: Test and validate both Worker bundles
+        run: |
+          npm run test:worker
+          npm run check:worker
+          npm run check:dispatcher
+      - name: Back up D1 before an approved migration
+        if: inputs.worker == 'error-monitor' && inputs.apply_d1_migration
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: npx wrangler d1 export apgo-monitoring --remote --skip-confirmation --output apgo-monitoring-backup.sql --config cloudflare/worker/wrangler.jsonc
-      - name: Preserve D1 backup
-        uses: actions/upload-artifact@v4
+        run: npx wrangler d1 export apgo-monitoring --remote --skip-confirmation --output apgo-monitoring-backup.sql --config workers/error-monitor/wrangler.jsonc
+      - uses: actions/upload-artifact@v4
+        if: inputs.worker == 'error-monitor' && inputs.apply_d1_migration
         with:
           name: apgo-monitoring-d1-before-${{ github.run_id }}
-          path: monitoring/apgo-monitoring-backup.sql
+          path: apgo-monitoring-backup.sql
           retention-days: 14
           if-no-files-found: error
-      - name: Apply D1 migrations
-        working-directory: monitoring
+      - name: Apply forward-only D1 migrations
+        if: inputs.worker == 'error-monitor' && inputs.apply_d1_migration
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: npx wrangler d1 migrations apply apgo-monitoring --remote --config cloudflare/worker/wrangler.jsonc
-      - name: Deploy Worker
+        run: npx wrangler d1 migrations apply apgo-monitoring --remote --config workers/error-monitor/wrangler.jsonc
+      - name: Deploy Error Monitor
+        if: inputs.worker == 'error-monitor'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          workingDirectory: monitoring/cloudflare/worker
+          workingDirectory: workers/error-monitor
           command: deploy --config wrangler.jsonc
           secrets: |
             TELEGRAM_BOT_TOKEN
             TELEGRAM_CHAT_ID
             MONITOR_HEARTBEAT_TOKEN
+            MONITOR_HEARTBEAT_TOKEN_NEXT
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN_CURRENT }}
+          MONITOR_HEARTBEAT_TOKEN_NEXT: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+      - name: Deploy Dispatcher
+        if: inputs.worker == 'dispatcher'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: workers/dispatcher
+          command: deploy --config wrangler.jsonc
+          secrets: |
+            GITHUB_APP_ID
+            GITHUB_APP_PRIVATE_KEY
+            GITHUB_WEBHOOK_SECRET
+            TELEGRAM_BOT_TOKEN
+            TELEGRAM_CHAT_ID
+        env:
+          GITHUB_APP_ID: ${{ vars.MONITOR_GITHUB_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.MONITOR_GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.MONITOR_GITHUB_WEBHOOK_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       - name: Notify deployment failure
         if: failure()
         env:
@@ -83,4 +95,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_TITLE: APGO monitoring Worker deployment failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/workflow-failure-notify.mjs
+        run: node scripts/workflow-failure-notify.mjs

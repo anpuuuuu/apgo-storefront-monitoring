@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const defaultConfigPath = path.join(here, '..', 'sites.json');
+const defaultConfigPath = path.join(here, '..', 'config', 'sites.json');
 
 export class AdDiscoveryError extends Error {
   constructor(message) {
@@ -43,14 +43,14 @@ export function rowsFromReport(report) {
   }));
 }
 
-export function buildAdTargets(rows, config) {
+export function buildAdTargets(rows, config, siteId = '') {
   const discovery = config.monitoring?.layer2?.adDiscovery || {};
   const channels = new Set(discovery.paidChannels || []);
   const marketMap = discovery.countryMarketMap || {};
   const minimumSessions = number(discovery.minimumSessions || 1);
   const maxLandingPages = Math.max(1, number(discovery.maxLandingPages || 10));
   const sites = new Map((config.sites || []).filter((site) => site.enabled).map((site) => [site.id, site]));
-  const primarySite = [...sites.values()][0];
+  const primarySite = siteId ? sites.get(siteId) : [...sites.values()][0];
   if (!primarySite) throw new AdDiscoveryError('no enabled site is configured');
 
   const merged = new Map();
@@ -124,12 +124,17 @@ export async function fetchAdReport({ accessToken, propertyId, lookbackDays = 3,
 export async function discoverAdTargets(config, env = process.env) {
   const discovery = config.monitoring?.layer2?.adDiscovery;
   if (!discovery?.enabled) return [];
+  const enabledSites = (config.sites || []).filter((site) => site.enabled && site.type === 'shopify');
+  const site = env.MONITOR_SITE_ID
+    ? enabledSites.find((entry) => entry.id === env.MONITOR_SITE_ID)
+    : enabledSites[0];
+  if (!site) throw new AdDiscoveryError(`unknown or disabled site: ${env.MONITOR_SITE_ID || '(first enabled site)'}`);
   const report = await fetchAdReport({
     accessToken: env.GOOGLE_OAUTH_ACCESS_TOKEN,
-    propertyId: env.GA4_PROPERTY_ID,
+    propertyId: env.GA4_PROPERTY_ID || site.ga4PropertyId,
     lookbackDays: discovery.lookbackDays,
   });
-  return buildAdTargets(rowsFromReport(report), config);
+  return buildAdTargets(rowsFromReport(report), config, site.id);
 }
 
 async function main() {

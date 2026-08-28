@@ -1,6 +1,10 @@
 #!/usr/bin/env node
+import { getSite } from './site-config.mjs';
+
 const workerUrl = (process.env.MONITOR_WORKER_URL || '').replace(/\/$/, '');
 const token = process.env.MONITOR_HEARTBEAT_TOKEN || '';
+const site = getSite();
+const storefrontOrigin = new URL(site.baseUrl).origin;
 if (!workerUrl || !token) throw new Error('MONITOR_WORKER_URL and MONITOR_HEARTBEAT_TOKEN are required');
 
 // Shopify serves a separate cached document to bare script-style user agents.
@@ -12,7 +16,7 @@ const storefrontUserAgent =
   '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 ' +
   'APGO-HealthCheck/2.0 Layer3-SelfTest';
 
-const storefront = await fetch('https://apgo.my/?apgo_em_test=1', {
+const storefront = await fetch(`${storefrontOrigin}/?apgo_em_test=1`, {
   headers: { 'user-agent': storefrontUserAgent },
   redirect: 'follow',
 });
@@ -25,8 +29,8 @@ const session = `github-selftest-${Date.now()}`;
 const response = await fetch(`${workerUrl}/beacon`, {
   method: 'POST',
   headers: {
-    origin: 'https://apgo.my',
-    referer: 'https://apgo.my/?apgo_em_test=1',
+    origin: storefrontOrigin,
+    referer: `${storefrontOrigin}/?apgo_em_test=1`,
     'content-type': 'text/plain;charset=UTF-8',
     'user-agent': 'APGO-Layer3-SelfTest/2.0',
     authorization: `Bearer ${token}`,
@@ -35,7 +39,7 @@ const response = await fetch(`${workerUrl}/beacon`, {
     kind: 'selftest',
     m: 'APGO error monitor self-test',
     src: 'theme://apgo-error-monitor',
-    url: 'https://apgo.my/',
+    url: `${storefrontOrigin}/`,
     sid: session,
   }),
 });
@@ -43,7 +47,9 @@ if (response.status !== 204) throw new Error(`Layer 3 self-test beacon HTTP ${re
 
 const health = await fetch(`${workerUrl}/health`, { headers: { 'user-agent': 'APGO-Layer3-SelfTest/2.0' } });
 const body = await health.json().catch(() => ({}));
-const layer3 = body.heartbeats?.find((row) => row.layer === 'layer3');
+const siteHealth = body.sites?.find((entry) => entry.siteId === site.id);
+const layer3 = siteHealth?.layers?.find((row) => row.layer === 'layer3')
+  || body.heartbeats?.find((row) => row.layer === `${site.id}:layer3` || row.layer === 'layer3');
 if (!layer3 || layer3.stale || !String(layer3.source).includes('selftest')) {
   throw new Error(`Layer 3 heartbeat was not updated: ${JSON.stringify(body)}`);
 }

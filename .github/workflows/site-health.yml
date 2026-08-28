@@ -55,9 +55,6 @@ jobs:
       max-parallel: 1
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    defaults:
-      run:
-        working-directory: monitoring
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -67,7 +64,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('monitoring/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Chromium
         run: timeout 300 npx playwright install --with-deps chromium || npx playwright install chromium
       - name: Run browser journey
@@ -78,14 +75,14 @@ jobs:
           MONITOR_FLOW: ${{ matrix.flow }}
         run: npm run test:${{ needs.plan.outputs.suite }}
       - name: Upload diagnostic artifacts
-        if: failure()
+        if: failure() && vars.MONITOR_MODE == 'live'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-${{ needs.plan.outputs.suite }}-${{ matrix.id }}-${{ github.run_id }}
           path: |
-            monitoring/test-results/
-            monitoring/playwright-report/
-            monitoring/results.json
+            test-results/
+            playwright-report/
+            results.json
           retention-days: 7
           if-no-files-found: ignore
 
@@ -99,7 +96,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Require heartbeat configuration
+      - name: Require heartbeat configuration in Live mode
+        if: vars.MONITOR_MODE == 'live'
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
@@ -111,15 +109,17 @@ jobs:
           BROWSER_RESULT: ${{ needs.browser.result }}
         run: |
           test "$BROWSER_RESULT" = success || { echo "::error::One or more Layer 2 browser journeys failed"; exit 1; }
-      - name: Write Layer 2 heartbeat
+      - name: Write rollback heartbeat only in Live mode
+        if: vars.MONITOR_MODE == 'live'
         env:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          MONITOR_SITE_ID: apgo-my
           MONITOR_LAYER: layer2
           MONITOR_SOURCE: playwright-${{ needs.plan.outputs.suite }}
           MONITOR_SUITE: ${{ needs.plan.outputs.suite }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/write-heartbeat.mjs
+        run: node scripts/write-heartbeat.mjs
       - name: Notify Layer 2 failure
         if: failure()
         env:
@@ -127,4 +127,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_TITLE: APGO Layer 2 browser monitoring failed
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node monitoring/scripts/workflow-failure-notify.mjs
+        run: node scripts/workflow-failure-notify.mjs

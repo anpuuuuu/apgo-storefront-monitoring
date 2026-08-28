@@ -5,7 +5,8 @@
   "compatibility_date": "2026-08-20",
   "workers_dev": true,
   "vars": {
-    "CRON_ENABLED": "true"
+    "CRON_ENABLED": "true",
+    "MONITOR_MODE": "live"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]

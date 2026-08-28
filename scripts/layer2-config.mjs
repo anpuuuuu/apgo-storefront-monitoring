@@ -5,8 +5,15 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const defaultConfigPath = path.join(here, '..', 'sites.json');
-const themeRoot = path.resolve(here, '..', '..');
+const defaultConfigPath = path.join(here, '..', 'config', 'sites.json');
+
+function resolveThemeRoot() {
+  const configured = process.env.MONITOR_THEME_ROOT;
+  if (!configured) {
+    throw new Layer2ConfigError('MONITOR_THEME_ROOT is required for Theme Contract validation');
+  }
+  return path.resolve(configured);
+}
 
 export class Layer2ConfigError extends Error {
   constructor(message) {
@@ -36,6 +43,7 @@ function unique(items, label, key = (item) => item.id) {
 }
 
 function loadThemeJson(relativePath, label) {
+  const themeRoot = resolveThemeRoot();
   required(relativePath, label);
   const absolutePath = path.resolve(themeRoot, relativePath);
   const relativeToTheme = path.relative(themeRoot, absolutePath);
@@ -144,7 +152,7 @@ function validateProductFixture(site, name, { variants = false } = {}) {
   }
 }
 
-export function validateLayer2Config(config, { legacy = false } = {}) {
+export function validateLayer2Config(config, { legacy = false, contract = Boolean(process.env.MONITOR_THEME_ROOT) } = {}) {
   const layer2 = config.monitoring?.layer2;
   required(layer2, 'monitoring.layer2');
   const discovery = layer2.adDiscovery;
@@ -181,6 +189,13 @@ export function validateLayer2Config(config, { legacy = false } = {}) {
   unique(enabledSites, 'site');
 
   for (const site of enabledSites) {
+    required(site.repository, `${site.id}.repository`);
+    required(site.repositoryId, `${site.id}.repositoryId`);
+    required(site.defaultBranch, `${site.id}.defaultBranch`);
+    required(site.ga4PropertyId, `${site.id}.ga4PropertyId`);
+    if (!/^\d+$/.test(String(site.repositoryId))) {
+      throw new Layer2ConfigError(`${site.id}.repositoryId must be an immutable numeric GitHub repository id`);
+    }
     required(site.baseUrl, `${site.id}.baseUrl`);
     unique(site.markets || [], `${site.id} market`);
     unique(site.criticalLinks || [], `${site.id} critical link`);
@@ -190,7 +205,7 @@ export function validateLayer2Config(config, { legacy = false } = {}) {
       required(market.currency, `${site.id}.${market.id}.currency`);
       required(market.priceMarker, `${site.id}.${market.id}.priceMarker`);
     }
-    validateThemeContract(site);
+    if (contract) validateThemeContract(site);
     if (!legacy) continue;
 
     required(site.fixtures?.apiCheckVariantId, `${site.id}.fixtures.apiCheckVariantId`);
@@ -403,7 +418,9 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
 
   const devices = config.monitoring.layer2.devices;
   const discovery = config.monitoring.layer2.adDiscovery;
-  const enabledSites = config.sites.filter((site) => site.enabled && site.type === 'shopify');
+  const requestedSiteId = process.env.MONITOR_SITE_ID || '';
+  const enabledSites = config.sites.filter((site) => site.enabled && site.type === 'shopify' && (!requestedSiteId || site.id === requestedSiteId));
+  if (!enabledSites.length) throw new Layer2ConfigError(`matrix has no enabled site matching ${requestedSiteId || 'configuration'}`);
   const include = [];
 
   for (const site of enabledSites) {
@@ -454,7 +471,7 @@ function main() {
   const configPath = process.argv[3] ? path.resolve(process.argv[3]) : defaultConfigPath;
   const config = loadLayer2Config(configPath);
   if (command === 'validate') {
-    validateLayer2Config(config);
+    validateLayer2Config(config, { contract: true });
     console.log('Layer 2 configuration is valid.');
     return;
   }

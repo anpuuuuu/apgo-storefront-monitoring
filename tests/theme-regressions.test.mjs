@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
-const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-const readRepoFile = (relativePath) => readFileSync(`${repoRoot}${relativePath}`, 'utf8');
+const themeRoot = path.resolve(process.env.MONITOR_THEME_ROOT || 'workspaces/apgo-my/theme');
+const readRepoFile = (relativePath) => readFileSync(path.join(themeRoot, relativePath), 'utf8');
 
 test('event listing cards provide the product-card link ref required by the theme component', () => {
   const liquid = readRepoFile('snippets/apgo-event-listing-card.liquid');

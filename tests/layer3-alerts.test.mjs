@@ -14,13 +14,13 @@ import {
   normalizedBrowserSignatureInput,
   originAllowed,
   shouldAlertDigestRow,
-} from '../cloudflare/worker/errors.mjs';
-import { cleanPath, cleanSource } from '../cloudflare/worker/security.mjs';
+} from '../workers/error-monitor/errors.mjs';
+import { cleanPath, cleanSource } from '../workers/error-monitor/security.mjs';
 
-test('only APGO and Shopify storefront origins receive CORS access', () => {
+test('only explicitly registered storefront origins receive CORS access', () => {
   assert.equal(originAllowed('https://apgo.my'), true);
   assert.equal(originAllowed('https://www.apgo.my'), true);
-  assert.equal(originAllowed('https://apgo-dev.myshopify.com'), true);
+  assert.equal(originAllowed('https://apgo-dev.myshopify.com'), false);
   assert.equal(originAllowed('https://attacker.example'), false);
   assert.equal(corsHeaders('https://apgo.my')['access-control-allow-origin'], 'https://apgo.my');
   assert.equal(corsHeaders('https://attacker.example')['access-control-allow-origin'], undefined);

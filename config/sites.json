@@ -87,9 +87,21 @@
   "sites": [
     {
       "id": "apgo-my",
+      "siteId": "apgo-my",
       "name": "APGO Malaysia (Shopify)",
+      "alertLabel": "APGO MY",
       "type": "shopify",
       "enabled": true,
+      "layers": [1, 2, 3, 4],
+      "repository": "anpuuuuu/apgo-theme",
+      "repositoryId": "1154313539",
+      "defaultBranch": "main",
+      "ga4PropertyId": "547019474",
+      "workerOrigin": "https://apgo-error-monitor.wadeyeh.workers.dev",
+      "storefrontOrigins": [
+        "https://apgo.my",
+        "https://www.apgo.my"
+      ],
       "expectErrorMonitor": true,
       "baseUrl": "https://apgo.my",
       "criticalLinks": [
