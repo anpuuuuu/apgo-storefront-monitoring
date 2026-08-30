@@ -20,7 +20,7 @@ Repository IDs and full 40-character SHAs are security boundaries. A repository 
 
 ## GitHub App
 
-Create private App `APGO Storefront Monitor` with:
+The private App is active with App ID `4769661` and installation ID `157699088`:
 
 - Repository permissions: Contents Read, Actions Write, Metadata Read.
 - Event: Push.
@@ -28,6 +28,15 @@ Create private App `APGO Storefront Monitor` with:
 - Install only on `apgo-theme` and `apgo-storefront-monitoring`.
 
 Store the App ID as `MONITOR_GITHUB_APP_ID`; store the PEM and Webhook Secret as `MONITOR_GITHUB_APP_PRIVATE_KEY` and `MONITOR_GITHUB_WEBHOOK_SECRET`. The Dispatcher validates the raw request body, repository ID, `refs/heads/main`, full SHA and delivery ID before requesting a one-hour installation token scoped to the central Repo.
+
+Current verification:
+
+- Repository selection is `selected` and contains exactly the Theme and central repositories.
+- Hook ID `672281738` is active with SSL verification, JSON content type and only the Push event.
+- GitHub's real Ping delivery returned HTTP 202 from the Dispatcher.
+- The retained private-key fingerprint is `SHA256:jDLaQwEqxqoAzk7XW53PJuA0L633l3MK2XlocDwvaYM=`. Do not commit or copy the PEM into this public repository.
+
+For future webhook-secret rotation, run `scripts/sync-github-app-webhook.ps1` with the App ID and local PEM path. It authenticates and verifies that the App hook exists before changing the central/Dispatcher secrets, updates the hook, and requires a signed Dispatcher ping to return HTTP 202.
 
 KV namespace `apgo-monitor-dispatch-deliveries` is bound as `DELIVERIES` in `workers/dispatcher/wrangler.jsonc`. Deploy the Dispatcher manually after its GitHub App secrets exist. Duplicate deliveries remain deduplicated for seven days.
 
@@ -45,11 +54,13 @@ Create provider `apgo-storefront-monitoring` in project `helical-canto-505209-j7
 
 ## Shadow and Cutover
 
-1. Run Layer 2 Daily and Post-deploy three times each, Layer 3 self-test, Layer 4 validate, Dispatcher invalid-signature tests and Worker health.
-2. Enable `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow runs fail visibly and upload results, but do not write production Heartbeat or send business Telegram.
-3. Compare central results with the Theme Repo. Any mismatch blocks Cutover.
-4. Disable the six Theme monitoring workflows, set central `MONITOR_MODE=live`, and transfer Error Worker deployment ownership.
-5. Observe 48 hours for duplicate/missing Push, Schedule, D1, Telegram and Heartbeat events.
-6. Remove `monitoring/**` and old workflows from Theme only after stability. Retain the Layer 3 snippet/layout references/cart-error reporting and a pointer to this Repo.
+1. Add the remaining central `CF_API_TOKEN`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; also add Telegram credentials to the Dispatcher.
+2. Send one controlled no-content Theme `main` Push and verify exact-SHA dispatch plus delivery-ID deduplication.
+3. Run Layer 2 Daily and Post-deploy three times each, Layer 3 self-test, Layer 4 validate, Dispatcher invalid-signature tests and Worker health.
+4. Enable `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow runs fail visibly and upload results, but do not write production Heartbeat or send business Telegram.
+5. Compare central results with the Theme Repo. Any mismatch blocks Cutover.
+6. Disable the six Theme monitoring workflows, set central `MONITOR_MODE=live`, and transfer Error Worker deployment ownership.
+7. Observe 48 hours for duplicate/missing Push, Schedule, D1, Telegram and Heartbeat events.
+8. Remove `monitoring/**` and old workflows from Theme only after stability. Retain the Layer 3 snippet/layout references/cart-error reporting and a pointer to this Repo.
 
 Rollback: re-enable the Theme workflows, set central mode to `shadow`, and deploy the Error Worker commit preceding the namespace rollout. No reverse D1 migration is required.
