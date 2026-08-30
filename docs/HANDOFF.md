@@ -40,6 +40,10 @@ Updated: 2026-08-30 (MYT)
   - GitHub delivery `8534ebd4-a461-11f1-86be-7987820d3fff` reached the Dispatcher and returned HTTP 202 in 0.06 seconds.
   - Central variables/secrets and Dispatcher App/Webhook secrets are synchronized. The active private-key fingerprint is `SHA256:jDLaQwEqxqoAzk7XW53PJuA0L633l3MK2XlocDwvaYM=`; the unused retry key was deleted.
   - `scripts/sync-github-app-webhook.ps1` authenticates and probes the hook before rotating any shared secret, then verifies the final hook and a signed Dispatcher ping.
+- Controlled Theme commit `cfa1bf975157088fc44f32af0023574b2c46c2cc` changed no storefront files or rendered content. GitHub delivery `fc7cd1ea-a464-11f1-8a91-d04cef06f4e8` dispatched the exact SHA once; replaying the same delivery returned `duplicate: true` and did not create another Workflow run.
+- Central Post-deploy run [`33308733492`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33308733492) completed successfully: all 13 Journeys passed on their first attempt with no Storefront failures or transient retries.
+- Central Post-deploy run [`33311151713`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33311151713) also completed successfully: 13/13 Journeys, no failures, no missing results, no transient retries and no sensitive-pattern evidence files.
+- Central Post-deploy run [`33312648953`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33312648953) completed the third validation with the same result: 13/13 Journeys, no failures, missing results or transient retries, and a clean evidence scan. Post-deploy validation is now `3/3`.
 
 ## Production resources
 
@@ -61,6 +65,8 @@ The GitHub App, installation and Dispatcher authentication are complete. The rem
 
 Never copy credentials into this public Repo, logs or artifacts.
 
+The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at a plain PowerShell prompt. It was revoked immediately, disappeared from the Cloudflare token list, and was never stored in GitHub. It must not be reused. When replacement credentials are ready, run `scripts/configure-production-secrets.ps1` and paste values only after the numbered hidden-input prompt appears; never paste a credential at a normal `PS>` prompt.
+
 ## Required validation before Shadow
 
 1. Send one controlled no-content Theme `main` Push and verify the Dispatcher launches exactly one Central Post-deploy run for the exact full SHA. Replay its delivery ID and confirm deduplication.
@@ -71,17 +77,16 @@ Never copy credentials into this public Repo, logs or artifacts.
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter as of this update: Central Daily `0/3`; Central Post-deploy `0/3`. WIF, exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping and selected-repository installation all pass. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started.
+Validation counter as of this update: Central Daily `0/3`; Central Post-deploy `3/3`. All three Post-deploy runs used the same exact no-content Theme SHA and the same 13-Journey matrix; each finished with 13/13 first-attempt successes, no Storefront failures, no transient retries and clean evidence scans. WIF, exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping, delivery deduplication and selected-repository installation all pass. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started.
 
 ## Next actions in order
 
-1. Add the remaining least-privilege Cloudflare and Telegram secrets; verify they do not appear in logs or artifacts.
-2. Perform the controlled Theme Push/duplicate-delivery test described above.
-3. Run Central Layer 2 Daily three times and Post-deploy three times; all six must complete without Storefront false failures or monitor rate-limit masking.
-4. Manually validate Layer 3 self-test, Layer 4 realtime/daily WIF queries, Worker health, D1 writes, Telegram failure notification and recovery notification.
-5. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
-6. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
-7. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
+1. Run Central Layer 2 Daily three times; all three must complete without Storefront false failures or monitor rate-limit masking.
+2. When the owner is ready, create a replacement least-privilege Cloudflare token and add the Cloudflare/Telegram secrets through the hidden-input setup script; verify they do not appear in logs or artifacts.
+3. Manually validate Layer 3 self-test, Layer 4 realtime/daily WIF queries, Worker health, D1 writes, Telegram failure notification and recovery notification.
+4. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
+5. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
+6. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
 
 ## Cutover and rollback
 
