@@ -164,6 +164,10 @@ jobs:
           MONITOR_COMMIT: ${{ needs.plan.outputs.source_sha }}
           MONITOR_SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
           MONITOR_RETRY_DELAY_SECONDS: ${{ inputs.retry_delay_seconds || 60 }}
+          # GitHub-hosted browsers share cloud egress ranges. A short pause was
+          # insufficient after a complete Shopify cart/checkout journey and
+          # caused the following iPhone journey to receive persistent 429s.
+          MONITOR_WRITE_COOLDOWN_MS: "600000"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/run-layer2-batch.mjs
       - name: Upload evidence and results
