@@ -321,8 +321,8 @@ function buildLegacyLayer2Matrix(config, cadence = 'hourly') {
       const android = devices.find((device) => device.id === 'android-chromium' && device.hourly);
       const desktop = devices.find((device) => device.id === 'desktop-chromium' && device.hourly);
       if (!android || !desktop) throw new Layer2ConfigError('hourly matrix needs android-chromium and desktop-chromium');
-      include.push(matrixItem({ site, market: primaryMarket, device: android, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js' }));
-      include.push(matrixItem({ site, market: primaryMarket, device: desktop, journey: 'desktop-smoke', suite: 'light', spec: 'tests/hourly-v2.spec.js' }));
+      include.push(matrixItem({ site, market: primaryMarket, device: android, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true }));
+      include.push(matrixItem({ site, market: primaryMarket, device: desktop, journey: 'desktop-smoke', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true }));
       continue;
     }
 
@@ -344,12 +344,12 @@ function buildLegacyLayer2Matrix(config, cadence = 'hourly') {
             }
             include.push(matrixItem({
               site, market, device: android, journey: `cart-offers-${tab.slot}`,
-              suite: 'full', spec: 'tests/cart-offers.spec.js', flow: 'cart-offers', rule: rules.join(','),
+              suite: 'full', spec: 'tests/cart-offers.spec.js', flow: 'cart-offers', rule: rules.join(','), writesCart: true,
             }));
           }
           include.push(matrixItem({
             site, market, device: android, journey: 'cart-offers-safeguards',
-            suite: 'full', spec: 'tests/cart-offers.spec.js', flow: 'cart-offers', rule: 'gift-picker,bulk-actions,multi-tab',
+            suite: 'full', spec: 'tests/cart-offers.spec.js', flow: 'cart-offers', rule: 'gift-picker,bulk-actions,multi-tab', writesCart: true,
           }));
           continue;
         }
@@ -363,6 +363,7 @@ function buildLegacyLayer2Matrix(config, cadence = 'hourly') {
           suite: 'full',
           spec: commerceSpec,
           flow: isExistingCommerceFlow ? promotion.type : promotion.id,
+          writesCart: true,
         }));
       }
     }
@@ -380,13 +381,14 @@ function buildLegacyLayer2Matrix(config, cadence = 'hourly') {
         journey: 'atomic-social-add',
         suite: 'full',
         spec: 'tests/social-webview.spec.js',
+        writesCart: true,
       }));
     }
 
     // Cross-device checks focus on interaction, cart summary and checkout.
     for (const device of devices.filter((entry) => entry.daily)) {
       for (const market of site.markets) {
-        include.push(matrixItem({ site, market, device, journey: 'core-checkout', suite: 'full', spec: 'tests/core-checkout.spec.js' }));
+        include.push(matrixItem({ site, market, device, journey: 'core-checkout', suite: 'full', spec: 'tests/core-checkout.spec.js', writesCart: true }));
       }
     }
   }
@@ -464,7 +466,7 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
       if (!desktop) throw new Layer2ConfigError('daily matrix needs desktop-chromium');
       for (const market of site.markets) {
         include.push(matrixItem({
-          site, market, device: desktop, journey: 'desktop-smoke', suite: 'light', spec: 'tests/hourly-v2.spec.js',
+          site, market, device: desktop, journey: 'desktop-smoke', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true,
         }));
       }
     }
