@@ -1,6 +1,6 @@
 # APGO Central Monitoring Handoff
 
-Updated: 2026-08-28 (MYT)
+Updated: 2026-08-30 (MYT)
 
 ## Current state
 
@@ -10,6 +10,7 @@ Updated: 2026-08-28 (MYT)
 - Central `main` is protected: PR required, `test` required, force-push/deletion disabled.
 - Central mode is deliberately safe: `MONITOR_MODE=shadow` and `MONITOR_SCHEDULE_ENABLED=false`.
 - Existing Theme Repo workflows remain the official alert source. Do not disable them yet.
+- Theme compatibility fix `e8a9bfa` restored explicit `apgo-my` Layer 2/4 heartbeats and multi-site health parsing; Layer 3/4 namespaced heartbeats were verified healthy on 2026-08-30.
 - No Shopify product, discount, inventory, tracking or customer-facing Theme behavior was changed by this migration.
 
 ## Completed
@@ -26,6 +27,9 @@ Updated: 2026-08-28 (MYT)
 - Invalid Dispatcher signatures return 401; Layer 3 authenticated self-test and namespaced Layer 1 heartbeat were verified.
 - Unit, contract, Worker dry-run, YAML and GitHub `monitoring-ci` checks pass.
 - GitHub secret scanning and push protection are enabled with no current alerts.
+- Central fix `b6d1bbe` removes the confirmed Layer 2 image/mobile-option test races, limits cart writes to the top three advertising targets, adds read-only rotation and a persistent-429 circuit breaker.
+- Error Worker version `c656b275-8273-4c79-ad83-90573435f5b0` classifies Storefront Web Pixels as Shopify Platform and suppresses only all-leaving hidden Cart fetch aborts from Digest alerts.
+- Central WIF provider `apgo-storefront-monitoring` is restricted to immutable central repository ID `1349617089`; GA4 discovery succeeded without a JSON key.
 
 ## Production resources
 
@@ -52,12 +56,6 @@ Create private App `APGO Storefront Monitor` and install it only on the Theme an
 
 The Dispatcher currently has no GitHub App secrets, so real Theme Push dispatch is not active yet.
 
-### Google WIF
-
-Create provider `apgo-storefront-monitoring` restricted to immutable repository ID `1349617089`, grant its principal `roles/iam.workloadIdentityUser` on the existing GA4 reader service account, and set the complete provider resource as `GCP_WIF_PROVIDER`.
-
-The local Google session currently requires interactive reauthentication. Do not create a JSON key. Keep the old Theme provider during Shadow.
-
 ### Remaining central secrets
 
 - New least-privilege `CF_API_TOKEN` scoped only to the two Workers, D1 and KV.
@@ -74,6 +72,8 @@ Never copy credentials into this public Repo, logs or artifacts.
 5. Confirm Browser artifacts contain no Cart token, customer data or credentials.
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
+
+Validation counter as of this update: the first repaired Central Daily Shadow run was intentionally not counted because an older Theme Post-deploy run overlapped it and caused synthetic rate limiting; the overlapping jobs were cancelled and a clean Daily rerun is pending. Post-deploy validation has not started. WIF, exact Theme SHA, GA4 discovery, Android read-only and iPhone read-only checks have already passed.
 
 ## Cutover and rollback
 
