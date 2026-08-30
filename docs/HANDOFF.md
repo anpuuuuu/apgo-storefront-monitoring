@@ -33,6 +33,13 @@ Updated: 2026-08-30 (MYT)
 - Mobile option checks derive radio groups from customer-visible labels. This fixes the confirmed false failure where an iPhone run selected a CSS-hidden desktop scent control; the reported detergent path now passes locally in iPhone WebKit.
 - Error Worker version `c656b275-8273-4c79-ad83-90573435f5b0` classifies Storefront Web Pixels as Shopify Platform and suppresses only all-leaving hidden Cart fetch aborts from Digest alerts.
 - Central WIF provider `apgo-storefront-monitoring` is restricted to immutable central repository ID `1349617089`; GA4 discovery succeeded without a JSON key.
+- Private GitHub App `APGO Storefront Monitor` was recreated and verified on 2026-08-30:
+  - App ID `4769661`; installation ID `157699088`; webhook hook ID `672281738`.
+  - Repository selection is `selected` and contains only `anpuuuuu/apgo-theme` and `anpuuuuu/apgo-storefront-monitoring`.
+  - Permissions are Contents Read, Actions Read/Write and mandatory Metadata Read; the only subscribed event is Push.
+  - GitHub delivery `8534ebd4-a461-11f1-86be-7987820d3fff` reached the Dispatcher and returned HTTP 202 in 0.06 seconds.
+  - Central variables/secrets and Dispatcher App/Webhook secrets are synchronized. The active private-key fingerprint is `SHA256:jDLaQwEqxqoAzk7XW53PJuA0L633l3MK2XlocDwvaYM=`; the unused retry key was deleted.
+  - `scripts/sync-github-app-webhook.ps1` authenticates and probes the hook before rotating any shared secret, then verifies the final hook and a signed Dispatcher ping.
 
 ## Production resources
 
@@ -46,29 +53,17 @@ Updated: 2026-08-30 (MYT)
 
 ## Remaining external setup
 
-### GitHub App
-
-Create private App `APGO Storefront Monitor` and install it only on the Theme and central repositories.
-
-- Permissions: Contents Read, Actions Write, Metadata Read.
-- Event: Push.
-- Webhook: `https://apgo-monitor-dispatcher.wadeyeh.workers.dev/github/webhook`.
-- Central variable: `MONITOR_GITHUB_APP_ID`.
-- Central secrets: `MONITOR_GITHUB_APP_PRIVATE_KEY`, `MONITOR_GITHUB_WEBHOOK_SECRET`.
-- Dispatcher Worker secrets: `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, Telegram token/chat ID.
-
-The Dispatcher currently has no GitHub App secrets, so real Theme Push dispatch is not active yet.
-
-### Remaining central secrets
+The GitHub App, installation and Dispatcher authentication are complete. The remaining credentials are:
 
 - New least-privilege `CF_API_TOKEN` scoped only to the two Workers, D1 and KV.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (copy from the secure owner record or rotate; existing secret values cannot be read back).
+- Add the Telegram token/chat ID to both the central Repository Secrets and Dispatcher Worker secrets.
 
 Never copy credentials into this public Repo, logs or artifacts.
 
 ## Required validation before Shadow
 
-1. Verify a signed Theme `main` Push dispatches the exact full SHA once and duplicate delivery IDs are ignored.
+1. Send one controlled no-content Theme `main` Push and verify the Dispatcher launches exactly one Central Post-deploy run for the exact full SHA. Replay its delivery ID and confirm deduplication.
 2. Manually run Layer 2 Daily three times and Post-deploy three times.
 3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider.
 4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts.
@@ -76,7 +71,17 @@ Never copy credentials into this public Repo, logs or artifacts.
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter as of this update: Central Daily `0/3`; Central Post-deploy `0/3`. The first repaired Central Daily Shadow run was intentionally not counted because an older Theme Post-deploy run overlapped it and caused synthetic rate limiting. WIF, exact Theme SHA and GA4 discovery pass. Official Android full commerce passes. The clean Theme Post-deploy run `33304748324` has already passed its MY/SG iPhone WebKit read-only checks, including the previously failing detergent option path, and is still completing the remaining serial journeys. Central validation resumes only after that run finishes. The 48-hour Shadow window has not started.
+Validation counter as of this update: Central Daily `0/3`; Central Post-deploy `0/3`. WIF, exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping and selected-repository installation all pass. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started.
+
+## Next actions in order
+
+1. Add the remaining least-privilege Cloudflare and Telegram secrets; verify they do not appear in logs or artifacts.
+2. Perform the controlled Theme Push/duplicate-delivery test described above.
+3. Run Central Layer 2 Daily three times and Post-deploy three times; all six must complete without Storefront false failures or monitor rate-limit masking.
+4. Manually validate Layer 3 self-test, Layer 4 realtime/daily WIF queries, Worker health, D1 writes, Telegram failure notification and recovery notification.
+5. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
+6. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
+7. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
 
 ## Cutover and rollback
 
