@@ -22,13 +22,15 @@
 
 配置集中在 `config/sites.json`。每天通过 WIF 只读 GA4 最近 3 天的付费 Landing Page，去除 UTM 后合并并优先选择有 ATC/Checkout 的页面，最多检查 10 个；GA4/Auth 失败明确报告 `AD_DISCOVERY_FAILED`。
 
-- 每天 MYT 09:37：Paid Social 使用 Facebook Android 与 Instagram iPhone WebView；其他付费渠道使用 Pixel 7 与 iPhone Safari；Desktop 每个市场只跑基础 Smoke。
+- 每天 MYT 09:37：流量最高的 3 个可购买 Landing Page 使用 Android 与 iPhone 执行完整 Add → Cart → Checkout；其余最多 7 个页面按日期轮换 Android/iPhone，只读验证页面、图片、选项、CTA 与正确 PDP；Desktop 每个市场只跑基础 Smoke。
 - 每次 `main` Theme 更新后等待 3 分钟，再对当前广告页面执行 Android＋iPhone Add → Cart → Checkout；连续 Push 只保留最新 Commit。
 - 没有付费 Landing Page 时仍执行 Android＋iPhone 核心购买流程，不会产生空的绿色结果。
 - Theme Contract 改为结构校验：确认 Tab/Offer/Promotion 字段和引用有效，但不再复制保存每个后台 Block 的固定预期。
 - 广告 Journey 在运行时发现页面上的 Promotion、Gift Picker、Cart Offer 和限购状态，验证选项不会被重新渲染清空，并逐项比对 Cart Snapshot 与 Checkout。
 - 第一次失败保存证据，等待 60 秒后以全新 Browser Context 复测；第二次成功记为 `transient/flaky` 且不发正式告警，两次失败才告警。Cloudflare 持续挑战与 Fixture 过期有独立分类。
 - 所有 Journey 在一个 Batch Runner 内严格串行；Chromium 与 WebKit 各安装一次，每个 Journey 使用全新 Browser Context 并保留独立证据。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
+- `/cart`、`/checkout`、`/account` 等系统 Landing Page 使用专用 Smoke，不会被误当作商品页执行加购。
+- Cart 写入 Journey 之间有冷却；同一 Journey 两次持续收到 429 后打开 Circuit Breaker，后续 Cart 写入会被标记为 `MONITOR_RATE_LIMIT` 并停止，不会用限流覆盖最初的 Storefront 证据。只读 Journey 仍可继续。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
 - Shopify `429` 优先尊重 `Retry-After`，否则使用 15/45/90 秒退避；持续 429 明确报告为 `MONITOR_RATE_LIMIT`，不归类为商品配置失效，也不自动重跑整套真实写入。
 - 失败上传 Screenshot、Trace、Console、Network 和最终 Cart JSON；关闭 Video，避免单次失败产生数百 MB 无效文件。
@@ -60,6 +62,8 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - `Failed to fetch` 代表顾客浏览器当次请求确实失败，但不能单独证明 Shopify 服务器故障；必须结合 Layer 1 Cart API、Layer 2 加购测试与不同网络数量判断。监控不会自动重试 Cart POST，避免服务器已收到第一次请求时造成重复加购。
 - Browser Error Digest 会列出受影响页面、独立网络数与客户端类型。`meta-externalads`、`facebookexternalhit`、`Facebot` 等社交预览/广告爬虫会在写入 D1 前被过滤；真实顾客使用的 Facebook 内置浏览器 `FB_IAB` 仍会保留。
 - 两小时内同 Signature 不重复；已知 Signature 可在 `known_signatures.muted=1` 静音。
+- `/web-pixels@.../worker.modern.js` 与 “Failed to load web worker for pixel” 归类为 `SHOPIFY-PLATFORM/WEB-PIXELS`；至少 15 Sessions、5 Networks 才告警，六小时内不重复。
+- Cart Network Signature 若全部事件都发生在 `page_leaving=1` 且页面为 `hidden/unloaded`，仍保留 D1 证据但不进入 Digest；只要有任何可见或非离页样本，原有门槛继续生效。
 - Signature 计算前会把 message 中的 URL、≥8 位十六进制串与 ≥4 位数字归一化为占位符，同一错误家族不会因内嵌地址/编号而裂成多个 Signature（分类判断仍使用原文）。
 - `page_url` 只保存 path，`source` 只保存 origin + path；query string 会被移除，Gift Card identifier 会被替换为 `[redacted]`。
 - Error 保留 30 天，Alert 保留 90 天。
