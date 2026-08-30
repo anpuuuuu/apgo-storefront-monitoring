@@ -466,6 +466,8 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
     const primaryMarket = site.markets.find((market) => market.id === 'MY') || site.markets[0];
     const fullTargetKeys = selectFullAdTargetKeys(targets, 3);
     const rotationDay = process.env.MONITOR_ROTATION_DAY || new Date().toISOString().slice(0, 10);
+    const adReadOnly = [];
+    const adWriters = [];
 
     if (cadence === 'daily') {
       const desktop = devices.find((device) => device.id === 'desktop-chromium' && device.daily);
@@ -507,7 +509,8 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
         const deviceMode = mode === 'full' && (discovery.nonWritingPurchaseDevices || []).includes(id)
           ? 'read-only'
           : mode;
-        include.push(adMatrixItem(site, market, device, target, cadence, deviceMode));
+        const item = adMatrixItem(site, market, device, target, cadence, deviceMode);
+        (item.writesCart ? adWriters : adReadOnly).push(item);
       }
     }
 
@@ -518,10 +521,10 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
       const android = devices.find((entry) => entry.id === 'android-chromium' && entry[flag]);
       const iphone = devices.find((entry) => entry.id === 'iphone-webkit' && entry[flag]);
       if (!android || !iphone) throw new Layer2ConfigError(`${cadence} fallback requires Android and iPhone`);
-      include.push(matrixItem({
+      adWriters.push(matrixItem({
         site, market: primaryMarket, device: android, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true,
       }));
-      include.push({
+      adReadOnly.push({
         ...matrixItem({
           site, market: primaryMarket, device: iphone, journey: 'mobile-safari-ui', suite: 'light',
           spec: 'tests/ad-landing.spec.js', flow: 'mobile-ui', mode: 'read-only', writesCart: false,
@@ -530,6 +533,11 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
         channel: 'Layer 2 fallback',
       });
     }
+
+    // Complete browser/UI checks before any synthetic cart write. This keeps
+    // cloud WebKit out of the Storefront throttle window created by Android
+    // commerce journeys, while the serial Batch still spaces every writer.
+    include.push(...adReadOnly, ...adWriters);
   }
 
   unique(include, 'matrix job');
