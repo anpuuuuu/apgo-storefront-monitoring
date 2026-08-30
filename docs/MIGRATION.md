@@ -55,7 +55,7 @@ Create provider `apgo-storefront-monitoring` in project `helical-canto-505209-j7
 ## Shadow and Cutover
 
 1. Add the remaining central `CF_API_TOKEN`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; also add Telegram credentials to the Dispatcher.
-2. Send one controlled no-content Theme `main` Push and verify exact-SHA dispatch plus delivery-ID deduplication.
+2. Send one controlled no-content Theme `main` Push and verify exact-SHA dispatch plus delivery-ID deduplication. Completed on 2026-08-30 with Theme SHA `cfa1bf975157088fc44f32af0023574b2c46c2cc` and delivery `fc7cd1ea-a464-11f1-8a91-d04cef06f4e8`; replay was deduplicated.
 3. Run Layer 2 Daily and Post-deploy three times each, Layer 3 self-test, Layer 4 validate, Dispatcher invalid-signature tests and Worker health.
 4. Enable `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow runs fail visibly and upload results, but do not write production Heartbeat or send business Telegram.
 5. Compare central results with the Theme Repo. Any mismatch blocks Cutover.

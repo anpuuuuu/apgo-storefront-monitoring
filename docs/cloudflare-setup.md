@@ -19,6 +19,8 @@
 
 Cloudflare API Token 最少需要 Account / Workers Scripts / Edit 与 Account / D1 / Edit。Token 不要写入文件、Workflow 日志或对话。
 
+建议在 Repo 根目录运行 `& .\scripts\configure-production-secrets.ps1`，并且只在脚本显示 `1/3`、`2/3`、`3/3` 的隐藏输入提示后粘贴对应值。若终端只显示普通 `PS>` 提示，先不要粘贴任何 Token。脚本会先在线验证凭证，再通过标准输入写入 GitHub Secrets，不会显示凭证内容。
+
 中央迁移还需要 `MONITOR_HEARTBEAT_TOKEN_CURRENT`（旧 Token，过渡后删除）、Dispatcher GitHub App PEM 与 Webhook Secret。完整顺序见 `docs/MIGRATION.md`。
 
 ## 首次部署
