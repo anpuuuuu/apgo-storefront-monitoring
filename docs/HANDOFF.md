@@ -27,7 +27,10 @@ Updated: 2026-08-30 (MYT)
 - Invalid Dispatcher signatures return 401; Layer 3 authenticated self-test and namespaced Layer 1 heartbeat were verified.
 - Unit, contract, Worker dry-run, YAML and GitHub `monitoring-ci` checks pass.
 - GitHub secret scanning and push protection are enabled with no current alerts.
-- Central fix `b6d1bbe` removes the confirmed Layer 2 image/mobile-option test races, limits cart writes to the top three advertising targets, adds read-only rotation and a persistent-429 circuit breaker.
+- Layer 2 image verification now treats an incomplete lazy image as diagnostic and fails only on a completed zero-width image or an explicit network/HTTP failure; both originally reported images returned HTTP 200.
+- Android Chromium owns the top-three Add → Cart → Checkout writes. GitHub-hosted iPhone WebKit is read-only after isolated official runs reproduced persistent Shopify 429 even after ten-minute cooldown; local iPhone WebKit full commerce still passes.
+- All read-only journeys run before cart writers, writers remain serial with ten-minute cooling, and persistent 429 opens a `MONITOR_RATE_LIMIT` circuit instead of becoming a Storefront failure.
+- Mobile option checks derive radio groups from customer-visible labels. This fixes the confirmed false failure where an iPhone run selected a CSS-hidden desktop scent control; the reported detergent path now passes locally in iPhone WebKit.
 - Error Worker version `c656b275-8273-4c79-ad83-90573435f5b0` classifies Storefront Web Pixels as Shopify Platform and suppresses only all-leaving hidden Cart fetch aborts from Digest alerts.
 - Central WIF provider `apgo-storefront-monitoring` is restricted to immutable central repository ID `1349617089`; GA4 discovery succeeded without a JSON key.
 
@@ -73,7 +76,7 @@ Never copy credentials into this public Repo, logs or artifacts.
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter as of this update: the first repaired Central Daily Shadow run was intentionally not counted because an older Theme Post-deploy run overlapped it and caused synthetic rate limiting; the overlapping jobs were cancelled and a clean Daily rerun is pending. Post-deploy validation has not started. WIF, exact Theme SHA, GA4 discovery, Android read-only and iPhone read-only checks have already passed.
+Validation counter as of this update: Central Daily `0/3`; Central Post-deploy `0/3`. The first repaired Central Daily Shadow run was intentionally not counted because an older Theme Post-deploy run overlapped it and caused synthetic rate limiting. WIF, exact Theme SHA and GA4 discovery pass. Official Android full commerce passes. The clean Theme Post-deploy run `33304748324` has already passed its MY/SG iPhone WebKit read-only checks, including the previously failing detergent option path, and is still completing the remaining serial journeys. Central validation resumes only after that run finishes. The 48-hour Shadow window has not started.
 
 ## Cutover and rollback
 

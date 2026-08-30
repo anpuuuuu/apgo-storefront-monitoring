@@ -22,15 +22,15 @@
 
 配置集中在 `config/sites.json`。每天通过 WIF 只读 GA4 最近 3 天的付费 Landing Page，去除 UTM 后合并并优先选择有 ATC/Checkout 的页面，最多检查 10 个；GA4/Auth 失败明确报告 `AD_DISCOVERY_FAILED`。
 
-- 每天 MYT 09:37：流量最高的 3 个可购买 Landing Page 使用 Android 与 iPhone 执行完整 Add → Cart → Checkout；其余最多 7 个页面按日期轮换 Android/iPhone，只读验证页面、图片、选项、CTA 与正确 PDP；Desktop 每个市场只跑基础 Smoke。
-- 每次 `main` Theme 更新后等待 3 分钟，再对当前广告页面执行 Android＋iPhone Add → Cart → Checkout；连续 Push 只保留最新 Commit。
-- 没有付费 Landing Page 时仍执行 Android＋iPhone 核心购买流程，不会产生空的绿色结果。
+- 每天 MYT 09:37：流量最高的 3 个可购买 Landing Page 由 Android Chromium 执行完整 Add → Cart → Checkout；iPhone WebKit 对相同页面验证 Safari 渲染、图片、CTA 与选项状态，但不写购物车。其余最多 7 个页面按日期轮换 Android/iPhone，只读验证；Desktop 每个市场只跑基础 Smoke。
+- 每次 `main` Theme 更新后等待 3 分钟，再按同一职责检查当前广告页面：Android 负责完整购买，iPhone 负责 Safari 只读交互；连续 Push 只保留最新 Commit。
+- 没有付费 Landing Page 时仍执行一条 Android 核心购买流程和一条 iPhone 只读 UI 流程，不会产生空的绿色结果。
 - Theme Contract 改为结构校验：确认 Tab/Offer/Promotion 字段和引用有效，但不再复制保存每个后台 Block 的固定预期。
 - 广告 Journey 在运行时发现页面上的 Promotion、Gift Picker、Cart Offer 和限购状态，验证选项不会被重新渲染清空，并逐项比对 Cart Snapshot 与 Checkout。
 - 第一次失败保存证据，等待 60 秒后以全新 Browser Context 复测；第二次成功记为 `transient/flaky` 且不发正式告警，两次失败才告警。Cloudflare 持续挑战与 Fixture 过期有独立分类。
-- 所有 Journey 在一个 Batch Runner 内严格串行；Chromium 与 WebKit 各安装一次，每个 Journey 使用全新 Browser Context 并保留独立证据。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
+- 所有 Journey 在一个 Batch Runner 内严格串行；先完成全部只读检查，再执行 Android 购物车写入。Chromium 与 WebKit 各安装一次，每个 Journey 使用全新 Browser Context 并保留独立证据。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
 - `/cart`、`/checkout`、`/account` 等系统 Landing Page 使用专用 Smoke，不会被误当作商品页执行加购。
-- Cart 写入 Journey 之间有冷却；同一 Journey 两次持续收到 429 后打开 Circuit Breaker，后续 Cart 写入会被标记为 `MONITOR_RATE_LIMIT` 并停止，不会用限流覆盖最初的 Storefront 证据。只读 Journey 仍可继续。
+- Cart 写入 Journey 之间有 10 分钟冷却；同一 Journey 两次持续收到 429 后打开 Circuit Breaker，后续 Cart 写入会被标记为 `MONITOR_RATE_LIMIT` 并停止，不会用限流覆盖最初的 Storefront 证据。GitHub-hosted WebKit 不执行 Cart API 写入，因为隔离测试已确认其持续触发 Shopify 429；本地 iPhone WebKit 完整流程仍通过，不能把云端限流误报为顾客 Safari 故障。
 - 每个旅程开始/结束清空购物车；UA 为 `APGO-HealthCheck`；GA4/Meta/TikTok/Clarity 等请求被阻止。
 - Shopify `429` 优先尊重 `Retry-After`，否则使用 15/45/90 秒退避；持续 429 明确报告为 `MONITOR_RATE_LIMIT`，不归类为商品配置失效，也不自动重跑整套真实写入。
 - 失败上传 Screenshot、Trace、Console、Network 和最终 Cart JSON；关闭 Video，避免单次失败产生数百 MB 无效文件。
