@@ -108,7 +108,11 @@ function cartSignature(cart) {
   )));
 }
 
-async function waitForCartStable(page, { timeoutMs = 20_000, intervalMs = 1_500, stableSamples = 2 } = {}) {
+// One successful cart read can legitimately arrive after the 15s/45s
+// customer-like 429 backoff in cartRequest(). Keep enough wall-clock budget
+// for a second confirming sample instead of calling an already-correct AIOD
+// gift cart unstable merely because the first read was throttled.
+async function waitForCartStable(page, { timeoutMs = 75_000, intervalMs = 1_500, stableSamples = 2 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let previous = '';
   let stable = 0;
