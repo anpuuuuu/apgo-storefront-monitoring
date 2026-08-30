@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   Layer2ConfigError,
   buildLayer2Matrix,
+  isSystemLandingPath,
   loadLayer2Config,
   validateLayer2Config,
 } from '../scripts/layer2-config.mjs';
@@ -37,6 +38,37 @@ test('daily matrix sends paid social pages to both social mobile profiles and ke
   assert.deepEqual(adJobs.map((entry) => entry.device).sort(), ['facebook-android', 'instagram-iphone']);
   assert.equal(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').length, 2);
   assert(adJobs.every((entry) => entry.landingPath === '/products/demo'));
+  assert(adJobs.every((entry) => entry.mode === 'full' && entry.writesCart === true));
+});
+
+test('only the top three purchasable ad targets write cart and remaining targets rotate read-only', () => {
+  process.env.MONITOR_ROTATION_DAY = '2026-08-30';
+  const targets = Array.from({ length: 5 }, (_, index) => ({
+    site: 'apgo-my', market: index === 4 ? 'SG' : 'MY', landingPath: `/products/demo-${index}`,
+    channel: 'Paid Search', sessions: 10 - index,
+  }));
+  const matrix = buildLayer2Matrix(cloneConfig(), 'daily', targets);
+  const ads = matrix.include.filter((entry) => entry.flow === 'ad-landing');
+  const full = ads.filter((entry) => entry.mode === 'full');
+  const readOnly = ads.filter((entry) => entry.mode === 'read-only');
+  assert.equal(full.length, 6);
+  assert.equal(new Set(full.map((entry) => entry.landingPath)).size, 3);
+  assert(full.every((entry) => entry.writesCart));
+  assert.equal(readOnly.length, 2);
+  assert(readOnly.every((entry) => !entry.writesCart));
+  delete process.env.MONITOR_ROTATION_DAY;
+});
+
+test('system advertising paths use a non-mutating cart smoke journey', () => {
+  assert.equal(isSystemLandingPath('/cart'), true);
+  assert.equal(isSystemLandingPath('/products/cart-cleaner'), false);
+  const matrix = buildLayer2Matrix(cloneConfig(), 'daily', [{
+    site: 'apgo-my', market: 'MY', landingPath: '/cart', channel: 'Paid Social', sessions: 5,
+  }]);
+  const jobs = matrix.include.filter((entry) => entry.flow === 'ad-landing');
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].mode, 'cart-smoke');
+  assert.equal(jobs[0].writesCart, false);
 });
 
 test('duplicate promotion ids fail as TEST_CONFIG_STALE', () => {

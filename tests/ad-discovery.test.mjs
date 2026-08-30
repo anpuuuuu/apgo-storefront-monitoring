@@ -57,6 +57,21 @@ test('target count obeys the configured maximum', () => {
   assert.equal(buildAdTargets(rows, copy).length, 2);
 });
 
+test('target budget preserves the highest-ranked page from each market', () => {
+  const copy = structuredClone(config);
+  copy.monitoring.layer2.adDiscovery.maxLandingPages = 3;
+  const rows = [
+    ...Array.from({ length: 4 }, (_, index) => ({
+      landingPage: `/products/my-${index}`,
+      channel: 'Paid Search', country: 'Malaysia', sessions: 100 - index,
+    })),
+    { landingPage: '/products/sg-top', channel: 'Paid Search', country: 'Singapore', sessions: 1 },
+  ];
+  const targets = buildAdTargets(rows, copy);
+  assert.equal(targets.length, 3);
+  assert(targets.some((target) => target.market === 'SG' && target.landingPath === '/products/sg-top'));
+});
+
 test('the same landing page is tested once even when several paid channels use it', () => {
   const targets = buildAdTargets([
     { landingPage: '/products/a?utm_source=google', channel: 'Paid Search', country: 'Malaysia', sessions: 4 },
