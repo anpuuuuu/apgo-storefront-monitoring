@@ -183,6 +183,8 @@ export function validateLayer2Config(config, { legacy = false, contract = Boolea
   for (const id of [
     ...(discovery.paidSocialDevices || []),
     ...(discovery.paidSocialPurchaseDevices || []),
+    ...(discovery.otherPaidPurchaseDevices || []),
+    ...(discovery.nonWritingPurchaseDevices || []),
     ...(discovery.otherPaidDevices || []),
   ]) {
     if (!deviceIds.has(id)) throw new Layer2ConfigError(`adDiscovery references unknown device ${id}`);
@@ -469,9 +471,14 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
       const desktop = devices.find((device) => device.id === 'desktop-chromium' && device.daily);
       if (!desktop) throw new Layer2ConfigError('daily matrix needs desktop-chromium');
       for (const market of site.markets) {
-        include.push(matrixItem({
-          site, market, device: desktop, journey: 'desktop-smoke', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true,
-        }));
+        include.push({
+          ...matrixItem({
+            site, market, device: desktop, journey: 'desktop-smoke', suite: 'light',
+            spec: 'tests/ad-landing.spec.js', flow: 'desktop-smoke', mode: 'read-only', writesCart: false,
+          }),
+          landingPath: '/',
+          channel: 'Layer 2 desktop smoke',
+        });
       }
     }
 
@@ -490,28 +497,38 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
       // profiles for purchase journeys and retain in-app profiles for read-only UI.
       const purchaseIds = isPaidSocial
         ? discovery.paidSocialPurchaseDevices
-        : discovery.otherPaidDevices;
+        : discovery.otherPaidPurchaseDevices;
       const selectedIds = mode === 'full'
-        ? purchaseIds
+        ? [...purchaseIds, ...(discovery.nonWritingPurchaseDevices || [])]
         : [rotatingDeviceId(readOnlyIds, target, rotationDay, targetIndex)];
       for (const id of selectedIds) {
         const device = devices.find((entry) => entry.id === id && entry[cadence === 'daily' ? 'daily' : 'postDeploy']);
         if (!device) throw new Layer2ConfigError(`${cadence} ad target requires enabled device ${id}`);
-        include.push(adMatrixItem(site, market, device, target, cadence, mode));
+        const deviceMode = mode === 'full' && (discovery.nonWritingPurchaseDevices || []).includes(id)
+          ? 'read-only'
+          : mode;
+        include.push(adMatrixItem(site, market, device, target, cadence, deviceMode));
       }
     }
 
     // GA4 may legitimately return no paid landing pages. Keep a real mobile
     // purchase check so a no-ad day never turns Layer 2 into a no-op.
     if (!targets.length) {
-      for (const id of ['android-chromium', 'iphone-webkit']) {
-        const flag = cadence === 'daily' ? 'daily' : 'postDeploy';
-        const device = devices.find((entry) => entry.id === id && entry[flag]);
-        if (!device) throw new Layer2ConfigError(`${cadence} fallback requires ${id}`);
-        include.push(matrixItem({
-          site, market: primaryMarket, device, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true,
-        }));
-      }
+      const flag = cadence === 'daily' ? 'daily' : 'postDeploy';
+      const android = devices.find((entry) => entry.id === 'android-chromium' && entry[flag]);
+      const iphone = devices.find((entry) => entry.id === 'iphone-webkit' && entry[flag]);
+      if (!android || !iphone) throw new Layer2ConfigError(`${cadence} fallback requires Android and iPhone`);
+      include.push(matrixItem({
+        site, market: primaryMarket, device: android, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true,
+      }));
+      include.push({
+        ...matrixItem({
+          site, market: primaryMarket, device: iphone, journey: 'mobile-safari-ui', suite: 'light',
+          spec: 'tests/ad-landing.spec.js', flow: 'mobile-ui', mode: 'read-only', writesCart: false,
+        }),
+        landingPath: '/',
+        channel: 'Layer 2 fallback',
+      });
     }
   }
 
