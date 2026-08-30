@@ -148,17 +148,32 @@ async function exercisePersistedOptions(page) {
     return;
   }
 
-  const groups = await page.locator('main input[type="radio"][name]:not([data-gift-variant])').evaluateAll((nodes) => (
-    [...new Set(nodes.map((node) => node.name))].slice(0, 3)
-  ));
+  // Some PDPs render desktop and mobile radio groups at the same time and hide
+  // one set with CSS. Build the groups from visible labels, because the radio
+  // itself may intentionally be visually hidden inside a customer-facing chip.
+  const visibleOptions = await page.locator('main label:visible').evaluateAll((labels) => labels.flatMap((label) => {
+    const forId = label.getAttribute('for');
+    const radio = label.querySelector('input[type="radio"][name]:not([data-gift-variant]):not([disabled])')
+      || (forId ? document.getElementById(forId) : null);
+    if (!(radio instanceof HTMLInputElement) || radio.type !== 'radio' || radio.disabled || radio.hasAttribute('data-gift-variant')) return [];
+    return [{ name: radio.name, id: radio.id, value: radio.value }];
+  }));
+  const groups = [...new Set(visibleOptions.map((option) => option.name).filter(Boolean))].slice(0, 3);
   for (const name of groups) {
+    const options = visibleOptions.filter((option) => option.name === name);
+    if (options.length < 2) continue;
+    const chosen = options[1];
+    const escapedId = String(chosen.id || '').replace(/([\\"'\[\]#.:])/g, '\\$1');
     const escapedName = String(name).replace(/([\\"'\[\]#.:])/g, '\\$1');
-    const radios = page.locator(`main input[type="radio"][name="${escapedName}"]:not([disabled])`);
-    if (await radios.count() < 2) continue;
-    const radio = radios.nth(1);
-    const id = await radio.getAttribute('id');
-    if (id) await page.locator(`label[for="${id}"]:visible`).first().click();
-    else await radio.locator('xpath=ancestor::label[1]').click();
+    const escapedValue = String(chosen.value).replace(/([\\"'\[\]#.:])/g, '\\$1');
+    const radio = chosen.id
+      ? page.locator(`main input#${escapedId}`)
+      : page.locator(`main label:visible input[type="radio"][name="${escapedName}"][value="${escapedValue}"]`).first();
+    const label = chosen.id
+      ? page.locator(`main label[for="${escapedId}"]:visible`).first()
+      : radio.locator('xpath=ancestor::label[1]');
+    await expect(label, 'only a customer-visible product option may be exercised').toBeVisible();
+    await label.click();
     await page.waitForTimeout(300);
     await expect(radio, 'selected product option must not reset before the remaining choices are complete').toBeChecked();
   }
