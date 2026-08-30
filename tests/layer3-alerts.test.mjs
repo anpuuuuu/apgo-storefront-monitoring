@@ -10,6 +10,7 @@ import {
   isCriticalCartError,
   isIgnoredBrowserNoise,
   isIgnoredUserAgent,
+  isLeavingCartNoise,
   normalizeSignatureText,
   normalizedBrowserSignatureInput,
   originAllowed,
@@ -91,6 +92,7 @@ test('browser signals are classified and noisy platform errors need stronger evi
   assert.equal(classifyBrowserSignal({ kind: 'cart' }), 'cart-network');
   assert.equal(classifyBrowserSignal({ kind: 'cart', stage: 'verified-success' }), 'cart-recovered');
   assert.equal(classifyBrowserSignal({ kind: 'resource', source: 'https://cdn.shopify.com/shopifycloud/shop-js/modules/loader.shop-login-button.js' }), 'shopify-platform');
+  assert.equal(classifyBrowserSignal({ kind: 'rejection', message: 'Failed to load web worker for pixel 2215608474', source: 'https://apgo.my/web-pixels@123/sandbox/worker.modern.js' }), 'shopify-platform');
   assert.equal(classifyBrowserSignal({ kind: 'resource', source: 'https://apgo.my/cdn/fonts/font.woff2' }), 'font-resource');
   assert.equal(classifyBrowserSignal({ kind: 'error', message: 'Required ref productCardLink not found' }), 'theme');
 
@@ -101,6 +103,30 @@ test('browser signals are classified and noisy platform errors need stronger evi
   assert.equal(shouldAlertDigestRow({ category: 'cart-recovered', occurrences: 100, sessions: 100, networks: 50 }), false);
   assert.equal(shouldAlertDigestRow({ category: 'theme', occurrences: 3, sessions: 3, networks: 2 }), true);
   assert.equal(browserRealertMs({ category: 'shopify-platform' }), 6 * 60 * 60_000);
+});
+
+test('cart fetch aborts are suppressed only when every event happened while leaving', () => {
+  const leaving = {
+    category: 'cart-network', occurrences: 4, sessions: 3, networks: 3,
+    leaving_events: 4, visibility_states: 'hidden,unloaded',
+  };
+  assert.equal(isLeavingCartNoise(leaving), true);
+  assert.equal(shouldAlertDigestRow(leaving), false);
+  assert.equal(isLeavingCartNoise({ ...leaving, leaving_events: 3 }), false);
+  assert.equal(shouldAlertDigestRow({ ...leaving, leaving_events: 3 }), true);
+  assert.equal(isLeavingCartNoise({ ...leaving, visibility_states: 'hidden,visible' }), false);
+  assert.equal(shouldAlertDigestRow({ ...leaving, visibility_states: 'hidden,visible' }), true);
+});
+
+test('web pixel digest is labelled as Shopify platform evidence', () => {
+  const message = buildBrowserDigest([{
+    site_id: 'apgo-my', signature: 'pixel', kind: 'rejection', category: 'shopify-platform',
+    sessions: 15, networks: 5, occurrences: 15,
+    message: 'Failed to load web worker for pixel shopify-app-pixel',
+    source: 'https://apgo.my/web-pixels@123/sandbox/worker.modern.js',
+    page_url: '/products/demo', pages: '/products/demo',
+  }]);
+  assert.match(message, /SHOPIFY-PLATFORM\/WEB-PIXELS/);
 });
 
 test('equivalent uncaught platform errors share stable signature input', () => {

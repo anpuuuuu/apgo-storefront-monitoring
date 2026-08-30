@@ -292,7 +292,7 @@ export function validateLayer2Config(config, { legacy = false, contract = Boolea
   return config;
 }
 
-function matrixItem({ site, market, device, journey, suite, spec, flow = '', rule = '' }) {
+function matrixItem({ site, market, device, journey, suite, spec, flow = '', rule = '', mode = '', writesCart = false }) {
   return {
     id: [site.id, market?.id || 'default', device.id, journey].join('-'),
     site: site.id,
@@ -304,6 +304,8 @@ function matrixItem({ site, market, device, journey, suite, spec, flow = '', rul
     spec,
     flow,
     rule,
+    mode,
+    writesCart,
   };
 }
 
@@ -400,16 +402,36 @@ function targetId(target) {
     .slice(0, 10);
 }
 
-function adMatrixItem(site, market, device, target, cadence) {
+export function isSystemLandingPath(landingPath) {
+  return /^\/(?:cart|checkout|account|search)(?:\/|$)/i.test(String(landingPath || ''));
+}
+
+export function selectFullAdTargetKeys(targets, limit = 3) {
+  return new Set((targets || [])
+    .filter((target) => !isSystemLandingPath(target.landingPath))
+    .slice(0, Math.max(0, Number(limit) || 0))
+    .map((target) => `${target.site}|${target.market}|${target.landingPath}`));
+}
+
+function rotatingDeviceId(ids, target, rotationDay, index) {
+  const seed = createHash('sha256')
+    .update(`${rotationDay}|${target.site}|${target.market}|${target.landingPath}|${index}`)
+    .digest()[0];
+  return ids[seed % ids.length];
+}
+
+function adMatrixItem(site, market, device, target, cadence, mode) {
   return {
     ...matrixItem({
       site,
       market,
       device,
       journey: `ad-${targetId(target)}`,
-      suite: cadence === 'daily' ? 'full' : 'light',
+      suite: mode === 'full' ? 'full' : 'light',
       spec: 'tests/ad-landing.spec.js',
       flow: 'ad-landing',
+      mode,
+      writesCart: mode === 'full',
     }),
     landingPath: target.landingPath,
     channel: target.channel,
@@ -434,6 +456,8 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
   for (const site of enabledSites) {
     const targets = (adTargets || []).filter((target) => target.site === site.id);
     const primaryMarket = site.markets.find((market) => market.id === 'MY') || site.markets[0];
+    const fullTargetKeys = selectFullAdTargetKeys(targets, 3);
+    const rotationDay = process.env.MONITOR_ROTATION_DAY || new Date().toISOString().slice(0, 10);
 
     if (cadence === 'daily') {
       const desktop = devices.find((device) => device.id === 'desktop-chromium' && device.daily);
@@ -445,14 +469,19 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
       }
     }
 
-    for (const target of targets) {
+    for (const [targetIndex, target] of targets.entries()) {
       const market = site.markets.find((entry) => entry.id === target.market);
       if (!market) throw new Layer2ConfigError(`ad target references unknown market ${target.market}`);
       const ids = target.channel === 'Paid Social' ? discovery.paidSocialDevices : discovery.otherPaidDevices;
-      for (const id of ids) {
+      const key = `${target.site}|${target.market}|${target.landingPath}`;
+      const mode = isSystemLandingPath(target.landingPath)
+        ? 'cart-smoke'
+        : fullTargetKeys.has(key) ? 'full' : 'read-only';
+      const selectedIds = mode === 'full' ? ids : [rotatingDeviceId(ids, target, rotationDay, targetIndex)];
+      for (const id of selectedIds) {
         const device = devices.find((entry) => entry.id === id && entry[cadence === 'daily' ? 'daily' : 'postDeploy']);
         if (!device) throw new Layer2ConfigError(`${cadence} ad target requires enabled device ${id}`);
-        include.push(adMatrixItem(site, market, device, target, cadence));
+        include.push(adMatrixItem(site, market, device, target, cadence, mode));
       }
     }
 
@@ -464,7 +493,7 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
         const device = devices.find((entry) => entry.id === id && entry[flag]);
         if (!device) throw new Layer2ConfigError(`${cadence} fallback requires ${id}`);
         include.push(matrixItem({
-          site, market: primaryMarket, device, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js',
+          site, market: primaryMarket, device, journey: 'mobile-main', suite: 'light', spec: 'tests/hourly-v2.spec.js', writesCart: true,
         }));
       }
     }

@@ -124,6 +124,7 @@ const result = {
   suite: process.env.MONITOR_SUITE || '',
   landingPath: process.env.MONITOR_LANDING_PATH || '',
   channel: process.env.MONITOR_CHANNEL || '',
+  mode: process.env.MONITOR_AD_MODE || '',
   commit: process.env.MONITOR_COMMIT || '',
   advertising: {
     sessions: Number(process.env.MONITOR_AD_SESSIONS || 0),

@@ -52,7 +52,7 @@ export function classifyBrowserSignal({ kind, message, source, stage }) {
   if (kind === 'cart' && stage === 'verified-success') return 'cart-recovered';
   if (kind === 'cart') return 'cart-network';
   const evidence = `${message || ''} ${source || ''} ${stage || ''}`;
-  if (/\/shopifycloud\/shop-js\/modules\/|\/cdn\/wpm\/|#moveItemsToDefaultSlot|shop-(?:login|user-recognition|cart-sync)/i.test(evidence)) {
+  if (/\/shopifycloud\/shop-js\/modules\/|\/cdn\/wpm\/|\/web-pixels@|Failed to load web worker for pixel|#moveItemsToDefaultSlot|shop-(?:login|user-recognition|cart-sync)/i.test(evidence)) {
     return 'shopify-platform';
   }
   if ((kind === 'resource' || stage === 'style') && /\/cdn\/fonts\//i.test(evidence)) return 'font-resource';
@@ -63,7 +63,7 @@ function platformFamily(evidence) {
   if (/shop-login|login-button/i.test(evidence)) return 'shop-login';
   if (/user-recognition/i.test(evidence)) return 'user-recognition';
   if (/cart-sync|moveItemsToDefaultSlot/i.test(evidence)) return 'cart-sync';
-  if (/\/cdn\/wpm\//i.test(evidence)) return 'web-pixels';
+  if (/\/cdn\/wpm\/|\/web-pixels@|Failed to load web worker for pixel/i.test(evidence)) return 'web-pixels';
   const moduleName = String(evidence).match(/\/shopifycloud\/shop-js\/modules\/([^/?#\s]+)/i)?.[1];
   return moduleName || 'shop-js';
 }
@@ -95,10 +95,24 @@ export function shouldAlertDigestRow(row) {
   const sessions = Number(row.sessions || 0);
   const networks = Number(row.networks || 0);
   if (category === 'cart-recovered') return false;
+  if (category === 'cart-network' && isLeavingCartNoise(row)) return false;
   if (category === 'shopify-platform') return occurrences >= 15 && sessions >= 15 && networks >= 5;
   if (category === 'font-resource') return sessions >= 20 && networks >= 5;
   if (category === 'cart-network') return occurrences >= 3 && sessions >= 3 && networks >= 2;
   return networks >= 2;
+}
+
+export function isLeavingCartNoise(row) {
+  const occurrences = Number(row.occurrences || 0);
+  const leavingEvents = Number(row.leaving_events || 0);
+  const states = String(row.visibility_states || '')
+    .split(',')
+    .map((state) => state.trim())
+    .filter(Boolean);
+  return occurrences > 0
+    && leavingEvents >= occurrences
+    && states.length > 0
+    && states.every((state) => state === 'hidden' || state === 'unloaded');
 }
 
 export function browserRealertMs(row) {
@@ -382,8 +396,11 @@ export function buildBrowserDigest(rows, eligibleCount = rows.length) {
       ['Mobile browser', Number(row.mobile_browser_sessions || 0)],
       ['Desktop browser', Number(row.desktop_browser_sessions || 0)],
     ].filter(([, count]) => count > 0);
+    const category = row.category || classifyBrowserSignal(row);
+    const family = category === 'shopify-platform' ? platformFamily(`${row.message || ''} ${row.source || ''}`) : '';
+    const categoryLabel = family === 'web-pixels' ? 'SHOPIFY-PLATFORM/WEB-PIXELS' : String(category).toUpperCase();
     const lines = [
-      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${String(row.category || classifyBrowserSignal(row)).toUpperCase()} · ${row.sessions} sessions${networkEvidence} · ${row.occurrences} events`,
+      `${index + 1}. ${String(row.kind).toUpperCase()}${stage} · ${categoryLabel} · ${row.sessions} sessions${networkEvidence} · ${row.occurrences} events`,
       String(row.message || 'Unknown browser error').slice(0, 220),
       `Pages (${pages.length}): ${pageEvidence}`,
     ];

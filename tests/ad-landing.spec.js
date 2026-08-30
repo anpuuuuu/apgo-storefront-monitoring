@@ -15,20 +15,29 @@ const { prepareMarket, assertHeaderCartCount, enterCheckout, clearAfterCheckout,
 const marketId = String(process.env.MONITOR_MARKET || '').toUpperCase();
 const landingPath = process.env.MONITOR_LANDING_PATH || '';
 const channel = process.env.MONITOR_CHANNEL || '';
+const adMode = process.env.MONITOR_AD_MODE || 'full';
 
 async function assertVisibleImages(page) {
-  const images = await page.locator('main img, [role="main"] img').evaluateAll((nodes) => nodes
-    .filter((node) => {
-      const rect = node.getBoundingClientRect();
-      return rect.width > 20 && rect.height > 20 && rect.bottom > 0 && rect.top < window.innerHeight;
-    })
-    .slice(0, 12)
-    .map((node) => ({ src: node.currentSrc || node.src, complete: node.complete, width: node.naturalWidth })));
-  expect(images.length, 'advertising landing page should expose a visible product or campaign image').toBeGreaterThan(0);
-  for (const image of images) {
-    expect(image.src, 'visible advertising image source').toBeTruthy();
-    expect(image.complete && image.width > 0, `advertising image failed to load: ${image.src}`).toBe(true);
-  }
+  await expect.poll(async () => {
+    const images = await page.locator('main img, [role="main"] img').evaluateAll((nodes) => nodes
+      .filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 20 && rect.height > 20 && rect.bottom > 0 && rect.top < window.innerHeight;
+      })
+      .slice(0, 12)
+      .map((node) => ({ src: node.currentSrc || node.src, complete: node.complete, width: node.naturalWidth })));
+    if (!images.length) return 'waiting-for-visible-image';
+    const missingSource = images.find((image) => !image.src);
+    if (missingSource) return 'visible-image-has-no-source';
+    const failed = images.find((image) => image.complete && image.width === 0);
+    if (failed) return `failed:${failed.src}`;
+    const loading = images.find((image) => !image.complete);
+    return loading ? `loading:${loading.src}` : 'loaded';
+  }, {
+    timeout: 15_000,
+    intervals: [250, 500, 1_000],
+    message: 'visible advertising images must finish loading without a broken image response',
+  }).toBe('loaded');
 }
 
 async function assertRuntimePromotions(page) {
@@ -106,6 +115,32 @@ async function exercisePersistedOptions(page) {
     await expect(select, 'selected product option must survive the component update').toHaveValue(chosen);
   }
 
+  const inlineGroups = page.locator('main [data-apgo-cc-option-group]');
+  const confirmModal = page.locator('[data-apgo-cc-confirm-modal]');
+  const useMobileConfirm = await page.evaluate(() => window.matchMedia?.('(max-width: 1023px)').matches)
+    && await inlineGroups.count() > 0
+    && await confirmModal.count() > 0;
+  if (useMobileConfirm) {
+    const opener = inlineGroups.first().locator('label:visible, [role="button"]:visible, button:visible').first();
+    await expect(opener, 'mobile option chip must be available to open the confirmation modal').toBeVisible();
+    await opener.click();
+    await expect(confirmModal, 'mobile option interaction must open the real confirmation modal').toHaveClass(/is-open/);
+    const confirmGroups = confirmModal.locator('[data-apgo-cc-confirm-option-group]');
+    for (let index = 0; index < Math.min(await confirmGroups.count(), 3); index += 1) {
+      const chips = confirmGroups.nth(index).locator('[data-apgo-cc-confirm-chip]:not([disabled])');
+      if (await chips.count() < 2) continue;
+      const chip = chips.nth(1);
+      const chosen = await chip.getAttribute('data-option-value');
+      await chip.click();
+      await expect(chip, 'modal option selection must remain active').toHaveClass(/is-active/);
+      await expect(confirmGroups.nth(index).locator('[data-apgo-cc-confirm-option-current]'), 'modal option label must retain the selected value').toHaveText(chosen);
+      await expect(inlineGroups.nth(index).locator('input[type="radio"]:checked'), 'modal selection must persist into the product form').toHaveValue(chosen);
+    }
+    await confirmModal.locator('button[data-apgo-cc-confirm-close]:visible').click();
+    await expect(confirmModal).not.toHaveClass(/is-open/);
+    return;
+  }
+
   const groups = await page.locator('main input[type="radio"][name]:not([data-gift-variant])').evaluateAll((nodes) => (
     [...new Set(nodes.map((node) => node.name))].slice(0, 3)
   ));
@@ -116,7 +151,7 @@ async function exercisePersistedOptions(page) {
     const radio = radios.nth(1);
     const id = await radio.getAttribute('id');
     if (id) await page.locator(`label[for="${id}"]:visible`).first().click();
-    else await radio.check({ force: true });
+    else await radio.locator('xpath=ancestor::label[1]').click();
     await page.waitForTimeout(300);
     await expect(radio, 'selected product option must not reset before the remaining choices are complete').toBeChecked();
   }
@@ -207,16 +242,30 @@ for (const site of sites) {
   if (!market) throw new TestConfigStaleError(`${site.id} has no market ${marketId}`);
   if (!landingPath) throw new TestConfigStaleError('MONITOR_LANDING_PATH is missing');
 
-  test(`[v2][${site.id}][${market.id}] ${channel} advertising purchase ${landingPath}`, async ({ monitorPage }) => {
+  test(`[v2][${site.id}][${market.id}] ${channel} advertising ${adMode} ${landingPath}`, async ({ monitorPage }) => {
     await prepareMarket(monitorPage, site, market);
     await navigateAdvertisingLanding(monitorPage, site);
     await assertNoAccessChallenge(monitorPage, `advertising landing ${landingPath}`);
     await expect(monitorPage.locator('main, [role="main"]').first()).toBeVisible();
+
+    if (adMode === 'cart-smoke') {
+      const cart = await cartJson(monitorPage);
+      expect(cart.total_price, 'cart total must equal final line prices').toBe(cart.items.reduce((sum, item) => sum + item.final_line_price, 0));
+      await expect(monitorPage.locator('a[href*="/checkout"], button[name="checkout"], [data-checkout-button]').first(), 'cart landing must expose checkout').toBeVisible();
+      await assertHeaderCartCount(monitorPage, cart.item_count);
+      return;
+    }
+
     await assertVisibleImages(monitorPage);
     await assertRuntimePromotions(monitorPage);
 
     const add = await reachPurchasableArea(monitorPage, site);
     await exercisePersistedOptions(monitorPage);
+    if (adMode === 'read-only') {
+      expect(await selectedVariantId(monitorPage, add), 'read-only advertising check must resolve an active variant').toBeGreaterThan(0);
+      await expect(add, 'read-only advertising check must leave the purchase action usable').toBeVisible();
+      return;
+    }
     const variantId = await addRuntimeProduct(monitorPage, add);
     let cart = await waitForCartStable(monitorPage);
     expect(cart.items.some((item) => Number(item.variant_id) === variantId), 'selected advertising variant must exist in cart').toBe(true);
