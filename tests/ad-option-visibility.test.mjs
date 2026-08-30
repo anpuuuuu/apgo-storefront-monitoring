@@ -11,5 +11,6 @@ test('advertising option exercise ignores CSS-hidden desktop or mobile radio gro
   assert(fallbackStart >= 0 && fallbackEnd > fallbackStart, 'visible-option fallback must be present');
   assert.match(fallback, /page\.locator\('main label:visible'\)\.evaluateAll/);
   assert.match(fallback, /only a customer-visible product option may be exercised/);
+  assert.match(fallback, /not\(\[name\^="apgo-bundle-"\]\)/);
   assert.doesNotMatch(fallback, /page\.locator\('main input\[type="radio"\]\[name\]/);
 });

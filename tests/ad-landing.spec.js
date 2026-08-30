@@ -83,14 +83,34 @@ async function navigateAdvertisingLanding(page, site) {
   return response;
 }
 
+async function prepareBundleBuilder(page) {
+  const quickSelect = page.locator('[data-apgo-bundle-action="all-same"]:visible').first();
+  if (!await quickSelect.isVisible().catch(() => false)) return false;
+
+  const current = page.locator('[data-apgo-bundle-current]:visible').first();
+  const maximum = page.locator('[data-apgo-bundle-max]:visible').first();
+  const required = Number((await maximum.textContent().catch(() => ''))?.trim());
+  expect(required, 'bundle builder must expose its required scent quantity').toBeGreaterThan(0);
+
+  await quickSelect.click();
+  await expect(current, 'bundle quick selection must fill the required scent quantity').toHaveText(String(required));
+  await page.waitForTimeout(300);
+  await expect(current, 'bundle scent allocation must survive the component update').toHaveText(String(required));
+  await expect(page.locator('[data-apgo-bundle-add]:visible').first(), 'completed bundle must expose Add to cart').toBeVisible();
+  await expect(page.locator('[data-apgo-bundle-buy-now]:visible').first(), 'completed bundle must expose Buy now').toBeVisible();
+  return true;
+}
+
 async function reachPurchasableArea(page, site) {
   const addSelector = [
     '[data-apgo-cc-add]:visible', '[data-apgo-cc-buybar-add]:visible', '[data-apgo-add]:visible',
+    '[data-apgo-bundle-add]:visible',
     'form[action*="/cart/add"] button[name="add"]:visible',
     '.apgo-event-linked-banner-zone__button--add:visible',
     '.apgo-event-featured-banner__btn--add:visible',
     '.apgo-event-listing-card__btn--add:visible',
   ].join(', ');
+  await prepareBundleBuilder(page);
   let add = page.locator(addSelector).first();
   if (await add.isVisible().catch(() => false)) return add;
 
@@ -105,6 +125,7 @@ async function reachPurchasableArea(page, site) {
   const href = await productLink.getAttribute('href');
   await page.goto(new URL(href, site.baseUrl).href, { waitUntil: 'domcontentloaded' });
   await assertNoAccessChallenge(page, 'advertising PDP rendering');
+  await prepareBundleBuilder(page);
   add = page.locator(addSelector).first();
   await expect(add, 'advertising product add button').toBeVisible({ timeout: 30_000 });
   return add;
@@ -153,9 +174,9 @@ async function exercisePersistedOptions(page) {
   // itself may intentionally be visually hidden inside a customer-facing chip.
   const visibleOptions = await page.locator('main label:visible').evaluateAll((labels) => labels.flatMap((label) => {
     const forId = label.getAttribute('for');
-    const radio = label.querySelector('input[type="radio"][name]:not([data-gift-variant]):not([disabled])')
+    const radio = label.querySelector('input[type="radio"][name]:not([data-gift-variant]):not([disabled]):not([name^="apgo-bundle-"])')
       || (forId ? document.getElementById(forId) : null);
-    if (!(radio instanceof HTMLInputElement) || radio.type !== 'radio' || radio.disabled || radio.hasAttribute('data-gift-variant')) return [];
+    if (!(radio instanceof HTMLInputElement) || radio.type !== 'radio' || radio.disabled || radio.hasAttribute('data-gift-variant') || radio.name.startsWith('apgo-bundle-')) return [];
     return [{ name: radio.name, id: radio.id, value: radio.value }];
   }));
   const groups = [...new Set(visibleOptions.map((option) => option.name).filter(Boolean))].slice(0, 3);
