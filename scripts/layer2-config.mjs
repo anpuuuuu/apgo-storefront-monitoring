@@ -180,7 +180,11 @@ export function validateLayer2Config(config, { legacy = false, contract = Boolea
     }
   }
   const deviceIds = new Set(layer2.devices.map((device) => device.id));
-  for (const id of [...(discovery.paidSocialDevices || []), ...(discovery.otherPaidDevices || [])]) {
+  for (const id of [
+    ...(discovery.paidSocialDevices || []),
+    ...(discovery.paidSocialPurchaseDevices || []),
+    ...(discovery.otherPaidDevices || []),
+  ]) {
     if (!deviceIds.has(id)) throw new Layer2ConfigError(`adDiscovery references unknown device ${id}`);
   }
 
@@ -474,12 +478,22 @@ export function buildLayer2Matrix(config, cadence = 'post-deploy', adTargets = [
     for (const [targetIndex, target] of targets.entries()) {
       const market = site.markets.find((entry) => entry.id === target.market);
       if (!market) throw new Layer2ConfigError(`ad target references unknown market ${target.market}`);
-      const ids = target.channel === 'Paid Social' ? discovery.paidSocialDevices : discovery.otherPaidDevices;
+      const isPaidSocial = target.channel === 'Paid Social';
+      const readOnlyIds = isPaidSocial ? discovery.paidSocialDevices : discovery.otherPaidDevices;
       const key = `${target.site}|${target.market}|${target.landingPath}`;
       const mode = isSystemLandingPath(target.landingPath)
         ? 'cart-smoke'
         : fullTargetKeys.has(key) ? 'full' : 'read-only';
-      const selectedIds = mode === 'full' ? ids : [rotatingDeviceId(ids, target, rotationDay, targetIndex)];
+      // Exact in-app user agents remain valuable for rendering/interaction checks,
+      // but combining them with Playwright's HeadlessChrome client hints can trip
+      // storefront bot protection during Cart writes. Use standard mobile browser
+      // profiles for purchase journeys and retain in-app profiles for read-only UI.
+      const purchaseIds = isPaidSocial
+        ? discovery.paidSocialPurchaseDevices
+        : discovery.otherPaidDevices;
+      const selectedIds = mode === 'full'
+        ? purchaseIds
+        : [rotatingDeviceId(readOnlyIds, target, rotationDay, targetIndex)];
       for (const id of selectedIds) {
         const device = devices.find((entry) => entry.id === id && entry[cadence === 'daily' ? 'daily' : 'postDeploy']);
         if (!device) throw new Layer2ConfigError(`${cadence} ad target requires enabled device ${id}`);
