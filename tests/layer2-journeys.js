@@ -17,9 +17,9 @@ function moneyMinor(text) {
   return Math.round(Number(matches[matches.length - 1]) * 100);
 }
 
-async function prepareMarket(page, site, market) {
+async function prepareMarket(page, site, market, { clear = true } = {}) {
   await setMarket(page, site.baseUrl, market.countryCode);
-  await clearCart(page);
+  if (clear) await clearCart(page);
   const currency = await page.evaluate(() => window.Shopify?.currency?.active || '');
   expect(currency, `${site.id} storefront currency`).toBe(market.currency);
   await expect(page.locator('body')).toContainText(market.priceMarker);
@@ -52,9 +52,13 @@ async function assertHomepage(page, site, { followCampaign = false } = {}) {
 }
 
 async function assertHeaderCartCount(page, expectedCount) {
-  const bubble = page.locator('[data-testid="cart-bubble"]:visible').first();
+  // The theme intentionally hides the numeric bubble when the count is zero,
+  // but the span still contains the canonical "0" for accessibility updates.
+  // Requiring :visible makes an empty, correct cart look like a timeout.
+  const bubble = page.locator('header [data-testid="cart-bubble"], [data-header-section] [data-testid="cart-bubble"]').first();
+  await expect(bubble, 'header cart count element must exist').toHaveCount(1);
   await expect.poll(async () => {
-    const text = await bubble.textContent().catch(() => '');
+    const text = await bubble.textContent();
     return Number(String(text).trim() || 0);
   }, { message: 'Header cart count did not match Shopify cart item_count' }).toBe(expectedCount);
 }

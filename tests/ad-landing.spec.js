@@ -243,7 +243,10 @@ for (const site of sites) {
   if (!landingPath) throw new TestConfigStaleError('MONITOR_LANDING_PATH is missing');
 
   test(`[v2][${site.id}][${market.id}] ${channel} advertising ${adMode} ${landingPath}`, async ({ monitorPage }) => {
-    await prepareMarket(monitorPage, site, market);
+    // These modes use a new browser context. Clearing an already-empty cart
+    // would turn a read-only check into a /cart/clear.js write and can create
+    // the very 429 that this monitor is trying to diagnose.
+    await prepareMarket(monitorPage, site, market, { clear: adMode === 'full' });
     await navigateAdvertisingLanding(monitorPage, site);
     await assertNoAccessChallenge(monitorPage, `advertising landing ${landingPath}`);
     await expect(monitorPage.locator('main, [role="main"]').first()).toBeVisible();
@@ -251,7 +254,9 @@ for (const site of sites) {
     if (adMode === 'cart-smoke') {
       const cart = await cartJson(monitorPage);
       expect(cart.total_price, 'cart total must equal final line prices').toBe(cart.items.reduce((sum, item) => sum + item.final_line_price, 0));
-      await expect(monitorPage.locator('a[href*="/checkout"], button[name="checkout"], [data-checkout-button]').first(), 'cart landing must expose checkout').toBeVisible();
+      if (cart.item_count > 0) {
+        await expect(monitorPage.locator('a[href*="/checkout"], button[name="checkout"], [data-checkout-button]').first(), 'a non-empty cart landing must expose checkout').toBeVisible();
+      }
       await assertHeaderCartCount(monitorPage, cart.item_count);
       return;
     }

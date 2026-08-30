@@ -37,6 +37,7 @@ test('daily matrix sends paid social pages to both social mobile profiles and ke
   const adJobs = matrix.include.filter((entry) => entry.flow === 'ad-landing');
   assert.deepEqual(adJobs.map((entry) => entry.device).sort(), ['facebook-android', 'instagram-iphone']);
   assert.equal(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').length, 2);
+  assert(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').every((entry) => entry.writesCart));
   assert(adJobs.every((entry) => entry.landingPath === '/products/demo'));
   assert(adJobs.every((entry) => entry.mode === 'full' && entry.writesCart === true));
 });
