@@ -36,6 +36,7 @@
           "Singapore": "SG"
         },
         "paidSocialDevices": ["facebook-android", "instagram-iphone"],
+        "paidSocialPurchaseDevices": ["android-chromium", "iphone-webkit"],
         "otherPaidDevices": ["android-chromium", "iphone-webkit"]
       },
       "devices": [

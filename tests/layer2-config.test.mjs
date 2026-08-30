@@ -29,17 +29,31 @@ test('post-deploy matrix falls back to Android and iPhone when GA4 has no paid p
   assert(matrix.include.every((entry) => entry.journey === 'mobile-main'));
 });
 
-test('daily matrix sends paid social pages to both social mobile profiles and keeps desktop smoke', () => {
+test('daily matrix uses standard mobile browsers for paid social purchase journeys', () => {
   const matrix = buildLayer2Matrix(cloneConfig(), 'daily', [{
     site: 'apgo-my', market: 'MY', landingPath: '/products/demo', channel: 'Paid Social',
     sessions: 8, addToCarts: 2, checkouts: 1,
   }]);
   const adJobs = matrix.include.filter((entry) => entry.flow === 'ad-landing');
-  assert.deepEqual(adJobs.map((entry) => entry.device).sort(), ['facebook-android', 'instagram-iphone']);
+  assert.deepEqual(adJobs.map((entry) => entry.device).sort(), ['android-chromium', 'iphone-webkit']);
   assert.equal(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').length, 2);
   assert(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').every((entry) => entry.writesCart));
   assert(adJobs.every((entry) => entry.landingPath === '/products/demo'));
   assert(adJobs.every((entry) => entry.mode === 'full' && entry.writesCart === true));
+});
+
+test('paid social read-only targets retain rotating in-app browser coverage', () => {
+  process.env.MONITOR_ROTATION_DAY = '2026-08-30';
+  const targets = Array.from({ length: 4 }, (_, index) => ({
+    site: 'apgo-my', market: 'MY', landingPath: `/products/social-${index}`,
+    channel: 'Paid Social', sessions: 10 - index,
+  }));
+  const matrix = buildLayer2Matrix(cloneConfig(), 'daily', targets);
+  const readOnly = matrix.include.filter((entry) => entry.flow === 'ad-landing' && entry.mode === 'read-only');
+  assert.equal(readOnly.length, 1);
+  assert(['facebook-android', 'instagram-iphone'].includes(readOnly[0].device));
+  assert.equal(readOnly[0].writesCart, false);
+  delete process.env.MONITOR_ROTATION_DAY;
 });
 
 test('only the top three purchasable ad targets write cart and remaining targets rotate read-only', () => {
