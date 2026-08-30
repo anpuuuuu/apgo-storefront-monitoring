@@ -26,7 +26,8 @@ test('dynamic Layer 2 is not blocked by an obsolete legacy product fixture', () 
 test('post-deploy matrix falls back to Android and iPhone when GA4 has no paid pages', () => {
   const matrix = buildLayer2Matrix(cloneConfig(), 'post-deploy', []);
   assert.deepEqual(matrix.include.map((entry) => entry.device).sort(), ['android-chromium', 'iphone-webkit']);
-  assert(matrix.include.every((entry) => entry.journey === 'mobile-main'));
+  assert.equal(matrix.include.find((entry) => entry.device === 'android-chromium').writesCart, true);
+  assert.equal(matrix.include.find((entry) => entry.device === 'iphone-webkit').writesCart, false);
 });
 
 test('daily matrix uses standard mobile browsers for paid social purchase journeys', () => {
@@ -37,9 +38,12 @@ test('daily matrix uses standard mobile browsers for paid social purchase journe
   const adJobs = matrix.include.filter((entry) => entry.flow === 'ad-landing');
   assert.deepEqual(adJobs.map((entry) => entry.device).sort(), ['android-chromium', 'iphone-webkit']);
   assert.equal(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').length, 2);
-  assert(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').every((entry) => entry.writesCart));
+  assert(matrix.include.filter((entry) => entry.journey === 'desktop-smoke').every((entry) => !entry.writesCart));
   assert(adJobs.every((entry) => entry.landingPath === '/products/demo'));
-  assert(adJobs.every((entry) => entry.mode === 'full' && entry.writesCart === true));
+  assert.equal(adJobs.find((entry) => entry.device === 'android-chromium').mode, 'full');
+  assert.equal(adJobs.find((entry) => entry.device === 'android-chromium').writesCart, true);
+  assert.equal(adJobs.find((entry) => entry.device === 'iphone-webkit').mode, 'read-only');
+  assert.equal(adJobs.find((entry) => entry.device === 'iphone-webkit').writesCart, false);
 });
 
 test('paid social read-only targets retain rotating in-app browser coverage', () => {
@@ -50,9 +54,10 @@ test('paid social read-only targets retain rotating in-app browser coverage', ()
   }));
   const matrix = buildLayer2Matrix(cloneConfig(), 'daily', targets);
   const readOnly = matrix.include.filter((entry) => entry.flow === 'ad-landing' && entry.mode === 'read-only');
-  assert.equal(readOnly.length, 1);
-  assert(['facebook-android', 'instagram-iphone'].includes(readOnly[0].device));
-  assert.equal(readOnly[0].writesCart, false);
+  const inApp = readOnly.filter((entry) => ['facebook-android', 'instagram-iphone'].includes(entry.device));
+  assert.equal(inApp.length, 1);
+  assert.equal(readOnly.filter((entry) => entry.device === 'iphone-webkit').length, 3);
+  assert(readOnly.every((entry) => entry.writesCart === false));
   delete process.env.MONITOR_ROTATION_DAY;
 });
 
@@ -66,10 +71,10 @@ test('only the top three purchasable ad targets write cart and remaining targets
   const ads = matrix.include.filter((entry) => entry.flow === 'ad-landing');
   const full = ads.filter((entry) => entry.mode === 'full');
   const readOnly = ads.filter((entry) => entry.mode === 'read-only');
-  assert.equal(full.length, 6);
+  assert.equal(full.length, 3);
   assert.equal(new Set(full.map((entry) => entry.landingPath)).size, 3);
   assert(full.every((entry) => entry.writesCart));
-  assert.equal(readOnly.length, 2);
+  assert.equal(readOnly.length, 5);
   assert(readOnly.every((entry) => !entry.writesCart));
   delete process.env.MONITOR_ROTATION_DAY;
 });
