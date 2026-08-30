@@ -8,6 +8,7 @@ const sites = config.sites.filter((site) => site.enabled
   && site.type === 'shopify'
   && (!requestedSite || site.id === requestedSite));
 const monitorSuite = process.env.MONITOR_SUITE || 'light';
+const resourceFailuresByPage = new WeakMap();
 
 if (requestedSite && sites.length === 0) {
   throw new Error(`TEST_CONFIG_STALE: enabled Shopify site ${requestedSite} was not found`);
@@ -36,6 +37,8 @@ const test = base.extend({
   monitorPage: async ({ page, context }, use, testInfo) => {
     const consoleLog = [];
     const networkLog = [];
+    const resourceFailures = new Map();
+    resourceFailuresByPage.set(page, resourceFailures);
     // Runs before every storefront document. The window marker is used by the
     // current snippet; the in-page UA suffix keeps older cached documents inert
     // without changing the browser-shaped HTTP User-Agent Shopify receives.
@@ -51,9 +54,18 @@ const test = base.extend({
     });
     page.on('console', (message) => consoleLog.push(`${message.type()}: ${message.text()}`));
     page.on('pageerror', (error) => consoleLog.push(`pageerror: ${error.message}`));
-    page.on('requestfailed', (request) => networkLog.push(`FAILED ${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`));
+    page.on('requestfailed', (request) => {
+      const failure = request.failure()?.errorText || 'network failure';
+      networkLog.push(`FAILED ${request.method()} ${request.url()} ${failure}`);
+      if (request.resourceType() === 'image' && failure !== 'net::ERR_BLOCKED_BY_CLIENT') {
+        resourceFailures.set(request.url(), failure);
+      }
+    });
     page.on('response', (response) => {
       if (response.status() >= 400) networkLog.push(`${response.status()} ${response.request().method()} ${response.url()}`);
+      if (response.status() >= 400 && response.request().resourceType() === 'image') {
+        resourceFailures.set(response.url(), `HTTP ${response.status()}`);
+      }
     });
     await context.route('**/*', (route) => {
       const url = route.request().url();
@@ -81,6 +93,10 @@ const test = base.extend({
     }
   },
 });
+
+function resourceFailuresFor(page) {
+  return new Map(resourceFailuresByPage.get(page) || []);
+}
 
 async function clearCart(page) {
   await cartRequest(page, '/cart/clear.js', { method: 'POST', headers: { accept: 'application/json' } });
@@ -350,6 +366,7 @@ module.exports = {
   sites,
   TestConfigStaleError,
   assertNoAccessChallenge,
+  resourceFailuresFor,
   clearCart,
   cartJson,
   addItems,

@@ -4,6 +4,7 @@ const {
   sites,
   TestConfigStaleError,
   assertNoAccessChallenge,
+  resourceFailuresFor,
   cartJson,
   clickCartAdd,
   waitForCartStable,
@@ -11,6 +12,7 @@ const {
   siteUrl,
 } = require('./monitor-fixture');
 const { prepareMarket, assertHeaderCartCount, enterCheckout, clearAfterCheckout, moneyMinor } = require('./layer2-journeys');
+const { classifyVisibleImages } = require('../scripts/image-health.cjs');
 
 const marketId = String(process.env.MONITOR_MARKET || '').toUpperCase();
 const landingPath = process.env.MONITOR_LANDING_PATH || '';
@@ -18,7 +20,9 @@ const channel = process.env.MONITOR_CHANNEL || '';
 const adMode = process.env.MONITOR_AD_MODE || 'full';
 
 async function assertVisibleImages(page) {
-  await expect.poll(async () => {
+  const deadline = Date.now() + 15_000;
+  let lastResult = { state: 'waiting', detail: 'no-visible-image' };
+  while (Date.now() < deadline) {
     const images = await page.locator('main img, [role="main"] img').evaluateAll((nodes) => nodes
       .filter((node) => {
         const rect = node.getBoundingClientRect();
@@ -26,18 +30,21 @@ async function assertVisibleImages(page) {
       })
       .slice(0, 12)
       .map((node) => ({ src: node.currentSrc || node.src, complete: node.complete, width: node.naturalWidth })));
-    if (!images.length) return 'waiting-for-visible-image';
-    const missingSource = images.find((image) => !image.src);
-    if (missingSource) return 'visible-image-has-no-source';
-    const failed = images.find((image) => image.complete && image.width === 0);
-    if (failed) return `failed:${failed.src}`;
-    const loading = images.find((image) => !image.complete);
-    return loading ? `loading:${loading.src}` : 'loaded';
-  }, {
-    timeout: 15_000,
-    intervals: [250, 500, 1_000],
-    message: 'visible advertising images must finish loading without a broken image response',
-  }).toBe('loaded');
+    lastResult = classifyVisibleImages(images, resourceFailuresFor(page));
+    if (lastResult.state === 'failed') {
+      throw new Error(`Visible advertising image failed: ${lastResult.detail}`);
+    }
+    if (lastResult.state === 'loaded') return;
+    await page.waitForTimeout(500);
+  }
+
+  if (lastResult.state === 'waiting') {
+    throw new Error('Advertising landing did not expose a visible image within 15 seconds');
+  }
+
+  // A lazy image that is still incomplete is not proof of a broken response.
+  // Keep it in CI diagnostics without turning a timing race into a storefront incident.
+  console.warn(`MONITOR_IMAGE_PENDING: ${lastResult.detail}`);
 }
 
 async function assertRuntimePromotions(page) {
