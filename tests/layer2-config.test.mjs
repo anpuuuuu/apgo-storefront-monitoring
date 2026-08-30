@@ -76,6 +76,11 @@ test('only the top three purchasable ad targets write cart and remaining targets
   assert(full.every((entry) => entry.writesCart));
   assert.equal(readOnly.length, 5);
   assert(readOnly.every((entry) => !entry.writesCart));
+  const firstWriter = matrix.include.findIndex((entry) => entry.writesCart);
+  const lastAdReadOnly = matrix.include.reduce((last, entry, index) => (
+    entry.flow === 'ad-landing' && !entry.writesCart ? index : last
+  ), -1);
+  assert(firstWriter > lastAdReadOnly, 'all ad UI checks must finish before the first cart writer');
   delete process.env.MONITOR_ROTATION_DAY;
 });
 
