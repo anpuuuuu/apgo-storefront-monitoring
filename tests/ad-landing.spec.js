@@ -83,6 +83,23 @@ async function navigateAdvertisingLanding(page, site) {
   return response;
 }
 
+async function centerAndAssertTappable(page, locator, description) {
+  await locator.evaluate((element) => {
+    element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+  });
+  await page.waitForTimeout(150);
+  await expect.poll(async () => locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + (rect.width / 2)));
+    const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + (rect.height / 2)));
+    const hit = document.elementFromPoint(x, y);
+    return Boolean(hit && (hit === element || element.contains(hit)));
+  }), {
+    message: `${description} must not be covered by the sticky buy bar`,
+    timeout: 5_000,
+  }).toBe(true);
+}
+
 async function prepareBundleBuilder(page) {
   const quickSelect = page.locator('[data-apgo-bundle-action="all-same"]:visible').first();
   if (!await quickSelect.isVisible().catch(() => false)) return false;
@@ -151,6 +168,11 @@ async function exercisePersistedOptions(page) {
   if (useMobileConfirm) {
     const opener = inlineGroups.first().locator('label:visible, [role="button"]:visible, button:visible').first();
     await expect(opener, 'mobile option chip must be available to open the confirmation modal').toBeVisible();
+    await expect.poll(() => page.evaluate(() => typeof window.apgoOpenConfirmModal), {
+      message: 'mobile product picker must finish initializing before customer interaction',
+      timeout: 5_000,
+    }).toBe('function');
+    await centerAndAssertTappable(page, opener, 'mobile option chip');
     await opener.click();
     await expect(confirmModal, 'mobile option interaction must open the real confirmation modal').toHaveClass(/is-open/);
     const confirmGroups = confirmModal.locator('[data-apgo-cc-confirm-option-group]');
