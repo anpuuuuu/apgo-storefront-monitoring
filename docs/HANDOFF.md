@@ -1,6 +1,6 @@
 # APGO Central Monitoring Handoff
 
-Updated: 2026-08-30 (MYT)
+Updated: 2026-08-31 (MYT)
 
 ## Current state
 
@@ -44,6 +44,8 @@ Updated: 2026-08-30 (MYT)
 - Central Post-deploy run [`33308733492`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33308733492) completed successfully: all 13 Journeys passed on their first attempt with no Storefront failures or transient retries.
 - Central Post-deploy run [`33311151713`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33311151713) also completed successfully: 13/13 Journeys, no failures, no missing results, no transient retries and no sensitive-pattern evidence files.
 - Central Post-deploy run [`33312648953`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33312648953) completed the third validation with the same result: 13/13 Journeys, no failures, missing results or transient retries, and a clean evidence scan. Post-deploy validation is now `3/3`.
+- The first Daily diagnostic run exposed one transient iPhone WebKit monitor-input issue. Its trace showed the option chip initially covered by the sticky buy bar while Playwright retried scroll/click positions; the picker asset and storefront listener were healthy, and eight isolated iPhone sessions passed. PR [`#21`](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/21) now waits for picker readiness, centers the visible chip and verifies its hit target before the real click. No Theme/storefront code changed.
+- Central Daily runs [`33368898065`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33368898065), [`33371855523`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33371855523) and [`33375533482`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33375533482) each completed with 15/15 first-attempt successes, no failed/missing/transient result, no second-attempt evidence, valid JSON evidence and zero credential/Cart-token pattern hits. Daily validation is now `3/3`.
 
 ## Production resources
 
@@ -77,16 +79,15 @@ The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter as of this update: Central Daily `0/3`; Central Post-deploy `3/3`. All three Post-deploy runs used the same exact no-content Theme SHA and the same 13-Journey matrix; each finished with 13/13 first-attempt successes, no Storefront failures, no transient retries and clean evidence scans. WIF, exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping, delivery deduplication and selected-repository installation all pass. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started.
+Validation counter as of this update: Central Daily `3/3`; Central Post-deploy `3/3`. All three Post-deploy runs used the same exact no-content Theme SHA and the same 13-Journey matrix; all three Daily runs used the exact same Theme SHA and 15-Journey matrix. Every counted run finished on its first attempts with no Storefront failure, missing result or transient retry and with clean evidence scans. WIF, exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping, delivery deduplication and selected-repository installation all pass. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started.
 
 ## Next actions in order
 
-1. Run Central Layer 2 Daily three times; all three must complete without Storefront false failures or monitor rate-limit masking.
-2. When the owner is ready, create a replacement least-privilege Cloudflare token and add the Cloudflare/Telegram secrets through the hidden-input setup script; verify they do not appear in logs or artifacts.
-3. Manually validate Layer 3 self-test, Layer 4 realtime/daily WIF queries, Worker health, D1 writes, Telegram failure notification and recovery notification.
-4. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
-5. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
-6. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
+1. When the owner is ready, create a replacement least-privilege Cloudflare token and add the Cloudflare/Telegram secrets through the hidden-input setup script; verify they do not appear in logs or artifacts.
+2. Manually validate Layer 3 self-test, Layer 4 realtime/daily WIF queries, Worker health, D1 writes, Telegram failure notification and recovery notification.
+3. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
+4. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
+5. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
 
 ## Cutover and rollback
 
