@@ -12,14 +12,19 @@ export const databaseId = config.cloudflare.database_id;
 export const workerUrl = (process.env.MONITOR_WORKER_URL || config.cloudflare.worker_url || '').replace(/\/$/, '');
 export const monitorMode = process.env.MONITOR_MODE || 'shadow';
 
-export function requireEnv() {
+export function missingRequiredEnv({ needsD1 = true, needsHeartbeat = monitorMode === 'live' } = {}) {
   const missing = [];
   if (!propertyId) missing.push('GA4_PROPERTY_ID');
   if (!accessToken) missing.push('GOOGLE_OAUTH_ACCESS_TOKEN');
-  if (!accountId) missing.push('CF_ACCOUNT_ID');
-  if (!cfToken) missing.push('CF_API_TOKEN');
   if (!workerUrl) missing.push('MONITOR_WORKER_URL');
-  if (!process.env.MONITOR_HEARTBEAT_TOKEN) missing.push('MONITOR_HEARTBEAT_TOKEN');
+  if (needsD1 && !accountId) missing.push('CF_ACCOUNT_ID');
+  if (needsD1 && !cfToken) missing.push('CF_API_TOKEN');
+  if (needsHeartbeat && !process.env.MONITOR_HEARTBEAT_TOKEN) missing.push('MONITOR_HEARTBEAT_TOKEN');
+  return missing;
+}
+
+export function requireEnv(options = {}) {
+  const missing = missingRequiredEnv(options);
   if (missing.length) throw new Error(`Required monitoring configuration missing: ${missing.join(', ')}`);
 }
 

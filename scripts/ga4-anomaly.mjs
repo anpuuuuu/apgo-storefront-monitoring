@@ -11,7 +11,8 @@ import {
   workerHealthy,
 } from './monitor-lib.mjs';
 
-requireEnv();
+const validateOnly = process.env.VALIDATE_GA4 === 'true';
+requireEnv({ needsD1: !validateOnly });
 
 const EVENT_NAMES = ['page_view', 'view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
 const settings = config.ga4.realtime;
@@ -114,7 +115,7 @@ const current = realtimeCounts(realtime);
 if (simulated) current.add_to_cart = 0;
 const baseline = baselineCounts(historical);
 
-if (process.env.VALIDATE_GA4 === 'true') {
+if (validateOnly) {
   console.log(JSON.stringify({ mode: 'validate', current, baseline, storefrontHealthy }, null, 2));
   await heartbeat('layer4', { mode: 'validate', current, baseline });
   process.exit(0);
