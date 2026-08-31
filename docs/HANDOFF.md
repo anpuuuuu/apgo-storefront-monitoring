@@ -46,6 +46,8 @@ Updated: 2026-08-31 (MYT)
 - Central Post-deploy run [`33312648953`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33312648953) completed the third validation with the same result: 13/13 Journeys, no failures, missing results or transient retries, and a clean evidence scan. Post-deploy validation is now `3/3`.
 - The first Daily diagnostic run exposed one transient iPhone WebKit monitor-input issue. Its trace showed the option chip initially covered by the sticky buy bar while Playwright retried scroll/click positions; the picker asset and storefront listener were healthy, and eight isolated iPhone sessions passed. PR [`#21`](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/21) now waits for picker readiness, centers the visible chip and verifies its hit target before the real click. No Theme/storefront code changed.
 - Central Daily runs [`33368898065`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33368898065), [`33371855523`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33371855523) and [`33375533482`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33375533482) each completed with 15/15 first-attempt successes, no failed/missing/transient result, no second-attempt evidence, valid JSON evidence and zero credential/Cart-token pattern hits. Daily validation is now `3/3`.
+- PR [`#23`](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/23) separated read-only Layer 4 validation requirements from stateful D1 credentials. Central run [`33378562035`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33378562035) then verified the new Repository-ID-restricted WIF provider, GA4 realtime and historical queries, and Worker health. It read all five funnel events successfully and correctly suppressed the Layer 4 production Heartbeat in Shadow mode.
+- Central self-health run [`33378623513`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33378623513) verified the live Worker endpoint, the fresh namespaced Layer 1 Cron heartbeat, and an authenticated Layer 3 beacon. The self-test wrote `apgo-my:layer3` and immediately read it back as healthy from D1.
 
 ## Production resources
 
@@ -73,18 +75,18 @@ The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at
 
 1. Send one controlled no-content Theme `main` Push and verify the Dispatcher launches exactly one Central Post-deploy run for the exact full SHA. Replay its delivery ID and confirm deduplication.
 2. Manually run Layer 2 Daily three times and Post-deploy three times.
-3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider.
-4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts.
+3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider. Realtime/read-only validation is complete; stateful Daily Primary/Confirm remains pending until the replacement Cloudflare token is configured.
+4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts. Worker/Layer 3/D1 validation is complete; Telegram failure and recovery remain pending.
 5. Confirm Browser artifacts contain no Cart token, customer data or credentials.
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter as of this update: Central Daily `3/3`; Central Post-deploy `3/3`. All three Post-deploy runs used the same exact no-content Theme SHA and the same 13-Journey matrix; all three Daily runs used the exact same Theme SHA and 15-Journey matrix. Every counted run finished on its first attempts with no Storefront failure, missing result or transient retry and with clean evidence scans. WIF, exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping, delivery deduplication and selected-repository installation all pass. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started.
+Validation counter as of this update: Central Daily `3/3`; Central Post-deploy `3/3`. All counted Layer 2 runs finished on their first attempts with no Storefront failure, missing result or transient retry and with clean evidence scans. WIF, Layer 4 realtime/read-only GA4 queries, Worker health, authenticated Layer 3 self-test and namespaced D1 writes now pass in addition to exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping, delivery deduplication and selected-repository installation. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started because stateful Layer 4 Daily and Telegram notification/recovery validation still require the replacement Cloudflare and Telegram credentials.
 
 ## Next actions in order
 
 1. When the owner is ready, create a replacement least-privilege Cloudflare token and add the Cloudflare/Telegram secrets through the hidden-input setup script; verify they do not appear in logs or artifacts.
-2. Manually validate Layer 3 self-test, Layer 4 realtime/daily WIF queries, Worker health, D1 writes, Telegram failure notification and recovery notification.
+2. Configure the credentials, then validate Layer 4 Daily Primary/Confirm plus Telegram failure and recovery. Layer 3 self-test, Layer 4 realtime/read-only WIF, Worker health and namespaced D1 writes are already complete.
 3. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
 4. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
 5. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
