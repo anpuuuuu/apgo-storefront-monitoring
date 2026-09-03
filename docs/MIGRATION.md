@@ -54,6 +54,8 @@ Create provider `apgo-storefront-monitoring` in project `helical-canto-505209-j7
 
 ## Shadow and Cutover
 
+Current exception: on September 3 the owner approved **partial Shadow** while GA4 is deferred. Central `MONITOR_LAYER4_PAUSED=true` blocks Layer 4 scheduled queries and watchdog recovery. Layer 2's non-revenue GA4 advertising discovery remains enabled. This exception permits observation only, not full acceptance or Cutover; see [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md). The complete sequence below remains the full migration gate.
+
 1. Add the remaining central `CF_API_TOKEN`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; also add Telegram credentials to the Dispatcher.
 2. Send one controlled no-content Theme `main` Push and verify exact-SHA dispatch plus delivery-ID deduplication. Completed on 2026-08-30 with Theme SHA `cfa1bf975157088fc44f32af0023574b2c46c2cc` and delivery `fc7cd1ea-a464-11f1-8a91-d04cef06f4e8`; replay was deduplicated.
 3. Run Layer 2 Daily and Post-deploy three times each, Layer 3 self-test, Layer 4 validate, Dispatcher invalid-signature tests and Worker health.

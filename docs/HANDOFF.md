@@ -8,7 +8,8 @@ Updated: 2026-09-03 (MYT)
 - Theme repository: `anpuuuuu/apgo-theme` (`1154313539`).
 - Migration source tag: `monitoring-migration-source-fa976c1`.
 - Central `main` is protected: PR required, `test` required, force-push/deletion disabled.
-- Central mode is deliberately safe: `MONITOR_MODE=shadow` and `MONITOR_SCHEDULE_ENABLED=false`.
+- Partial Shadow observation is active: `MONITOR_MODE=shadow`, `MONITOR_SCHEDULE_ENABLED=true`, `MONITOR_LAYER4_PAUSED=true`.
+- Owner approved observing the other layers while deferring GA4. Started `2026-09-03T09:35:32Z` (MYT September 3, 17:35); earliest review `2026-09-05T09:35:32Z`. This is not full Layer 1–4 acceptance or permission for automatic Cutover. See [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md).
 - Existing Theme Repo workflows remain the official alert source. Do not disable them yet.
 - Theme compatibility fix `e8a9bfa` restored explicit `apgo-my` Layer 2/4 heartbeats and multi-site health parsing; Layer 3/4 namespaced heartbeats were verified healthy on 2026-08-30.
 - No Shopify product, discount, inventory, tracking or customer-facing Theme behavior was changed by this migration.
@@ -89,16 +90,20 @@ The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at
 4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts. Worker/Layer 3/D1 validation and labelled failure/recovery message transport are complete.
 5. Confirm Browser artifacts contain no Cart token, customer data or credentials.
 
-Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
+The owner approved a partial exception on September 3: start Layer 1/2/3 and self-health observation while Layer 4 remains paused and unvalidated. Full acceptance still requires the GA4 checks above. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter: Layer 2 Central Daily `3/3`; Central Post-deploy `3/3`, with clean evidence scans. Credentials, Telegram transport, Dispatcher synchronization, GA4 state isolation and Layer 3 Shadow isolation pass. The 48-hour Shadow window has **not** started: GA4 revenue permission repair is paused by the owner and unrestricted Daily Primary/Confirm acceptance remains pending. Central schedules stay off; old Theme tasks remain official. No new Worker deployment is needed for the verified unauthenticated Shadow self-test path.
+Validation counter: Layer 2 pre-observation Central Daily `3/3`; Central Post-deploy `3/3`, with clean evidence scans. Credentials, Telegram transport, Dispatcher synchronization, GA4 state isolation and Layer 3 Shadow isolation pass. **Partial 48-hour Shadow started September 3, 17:35 MYT.** GA4 permission repair and unrestricted Daily Primary/Confirm remain pending, explicitly excluded rather than marked successful. Old Theme tasks remain official. No Worker deployment was performed to start the observation.
+
+- PR [#29](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/29), `e6485d2`, gates the central Layer 4 schedule and its watchdog recovery with `MONITOR_LAYER4_PAUSED`; explicit manual diagnostics remain available only when intentionally requested. CI passed including 45 Worker/helper tests and 45 Layer 2/config tests.
+- Initial Shadow self-health [33739743499](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739743499) succeeded. The real watchdog reports Layer 4 `paused_by_owner`, `accepted=false`, and did not dispatch it. Layer 3 evidence was verified without refreshing production heartbeat.
+- Initial observation Daily [33739738531](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739738531) has started; exact Theme source, contracts and GA4 non-revenue advertising discovery passed. At observation start the browser batch is still running, so do not mark its final result passed until the summary artifact is checked.
 
 ## Next actions in order
 
-1. When the owner resumes GA4 setup, complete Google reauthentication and remove only the approved service account revenue restriction, keeping Viewer. If the restriction is inherited from a broader account, confirm the wider scope before changing it. Re-run `diagnose-revenue` to verify restrictions are absent; UI confirmation alone is insufficient.
-2. Re-run Layer 4 Daily Primary then Confirm with unrestricted metrics and verify matching mode/date and actual revenue. Keep business alerts in Observe; do not change storefront tracking. Review the unaffected Layer 2/3 and Dispatcher evidence above before opening the Shadow window.
-3. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
-4. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
+1. Observe the partial Shadow window through at least September 5, 17:35 MYT. Compare actual Layer 2 cadence/source SHA/results, failed/transient evidence, throttling, self-tests and schedule delays. A missing run or unchecked artifact is not success. Do not generate extra cart traffic merely to poll progress.
+2. GA4 remains a separate deferred task. When the owner resumes it, verify the correct Property/service account and remove only the approved revenue restriction while keeping Viewer; inherited wider scope needs confirmation. Re-run `diagnose-revenue`, Primary then Confirm and verify unrestricted results. Until then do not resume central Layer 4 or count it as accepted.
+3. After partial observation, report results and the remaining GA4 gap. No automatic Cutover; partial success alone cannot satisfy the full four-layer migration gate.
+4. Only after full validation and an explicit Cutover decision, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
 5. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
 
 ## Cutover and rollback
