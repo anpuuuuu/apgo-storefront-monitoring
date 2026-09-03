@@ -81,7 +81,7 @@ export async function setState(key, value) {
 
 export async function logAlert(layer, kind, detail) {
   if (monitorMode !== 'live') {
-    console.log(JSON.stringify({ shadow: true, siteId, layer, kind, detail }));
+    console.log(JSON.stringify({ shadow: true, siteId, layer, kind, detailSuppressed: true }));
     return;
   }
   await d1('INSERT INTO alert_log (layer, kind, detail) VALUES (?1, ?2, ?3)', [siteLayer(siteId, layer), kind, JSON.stringify({ siteId, ...detail })]);
@@ -89,7 +89,7 @@ export async function logAlert(layer, kind, detail) {
 
 export async function heartbeat(layer, detail = {}) {
   if (monitorMode !== 'live') {
-    console.log(JSON.stringify({ shadow: true, heartbeatSuppressed: true, siteId, layer, detail }));
+    console.log(JSON.stringify({ shadow: true, heartbeatSuppressed: true, siteId, layer, detailSuppressed: true }));
     return;
   }
   const response = await fetch(`${workerUrl}/heartbeat`, {
@@ -111,7 +111,7 @@ export async function workerHealthy() {
 
 export async function telegram(text) {
   if (monitorMode !== 'live') {
-    console.log(JSON.stringify({ shadow: true, telegramSuppressed: true, siteId, text }));
+    console.log(JSON.stringify({ shadow: true, telegramSuppressed: true, siteId, textSuppressed: true }));
     return;
   }
   const token = process.env.TELEGRAM_BOT_TOKEN || '';

@@ -2,7 +2,7 @@
 
 Updated: 2026-09-03 (MYT)
 
-**Latest objective:** the owner has requested completion of full central migration. Final Live Daily [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) passed 15/15 first-attempt journeys and wrote the verified central Daily heartbeat at `2026-09-03T11:40:31.963Z`. Google web sign-in is complete; the service account's revenue restriction is directly property-scoped, not inherited. A specific save confirmation is pending, with Viewer and No Cost Metrics retained. No permissions have been changed or Layer 4 unpaused. CLI IAM reauthentication remains separate. Follow [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for remaining gates and credential-specific retirement; do not delete active GA4 dependencies prematurely.
+**Latest objective:** the owner has requested completion of full central migration. Final Live Daily [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) passed 15/15 first-attempt journeys and wrote the verified central Daily heartbeat at `2026-09-03T11:40:31.963Z`. After explicit owner confirmation, GA4 Property `547019474` now shows the service account as **Viewer, No Cost Metrics**, with the No Revenue Metrics restriction removed. API acceptance remains pending and Layer 4 is still paused centrally. Public financial-log suppression must be deployed before the unrestricted diagnostic. CLI IAM reauthentication remains separate. Follow [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for remaining gates and credential-specific retirement; do not delete active GA4 dependencies prematurely.
 
 ## Current state
 

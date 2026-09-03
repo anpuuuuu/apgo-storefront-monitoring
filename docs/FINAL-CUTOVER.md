@@ -6,7 +6,7 @@ The owner requested completion of the remaining migration, including GA4 accepta
 
 - Central Live Post-deploy [33742755562](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33742755562) completed successfully at 10:42 UTC. Its summary reports `ok`, with no failed, missing or transient journeys. Theme source is `eb3b709f226d749bc341428409ed0a0c17856301`.
 - Central **Live Daily** [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) completed successfully at 11:40:34 UTC. Downloaded plan, batch and aggregate evidence contains 15 expected/15 received unique journeys, all passed on their first attempt, with zero failed/missing/transient results. Every result uses exact Theme SHA `eb3b709f226d749bc341428409ed0a0c17856301`. `/health` independently confirms `apgo-my:layer2`, source `playwright-central-daily`, status `ok`, observed at `2026-09-03T11:40:31.963Z`. This verifies manual Live Daily acceptance, not scheduled execution.
-- Google web sign-in is verified. Service-account access inspection confirms direct Property `547019474` Viewer with No Cost Metrics and No Revenue Metrics; the account-level entry has no direct permissions. The revenue restriction is therefore property-scoped, not inherited. A specific save confirmation has been requested; no GA4 permissions changed at this record. CLI IAM reauthentication is a separate gate.
+- After the owner's explicit confirmation, the service account's direct Property `547019474` No Revenue Metrics restriction was removed and saved. The resulting GA4 access screen confirms **Viewer, No Cost Metrics**; no account-level, Editor, Administrator or cost access was added. Central API acceptance is next. CLI IAM reauthentication is a separate gate.
 - Central Layer 4 remains paused; Theme GA4 and its GA4-only watchdog remain official. Existing Layer 1/3 Worker remains active. Old code, WIF and secrets are not retired yet.
 - Pre-retirement rollback tag was pushed and remotely verified: Theme `monitoring-pre-retirement-20260903` resolves to `eb3b709f226d749bc341428409ed0a0c17856301`. It is a recovery baseline, not a claim that retirement happened. Before any deletion, re-read current Theme main and preserve subsequent unrelated edits.
 - Read-only dependency audit found only six tracked Theme workflows, all monitoring-owned, and no tracked frontend reference into `monitoring/`. Retain `snippets/apgo-error-monitor.liquid` (baseline blob `4a84619ad4346acfdac1008967fea04aaf93a3a0`) and the entire assets/blocks/config/layout/locales/sections/snippets/templates trees. All six old workflow files and `monitoring/**` still exist.
@@ -34,6 +34,10 @@ Required CI [33748657228](https://github.com/anpuuuuu/apgo-storefront-monitoring
 - After credential retirement: rollback requires freshly authorized replacement credentials/WIF bindings; old revoked tokens cannot be recovered. Keep central monitoring operational until replacement authentication is tested. Never promise one-click rollback after credential revocation.
 
 No D1 reverse migration or historic-data deletion is part of retirement. The final report must distinguish manual acceptance, observed schedules, active ownership and any pending external access.
+
+## Financial-data boundary
+
+With revenue access enabled, public Actions logs must not contain the raw diagnostic rows, Daily revenue/AOV values or nested financial summaries. Diagnostic output is limited to metric-access status and positive-value booleans. Daily output contains target/stage, Primary timestamp, baseline dates, counts of checks/anomalies and quality codes; the full report remains in private D1 state/alert records. Shadow side-effect logs suppress their payloads too. This changes logging only, not queries, thresholds, business mode, stored financial values or customer tracking. Privacy regression tests are part of required CI.
 
 ### Verified file restoration (September 3)
 

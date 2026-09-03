@@ -1,6 +1,36 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { revenueDiagnosticStatus, dailyPublicStatus } from '../scripts/ga4-public-status.mjs';
+
+test('public GA4 diagnostics disclose access and presence, never financial rows', () => {
+  const report = { metricHeaders: [{ name: 'purchaseRevenue' }], rows: [{ metricValues: [{ value: '987654.32' }] }] };
+  const status = revenueDiagnosticStatus(report);
+  assert.equal(status.metricAccess, 'unrestricted');
+  assert.equal(status.hasPositiveValues.purchaseRevenue, true);
+  assert.ok(!JSON.stringify(status).includes('987654.32'));
+  const restricted = revenueDiagnosticStatus({ ...report, metadata: { schemaRestrictionResponse: { activeMetricRestrictions: [{ metricName: 'purchaseRevenue', restrictedMetricTypes: ['REVENUE_DATA'] }] } } });
+  assert.equal(restricted.metricAccess, 'restricted');
+  assert.throws(() => revenueDiagnosticStatus({}), /metric headers/);
+  assert.throws(() => revenueDiagnosticStatus({ ...report, rows: [{ metricValues: [] }] }), /shape/);
+});
+
+test('Daily public status retains acceptance evidence without revenue, AOV, rows or messages', () => {
+  const summary = {
+    targetDate: '20260902', stage: 'confirm', mode: 'observe', generatedAt: 'now', primaryGeneratedAt: 'before',
+    baselineDates: ['20260826'], overall: { transactions: 7, revenue: 987654.32, aov: 141093.474 },
+    segments: [{ private: 'hidden' }], anomalies: [], persistent: [],
+    dataQualityIssues: [{ code: 'TEST', message: '987654.32' }], persistentDataQualityIssues: [],
+  };
+  const status = dailyPublicStatus(summary);
+  assert.equal(status.primaryGeneratedAt, 'before');
+  assert.equal(status.hasPurchaseRevenue, true);
+  assert.deepEqual(status.dataQualityCodes, ['TEST']);
+  assert.ok(!JSON.stringify(status).includes('987654.32'));
+  assert.equal(status.overall, undefined);
+  assert.equal(status.segments, undefined);
+  assert.equal(summary.overall.revenue, 987654.32, 'private report must remain unmodified');
+});
 
 test('production Worker deployment is main-only and migration remains opt-in', () => {
   const workflow = readFileSync(new URL('../.github/workflows/deploy-worker.yml', import.meta.url), 'utf8');

@@ -33,8 +33,11 @@ test('Shadow read/write round-trip never queries a Live key', async (t) => {
 
 test('Shadow heartbeat, Telegram and alert logging make no network calls', async (t) => {
   t.mock.method(globalThis, 'fetch', () => { throw new Error('Shadow attempted a production side effect'); });
-  t.mock.method(console, 'log', () => {});
-  await shadow.heartbeat('layer4', {});
-  await shadow.telegram('test');
-  await shadow.logAlert('layer4', 'test', {});
+  const output = [];
+  t.mock.method(console, 'log', (line) => output.push(line));
+  await shadow.heartbeat('layer4', { revenue: 987654.32 });
+  await shadow.telegram('revenue 987654.32');
+  await shadow.logAlert('layer4', 'test', { revenue: 987654.32 });
+  assert.equal(output.length, 3);
+  assert.ok(!output.join('').includes('987654.32'), 'Shadow logs must not publish financial data');
 });
