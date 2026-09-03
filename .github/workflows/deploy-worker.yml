@@ -16,6 +16,8 @@ permissions:
 
 jobs:
   deploy:
+    # Production deployments must use reviewed main, never a feature branch/tag.
+    if: github.ref == 'refs/heads/main'
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 20
