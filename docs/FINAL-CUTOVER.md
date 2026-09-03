@@ -15,7 +15,7 @@ The owner requested completion of the remaining migration, including GA4 accepta
 
 ## Final acceptance evidence
 
-All GA4 runs below used central commit `5aaeeacdc194088f4eff5293fa40e4c878f3bc22`, Live transport and Observe business mode. Old GA4/watchdog were stopped before the first stateful central check.
+Initial GA4 acceptance runs below used central commit `5aaeeacdc194088f4eff5293fa40e4c878f3bc22`, Live transport and Observe business mode. The subsequent post-WIF-retirement Validate used `5ad9d9eae57e49bb137aa6672ba13b75519551e5` (documentation-only successor). Old GA4/watchdog were stopped before the first stateful central check.
 
 | Check | Run | Evidence |
 | --- | --- | --- |
@@ -28,8 +28,11 @@ All GA4 runs below used central commit `5aaeeacdc194088f4eff5293fa40e4c878f3bc22
 | Error Worker deployment | [33755751378](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755751378) | Existing Worker version `15aec2ca-7062-4dc0-9438-b1430c4a3777`; same URL and `*/5 * * * *`; no D1 migration |
 | Post-deployment self-health | [33755924252](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755924252) | Central NEXT-only authentication succeeded; Layer 3 heartbeat `12:34:14.802Z` |
 | Post-WIF-retirement Validate | [33758039283](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33758039283) | After old provider disable/binding removal, fresh central OIDC exchange, GA4 queries and heartbeat succeeded; `/health` independently confirms Layer 4 at `12:55:50.239Z` |
+| Automatic Theme-retirement Post-deploy | [33755569816](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755569816) | Completed `2026-09-03T13:03:05Z`; exact retired Theme SHA `65546a24ba91a607e50e37013931db884b39a1ab`; 13/13 unique first-attempt passes, zero failed/missing/transient results |
 
-Independent read-only D1 queries confirmed the new Live Daily candidate under `apgo-my:ga4:daily:candidate:20260902` with the expected timestamp and positive transaction/revenue flags. Namespaced Layer 2 and Layer 4 heartbeats point to central runs; unnamespaced historical heartbeat rows remain unchanged from August 28. The automatic Theme-retirement Post-deploy run [33755569816](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755569816) is still running at this record; do not launch a duplicate.
+Independent read-only D1 queries confirmed the new Live Daily candidate under `apgo-my:ga4:daily:candidate:20260902` with the expected timestamp and positive transaction/revenue flags. Namespaced Layer 2 and Layer 4 heartbeats point to central runs; unnamespaced historical heartbeat rows remain unchanged from August 28.
+
+The automatic Theme-retirement Post-deploy plan, batch and aggregate were downloaded and cross-checked: all 13 planned IDs occur exactly once, every result uses the exact retired Theme SHA, and every first attempt passed. Coverage was three Android full Add/Cart/Checkout journeys, nine read-only Android/iPhone advertising journeys and one cart smoke. This does not claim cloud iPhone checkout coverage; its documented rate-limit mitigation remains. Batch evidence contains 39 files (26 valid JSON and 13 HTML reports), no second-attempt results, and no matches in the checked private-key/token credential patterns. The finalizer correctly skipped the Daily heartbeat step; subsequent `/health` still reports Daily `2026-09-03T11:40:31.963Z`, not this Post-deploy's completion time. All four current namespaced layers were healthy at `13:07 UTC` without legacy fallback. No duplicate browser run was launched for this acceptance.
 
 ## Credential retirement status
 

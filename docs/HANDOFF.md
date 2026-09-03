@@ -2,7 +2,7 @@
 
 Updated: 2026-09-03 (MYT)
 
-**Latest objective:** full central Live ownership is verified and Theme monitoring code is retired. Live Daily passed 15/15; unrestricted GA4 diagnostic, Validate, Primary, Confirm, Realtime, full self-health, protected-main Error Worker deployment and NEXT-only self-test all passed. Old Theme WIF is now disabled and its repository-ID service account binding removed; central WIF/principal and all unrelated roles remain. Remaining: finish the automatic retirement Post-deploy run and resolve the old Cloudflare token identity/sharing. See [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for exact evidence and safe credential/rollback gates.
+**Latest objective:** full central Live ownership and post-retirement acceptance are verified. Live Daily passed 15/15; the automatic retirement Post-deploy passed 13/13 on the exact retired Theme commit, with no retries/failures/missing results and no Daily-heartbeat overwrite. Unrestricted GA4 diagnostic, Validate, Primary, Confirm, Realtime, full self-health, protected-main Error Worker deployment and NEXT-only self-test all passed. Old Theme WIF is disabled and its repository-ID service account binding removed; central revalidation passed. The only unresolved retirement item is old Cloudflare token identity/sharing; do not revoke a guessed/shared token. See [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for exact evidence and safe credential/rollback gates.
 
 ## Current state
 
