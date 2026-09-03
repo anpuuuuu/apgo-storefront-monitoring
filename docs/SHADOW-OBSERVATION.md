@@ -1,5 +1,7 @@
 # Partial Shadow observation — September 2026
 
+**Historical record, superseded September 3, 18:09 MYT.** The owner waived the 48-hour review and approved partial Live after Daily run 33739738531 passed with 15/15 first-attempt successes and clean evidence. Central now owns Layer 2 plus website self-health; old Theme retains GA4 and a GA4-only watchdog. The Codex six-hour review automation was deleted. The originally planned window/checklist below is retained for context, not an active gate or claim that 48 hours elapsed. Current state and rollback: [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md).
+
 ## Authorized window and scope
 
 - Started: **2026-09-03 17:35 MYT** / `2026-09-03T09:35:32Z`.
@@ -19,7 +21,7 @@
 - Production Layer 3 before/after central self-test: `2026-09-03T04:50:39.487Z`, source `authenticated-selftest`.
 - Production Layer 4 before/after central self-test: `2026-09-03T08:57:52.106Z`.
 - Old official Daily [33723322310](https://github.com/anpuuuuu/apgo-theme/actions/runs/33723322310) passed before observation; Theme SHA `cfa1bf975157088fc44f32af0023574b2c46c2cc`.
-- First observation Daily [33739738531](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739738531): launched 09:35:58 UTC. Source/contract/non-revenue GA4 discovery succeeded. Browser batch was **in progress when this record was created**; inspect its final summary before declaring success.
+- First observation Daily [33739738531](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739738531): launched 09:35:58 UTC, completed successfully at 10:06 UTC. Summary and batch evidence were inspected: 15/15 first-attempt successes, exact Theme SHA, no failed/missing/transient results or rate-limit circuit, and clean credential/Cart-token scan.
 - First observation self-health [33739743499](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739743499): passed at 09:36:24 UTC. It recognized the active Daily without dispatching a duplicate, excluded paused Layer 4, and verified unique Shadow Layer 3 evidence with `heartbeatSuppressed=true`.
 - Pre-observation Layer 2 validation was Daily 3/3 and Post-deploy 3/3; these historical runs do not substitute for results during this new window.
 
@@ -35,6 +37,6 @@
 
 ## Follow-up and pause
 
-A read-only six-hour follow-up is attached to the current Codex task (`apgo-shadow-48`). It reviews records and reports meaningful findings; it does not trigger website tests or change production. This app-side follow-up is separate from the cloud schedules: GitHub and Cloudflare keep monitoring independently. After the review it should pause itself and leave any remaining acceptance gap explicit.
+The read-only six-hour follow-up `apgo-shadow-48` was **deleted** when the owner waived the review. Do not recreate it without a new request. GitHub and Cloudflare continue independently; there is no app-side periodic review task.
 
-To pause central scheduled observation, set `MONITOR_SCHEDULE_ENABLED=false`; keep `MONITOR_MODE=shadow` and the Layer 4 pause unchanged. This does not disable old official monitoring or cancel an already-running job; it also does not block existing App-triggered/manual Post-deploy runs. Stopping those requires a separate deliberate action. Do not change the existing Worker to pause this observation.
+The former Shadow pause instruction is no longer the current ownership rollback: old Layer 2 is now disabled. Use the coordinated rollback in [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md), including restoring old scope/workflow and accounting for in-flight central runs; do not simply turn off the new official monitoring.
