@@ -80,6 +80,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。
 - 不因 30 分钟没有 Purchase 单独告警。
 - API/WIF/D1/Heartbeat 失败必须让 Workflow 失败并发监控故障通知。
+- GA4 返回 `activeMetricRestrictions` 时，以 `GA4_METRIC_ACCESS_RESTRICTED` 非零退出：无权读取的营收不能当成零销售，也不能写入正常日报/基准。仅手动 `diagnose-revenue` 可输出带限制标记的只读诊断，供排查权限。
 
 每日报告计算三个转化率、Purchasers、Transactions、Revenue、AOV，并拆 MY/SG、device、洗衣精、Aurora、其他 Product、Campaign Page。异常需低于同星期 28 天基准的 50%，且满足最低 ATC/Checkout 样本；12:17 先记录，14:47 仍异常才确认。
 
@@ -119,6 +120,6 @@ Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`
 
 完整迁移、GitHub App、WIF、Secrets 与回退步骤见 `docs/MIGRATION.md`。
 
-当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；Layer 2 Post-deploy `3/3`、Daily `3/3` 通过。Cloudflare/Telegram Secrets 已保存，D1 权限、Telegram 两条迁移测试消息、Dispatcher 凭证同步及 Layer 4 Realtime/Daily Primary/Confirm 均已验证。GA4 Shadow 状态已与正式记录隔离；但 Self-health 的 Layer 3 自动自测仍需补齐 Shadow 隔离，因此定时仍关闭、48 小时 Shadow 尚未开始。GA4 另有「交易数非零、营收为零」的数据质量问题待查，不能当成零销售。最新证据与后续步骤见 `docs/HANDOFF.md`。
+当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；Layer 2 Post-deploy `3/3`、Daily `3/3` 通过。D1 权限、Telegram 迁移测试消息及 Dispatcher 凭证同步已验证。GA4 Shadow 状态、Layer 3 自动自测及 Uptime 已隔离，云端自测确认不会刷新正式 Heartbeat。「27 笔交易但营收为零」已查明是服务账号的 `REVENUE_DATA` 读取限制，不是零销售的证据；已加入明确失败保护。用户目前暂停 GA4 权限调整，尚未核实真实营收，也未完成无限制的 Daily Primary/Confirm 验收。中央定时仍关闭、48 小时 Shadow 尚未开始，旧 Theme 任务继续负责正式监控。最新证据与后续步骤见 `docs/HANDOFF.md`。
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。
