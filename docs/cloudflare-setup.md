@@ -21,7 +21,7 @@
 
 建议在 Repo 根目录运行 `& .\scripts\configure-production-secrets.ps1`，并且只在脚本显示 `1/3`、`2/3`、`3/3` 的隐藏输入提示后粘贴对应值。若终端只显示普通 `PS>` 提示，先不要粘贴任何 Token。脚本会先在线验证凭证，再通过标准输入写入 GitHub Secrets，不会显示凭证内容。
 
-实际双 Token 配置：旧 Theme GitHub Secret 对应 Error Worker 的 `MONITOR_HEARTBEAT_TOKEN`；中央 GitHub Secret 同名，但对应 Worker 的 `MONITOR_HEARTBEAT_TOKEN_NEXT`。代码同时接受两者，**没有**名为 `MONITOR_HEARTBEAT_TOKEN_CURRENT` 的配置。只有旧 Layer 4 和旧自检全部退役后才能撤销旧值；先保留已验证的中央 NEXT，再逐步收敛，不能同时移除两者。Dispatcher App 私钥/Webhook Secret 与这组 Heartbeat Token 无关，不能随旧 Theme 退役删除。
+2026-09-03 切换后：旧 Worker `MONITOR_HEARTBEAT_TOKEN` 已删除。中央 GitHub Secret 仍叫 `MONITOR_HEARTBEAT_TOKEN`，实际对应 Worker 中保留的 `MONITOR_HEARTBEAT_TOKEN_NEXT`；已通过中央部署后的独立 Self-test 验证。代码仍兼容两个名字，但线上目前只配置 NEXT；**没有** `MONITOR_HEARTBEAT_TOKEN_CURRENT`。不要误删中央 NEXT，也不要恢复已撤销旧值。Dispatcher App 私钥/Webhook Secret 与这组 Heartbeat Token 无关，不能随旧 Theme 退役删除。当前证据和未完成凭证项见 `FINAL-CUTOVER.md`。
 
 ## 首次部署
 

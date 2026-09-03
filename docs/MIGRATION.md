@@ -1,6 +1,6 @@
 # Central monitoring migration runbook
 
-**Current operational state (2026-09-03 18:09 MYT): partial Live.** The owner explicitly waived the initial 48-hour review after the full Daily gate passed. Central Layer 2 and website self-health are Live; Theme Layer 2 is disabled, while Theme GA4 and its GA4-only watchdog remain active. Central Layer 4 is paused/unvalidated. See [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md) for executed changes, remaining verification and rollback. Initial setup/full-migration steps below are historical or future guidance, not instructions to disable remaining GA4 dependencies now.
+**Current operational state (2026-09-03 20:26 MYT): full Live ownership.** Central Daily, GA4 and self-health acceptance passed; existing Error Worker deployment is owned by protected central main. Theme monitoring code/workflows are retired with frontend trees unchanged. Final Post-deploy acceptance and old CF token/WIF retirement remain as detailed in [FINAL-CUTOVER.md](FINAL-CUTOVER.md). The initial setup and Shadow steps below are historical, not instructions to re-enable the old monitoring owner.
 
 ## Identities
 
@@ -56,7 +56,7 @@ Create provider `apgo-storefront-monitoring` in project `helical-canto-505209-j7
 
 ## Shadow and Cutover
 
-Current exception: on September 3 the owner first approved partial Shadow, then explicitly waived the 48-hour review and approved **partial Live** after the Daily gate passed. Central `MONITOR_LAYER4_PAUSED=true` still blocks Layer 4 scheduled queries/watchdog recovery; Layer 2's non-revenue GA4 advertising discovery remains enabled. This is not full GA4 acceptance. The original complete sequence below is retained as context for the eventual full migration; do not execute its wholesale workflow disablement or credential cleanup while Theme still owns GA4.
+Historical exception: on September 3 the owner first approved partial Shadow, then waived the 48-hour review and approved partial Live. GA4 subsequently passed unrestricted acceptance and its central pause was removed. The original sequence below is retained as context; current ownership and exact credential-retirement exceptions are in [FINAL-CUTOVER.md](FINAL-CUTOVER.md).
 
 1. Add the remaining central `CF_API_TOKEN`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; also add Telegram credentials to the Dispatcher.
 2. Send one controlled no-content Theme `main` Push and verify exact-SHA dispatch plus delivery-ID deduplication. Completed on 2026-08-30 with Theme SHA `cfa1bf975157088fc44f32af0023574b2c46c2cc` and delivery `fc7cd1ea-a464-11f1-8a91-d04cef06f4e8`; replay was deduplicated.
