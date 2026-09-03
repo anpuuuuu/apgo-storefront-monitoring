@@ -15,7 +15,10 @@ import { dailyPublicStatus } from './ga4-public-status.mjs';
 requireEnv();
 
 const stage = process.env.DAILY_STAGE === 'confirm' ? 'confirm' : 'primary';
-const mode = config.ga4.mode;
+/* Daily funnel arms independently from the realtime rules (see ga4-anomaly).
+   Kept in observe while PURCHASE_REVENUE_MISSING persists — armed, it would
+   nag about the same known data-quality issue every day. */
+const mode = config.ga4.daily.mode || config.ga4.mode;
 const targetDate = mytDate(-1).replaceAll('-', '');
 const targetWeekday = new Date(`${mytDate(-1)}T12:00:00+08:00`).getUTCDay();
 const FUNNEL_EVENTS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'];

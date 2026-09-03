@@ -16,7 +16,12 @@ requireEnv({ needsD1: !validateOnly });
 
 const EVENT_NAMES = ['page_view', 'view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
 const settings = config.ga4.realtime;
-const mode = config.ga4.mode;
+/* Realtime and daily checks arm independently: realtime zero-detection was
+   reviewed and armed on 2026-09-03 (14-day observe: 1 plausible true event,
+   2 night-window false positives removed by the min-median bump); the daily
+   funnel stays in observe until the GA4 purchase-revenue gap is resolved.
+   Falls back to the shared ga4.mode. */
+const mode = settings.mode || config.ga4.mode;
 const simulated = process.env.SIMULATE_ZERO === 'true';
 
 function eventFilter() {
@@ -85,7 +90,12 @@ async function updateRule(rule, abnormal, detail) {
     const kind = mode === 'armed' ? 'business_alert' : 'would_alert';
     await logAlert('layer4', kind, { rule, mode, ...detail });
     if (mode === 'armed') {
-      await telegram(`APGO GA4 realtime alert\nRule: ${rule}\nCurrent: ${JSON.stringify(detail.current)}\nBaseline median: ${JSON.stringify(detail.baseline)}\n${process.env.RUN_URL || ''}`);
+      const ruleText = {
+        ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
+        add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
+        begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
+      }[rule] || rule;
+      await telegram(`🟡 [第4层·业务指标] ${ruleText}\n当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}\n${process.env.RUN_URL || ''}`);
     }
   }
 

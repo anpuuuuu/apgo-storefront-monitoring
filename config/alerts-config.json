@@ -25,14 +25,17 @@
     "timezone": "Asia/Kuala_Lumpur",
     "baseline_days": 28,
     "realtime": {
+      "mode": "armed",
+      "armed_since": "2026-09-03",
       "page_view_min_median": 10,
-      "add_to_cart_min_median": 3,
+      "add_to_cart_min_median": 8,
       "begin_checkout_min_median": 2,
       "begin_checkout_current_atc_min": 5,
       "consecutive_zeros": 2,
       "realert_hours": 6
     },
     "daily": {
+      "mode": "observe",
       "ratio_to_baseline": 0.5,
       "atc_min": 20,
       "checkout_min": 10,
