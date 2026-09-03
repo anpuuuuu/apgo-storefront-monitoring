@@ -8,6 +8,9 @@ The owner requested completion of the remaining migration, including GA4 accepta
 - One Central **Live Daily** [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) was started manually for final acceptance after the preceding cart writer had finished and cooled down. It must produce complete Daily results and `apgo-my:layer2` source `playwright-central-daily`. It is still running at this record; manual acceptance must not be described as proof of scheduled execution.
 - GA4 remains at Google reauthentication for `marketing@apgo.com.my`; the owner has been asked to sign in privately. No password/code was requested and no GA4 permissions changed.
 - Central Layer 4 remains paused; Theme GA4 and its GA4-only watchdog remain official. Existing Layer 1/3 Worker remains active. Old code, WIF and secrets are not retired yet.
+- Pre-retirement rollback tag was pushed and remotely verified: Theme `monitoring-pre-retirement-20260903` resolves to `eb3b709f226d749bc341428409ed0a0c17856301`. It is a recovery baseline, not a claim that retirement happened. Before any deletion, re-read current Theme main and preserve subsequent unrelated edits.
+- Read-only dependency audit found only six tracked Theme workflows, all monitoring-owned, and no tracked frontend reference into `monitoring/`. Retain `snippets/apgo-error-monitor.liquid` (baseline blob `4a84619ad4346acfdac1008967fea04aaf93a3a0`) and the entire assets/blocks/config/layout/locales/sections/snippets/templates trees. All six old workflow files and `monitoring/**` still exist.
+- Old WIF Provider is exactly `projects/223821071753/locations/global/workloadIdentityPools/github-actions/providers/apgo-theme`. Live IAM policy inspection via gcloud failed on required reauthentication; no provider or binding was changed. Confirm actual binding/condition before revocation, never infer it from this variable alone.
 
 ## Remaining sequence and pass criteria
 
@@ -21,6 +24,8 @@ The owner requested completion of the remaining migration, including GA4 accepta
 ## Deployment protection
 
 Pre-retirement audit found `production.deployment_branch_policy=null` despite main branch protection. The environment now uses custom deployment policies with exactly `main`, type `branch` (policy ID `59011150`); a same-name tag is not allowed. Existing environment protection rules were empty and were checked again before the update. The deployment job also has an explicit `github.ref == 'refs/heads/main'` guard with regression coverage. Local Worker/helper tests pass 46/46; Layer 2/config tests pass 45/45; generated site config is synchronized. These controls do not deploy a Worker or alter storefront UI. [GitHub environment API](https://docs.github.com/en/rest/deployments/environments#create-or-update-an-environment), [branch policy API](https://docs.github.com/en/rest/deployments/branch-policies#create-a-deployment-branch-policy).
+
+Required CI [33748657228](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748657228) passed; PR #32 merged as `42d57e4a9f5250ca750c9804c2b5d163b017fcf6`. Negative branch dispatch [33748693678](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748693678) had its entire deploy job skipped before executing any step. This verifies the main-only guard without deploying a Worker.
 
 ## Rollback stages
 
