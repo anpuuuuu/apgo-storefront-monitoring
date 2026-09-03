@@ -2,7 +2,7 @@
 
 Updated: 2026-09-03 (MYT)
 
-**Latest objective:** full central Live ownership is verified and Theme monitoring code is retired. Live Daily passed 15/15; unrestricted GA4 diagnostic, Validate, Primary, Confirm, Realtime, full self-health, protected-main Error Worker deployment and NEXT-only self-test all passed. Remaining: finish the automatic retirement Post-deploy run, resolve the old Cloudflare token identity/sharing, and complete separate Google Cloud verification to revoke old WIF. See [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for exact evidence and safe credential/rollback gates. Do not claim provider revocation is done.
+**Latest objective:** full central Live ownership is verified and Theme monitoring code is retired. Live Daily passed 15/15; unrestricted GA4 diagnostic, Validate, Primary, Confirm, Realtime, full self-health, protected-main Error Worker deployment and NEXT-only self-test all passed. Old Theme WIF is now disabled and its repository-ID service account binding removed; central WIF/principal and all unrelated roles remain. Remaining: finish the automatic retirement Post-deploy run and resolve the old Cloudflare token identity/sharing. See [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for exact evidence and safe credential/rollback gates.
 
 ## Current state
 
@@ -12,7 +12,7 @@ Updated: 2026-09-03 (MYT)
 - Central `main` is protected: PR required, `test` required, force-push/deletion disabled.
 - **Full Live cutover September 3, 20:26 MYT**: `MONITOR_MODE=live`, `MONITOR_SCHEDULE_ENABLED=true`, `MONITOR_LAYER4_PAUSED=false`. GA4 business mode remains Observe, not Armed.
 - Owner waived the 48-hour Shadow review; the six-hour Codex review automation was deleted. [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md) and [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md) record earlier stages. Current acceptance and rollback: [FINAL-CUTOVER.md](FINAL-CUTOVER.md).
-- Central owns all monitoring workflows and the existing Error Worker deployment. Theme main `65546a24ba91a607e50e37013931db884b39a1ab` contains no tracked monitoring directory or workflows, only a central pointer and the unchanged frontend Layer 3 integration. All six old workflows are disabled. Old heartbeat value and four old repo secrets/all variables were removed; old CF API token identity and old WIF retirement remain unresolved.
+- Central owns all monitoring workflows and the existing Error Worker deployment. Theme main `65546a24ba91a607e50e37013931db884b39a1ab` contains no tracked monitoring directory or workflows, only a central pointer and the unchanged frontend Layer 3 integration. All six old workflows are disabled. Old heartbeat value and four old repo secrets/all variables were removed; old WIF provider and principal are retired. Only the old CF API token identity/sharing remains unresolved in credential cleanup.
 - Theme compatibility fix `e8a9bfa` restored explicit `apgo-my` Layer 2/4 heartbeats and multi-site health parsing; Layer 3/4 namespaced heartbeats were verified healthy on 2026-08-30.
 - No Shopify product, discount, inventory, tracking or customer-facing Theme behavior was changed by this migration.
 
