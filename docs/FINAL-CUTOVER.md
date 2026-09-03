@@ -34,3 +34,17 @@ Required CI [33748657228](https://github.com/anpuuuuu/apgo-storefront-monitoring
 - After credential retirement: rollback requires freshly authorized replacement credentials/WIF bindings; old revoked tokens cannot be recovered. Keep central monitoring operational until replacement authentication is tested. Never promise one-click rollback after credential revocation.
 
 No D1 reverse migration or historic-data deletion is part of retirement. The final report must distinguish manual acceptance, observed schedules, active ownership and any pending external access.
+
+### Verified file restoration (September 3)
+
+A temporary `GIT_INDEX_FILE` was seeded from current Theme main `eb3b709f226d749bc341428409ed0a0c17856301`. All 65 tracked legacy monitoring files (including the six workflows) were removed from that isolated index, then restored from `monitoring-pre-retirement-20260903`. Both complete tree hashes were `4046a61654e1fe97ffb5597e4eca77084465ccd6`. The real index, worktree, remote and storefront were not changed. This proves exact file recovery, not the continued validity of credentials after revocation.
+
+After retirement, restore only these paths in a clean recovery branch based on the then-current Theme main. Inspect local changes before running; stop if any target already contains unreviewed work. Do not reset the Theme repository or replace its frontend tree.
+
+```powershell
+git restore --source=monitoring-pre-retirement-20260903 --staged --worktree -- monitoring .github/workflows/deploy-worker.yml .github/workflows/monitor-alerts.yml .github/workflows/monitor-self-health.yml .github/workflows/site-health-v2.yml .github/workflows/site-health.yml .github/workflows/uptime.yml
+git diff --cached --stat
+git diff --cached --exit-code -- assets blocks config layout locales sections snippets templates
+```
+
+The last command must succeed: restoration must not alter any storefront tree. Review the restored workflows and ownership/authentication gates before committing through a normal PR. Scheduled triggers in restored YAML are not permission to run both systems concurrently; keep the legacy workflows disabled until central ownership has been paused and replacement authentication verified. Never enable the old deploy workflow automatically.
