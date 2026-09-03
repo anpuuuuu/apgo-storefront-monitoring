@@ -9,7 +9,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [realtime, daily-primary, daily-confirm, validate]
+        options: [realtime, daily-primary, daily-confirm, validate, diagnose-revenue]
         default: realtime
       simulate_zero:
         type: boolean
@@ -81,6 +81,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           case '${{ needs.plan.outputs.mode }}' in
+            diagnose-revenue) node scripts/ga4-revenue-diagnostic.mjs ;;
             validate) VALIDATE_GA4=true node scripts/ga4-anomaly.mjs ;;
             daily-primary) DAILY_STAGE=primary node scripts/ga4-daily-funnel.mjs ;;
             daily-confirm) DAILY_STAGE=confirm node scripts/ga4-daily-funnel.mjs ;;
