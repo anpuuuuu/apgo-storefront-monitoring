@@ -10,6 +10,7 @@ import {
   requireEnv,
   telegram,
 } from './monitor-lib.mjs';
+import { dailyPublicStatus } from './ga4-public-status.mjs';
 
 requireEnv();
 
@@ -293,4 +294,4 @@ if (stage === 'primary') {
 }
 
 await heartbeat('layer4', { kind: 'daily', stage, mode, targetDate, anomalyCount: anomalies.length });
-console.log(JSON.stringify({ ok: true, ...summary }, null, 2));
+console.log(JSON.stringify(dailyPublicStatus(summary), null, 2));
