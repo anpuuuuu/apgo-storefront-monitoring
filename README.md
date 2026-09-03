@@ -2,6 +2,8 @@
 
 公开中央 Repo：`anpuuuuu/apgo-storefront-monitoring`。目标是约 10 分钟内确认整站/API 故障、每日与每次 Theme 更新后验证真实购物路径，并用 GA4 检查业务漏斗。配置与状态从第一天使用 Site Namespace；首个站点为 `apgo-my`。
 
+**当前：部分 Live（2026-09-03 18:09 MYT）**。中央正式接管 Layer 2 与网站自检/Layer 3 Self-test；Layer 1/3 仍由原 Worker 服务。GA4 暂留旧 Theme Repo，中央 Layer 4 暂停且不计为验收通过。具体归属、证据及回退见 [切换记录](docs/CUTOVER-LAYER23.md)。
+
 | Layer | 负责内容 | 频率 | 执行位置 |
 |---|---|---|---|
 | 1 | Homepage + `/cart.js` 存活、速度、恢复 | Cloudflare 每 5 分钟 | `workers/error-monitor/` |
@@ -116,10 +118,10 @@ Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`
 5. 手动跑 Layer 2、Layer 3 self-test、Layer 4 validate；全部通过后才将 `CRON_ENABLED` 改为 `true`。
 6. Cron 开启后等待实际的 5 分钟触发，确认 `/health` 返回 200 且包含新鲜的 Layer 1 Heartbeat，再启用 GitHub Browser/Self-health schedules。
 
-中央迁移期默认 `MONITOR_MODE=shadow` 且 `MONITOR_SCHEDULE_ENABLED` 不启用。旧 Theme Repo 继续负责正式告警与 Heartbeat；中央 Repo 的手动验证成功后才进入 48 小时 Shadow，之后由人工 Cutover。
+新环境最初应保持 `MONITOR_MODE=shadow`、Schedule 关闭。当前 APGO 已按用户明确批准完成部分切换：`MONITOR_MODE=live`、`MONITOR_SCHEDULE_ENABLED=true`、`MONITOR_LAYER4_PAUSED=true`。旧 Theme Layer 2 已停用，旧自检缩减为 GA4-only，继续保留 GA4 的定时补跑能力；没有双份 Layer 2/Layer 3 自测。
 
 完整迁移、GitHub App、WIF、Secrets 与回退步骤见 `docs/MIGRATION.md`。
 
-当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；观察前 Layer 2 Post-deploy `3/3`、Daily `3/3` 通过。D1、Telegram 迁移测试及 Dispatcher 凭证同步已验证；Shadow 状态/自测已隔离。「27 笔交易但营收为零」已查明是服务账号的 `REVENUE_DATA` 读取限制，已加入明确失败保护，权限调整按用户要求暂缓。用户批准先观察其他层，已于 **9 月 3 日 17:35 MYT** 开启部分 Shadow，最早 **9 月 5 日 17:35** 复盘。中央定时开启、模式保持 Shadow、中央 Layer 4 暂停，旧 Theme 任务仍负责正式监控；Layer 2 的非营收广告发现继续运行。GA4 不计入本次验收，不自动切换上线。范围、证据与暂停方式见 `docs/SHADOW-OBSERVATION.md` 和 `docs/HANDOFF.md`。
+当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；此前 Layer 2 Post-deploy `3/3`、Daily `3/3` 通过，本次切换前追加 Daily 亦为 `15/15` 首次通过、无漏测/限流、证据扫描干净。用户随后批准不等 48 小时，现已部分 Live；六小时 Codex 复查已取消。中央 Live 自检与旧 GA4-only Watchdog 均已云端验证通过。新一次更新后浏览器批次仍在运行，首次 Live Daily 心跳待下一次每日任务确认，不把旧 Shadow 成功冒充 Live 心跳。「27 笔交易但营收为零」是服务账号的 `REVENUE_DATA` 读取限制，权限调整和中央 GA4 验收继续暂缓。尚未删除旧监控代码或撤销其凭证，本次未部署 Worker、未修改顾客页面。详情见 `docs/CUTOVER-LAYER23.md` 和 `docs/HANDOFF.md`。
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。

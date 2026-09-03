@@ -8,9 +8,9 @@ Updated: 2026-09-03 (MYT)
 - Theme repository: `anpuuuuu/apgo-theme` (`1154313539`).
 - Migration source tag: `monitoring-migration-source-fa976c1`.
 - Central `main` is protected: PR required, `test` required, force-push/deletion disabled.
-- Partial Shadow observation is active: `MONITOR_MODE=shadow`, `MONITOR_SCHEDULE_ENABLED=true`, `MONITOR_LAYER4_PAUSED=true`.
-- Owner approved observing the other layers while deferring GA4. Started `2026-09-03T09:35:32Z` (MYT September 3, 17:35); earliest review `2026-09-05T09:35:32Z`. This is not full Layer 1–4 acceptance or permission for automatic Cutover. See [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md).
-- Existing Theme Repo workflows remain the official alert source. Do not disable them yet.
+- **Partial Live cutover completed September 3, 18:09 MYT**: `MONITOR_MODE=live`, `MONITOR_SCHEDULE_ENABLED=true`, `MONITOR_LAYER4_PAUSED=true`.
+- Owner explicitly waived the 48-hour Shadow review after the current full Daily gate passed (15/15 first-attempt successes). The six-hour Codex review automation was deleted. This is not full Layer 1–4 acceptance; GA4 remains deferred. Current evidence and rollback: [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md). [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md) is historical.
+- Central owns Layer 2 and website self-health/Layer 3 self-test. Old Theme Layer 2 V2 is disabled. Old GA4 remains active; old self-health is active only as its schedule-recovery watchdog (`MONITOR_SELF_HEALTH_SCOPE=ga4-only`). Existing Error Worker Layer 1/3 continues unchanged. Do not disable all Theme workflows or remove old credentials while GA4 still depends on them.
 - Theme compatibility fix `e8a9bfa` restored explicit `apgo-my` Layer 2/4 heartbeats and multi-site health parsing; Layer 3/4 namespaced heartbeats were verified healthy on 2026-08-30.
 - No Shopify product, discount, inventory, tracking or customer-facing Theme behavior was changed by this migration.
 
@@ -92,31 +92,23 @@ The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at
 
 The owner approved a partial exception on September 3: start Layer 1/2/3 and self-health observation while Layer 4 remains paused and unvalidated. Full acceptance still requires the GA4 checks above. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter: Layer 2 pre-observation Central Daily `3/3`; Central Post-deploy `3/3`, with clean evidence scans. Credentials, Telegram transport, Dispatcher synchronization, GA4 state isolation and Layer 3 Shadow isolation pass. **Partial 48-hour Shadow started September 3, 17:35 MYT.** GA4 permission repair and unrestricted Daily Primary/Confirm remain pending, explicitly excluded rather than marked successful. Old Theme tasks remain official. No Worker deployment was performed to start the observation.
+Validation counter: Layer 2 pre-observation Central Daily `3/3`; Central Post-deploy `3/3`, with clean evidence scans. Credentials, Telegram transport, Dispatcher synchronization, GA4 state isolation and Layer 3 Shadow isolation pass. Partial Shadow started September 3, 17:35 MYT; the owner subsequently waived the review and approved partial Live at 18:09 MYT after the additional Daily gate passed. GA4 permission repair and unrestricted Daily Primary/Confirm remain pending. No Worker deployment was performed for this partial cutover.
 
 - PR [#29](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/29), `e6485d2`, gates the central Layer 4 schedule and its watchdog recovery with `MONITOR_LAYER4_PAUSED`; explicit manual diagnostics remain available only when intentionally requested. CI passed including 45 Worker/helper tests and 45 Layer 2/config tests.
 - Initial Shadow self-health [33739743499](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739743499) succeeded. The real watchdog reports Layer 4 `paused_by_owner`, `accepted=false`, and did not dispatch it. Layer 3 evidence was verified without refreshing production heartbeat.
-- Initial observation Daily [33739738531](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739738531) has started; exact Theme source, contracts and GA4 non-revenue advertising discovery passed. At observation start the browser batch is still running, so do not mark its final result passed until the summary artifact is checked.
+- Initial observation Daily [33739738531](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33739738531) completed successfully: 15/15 first-attempt successes, no failed/missing/transient results or rate-limit circuit, exact Theme SHA and clean evidence scan. It was the final gate for the owner-approved partial cutover, not a production heartbeat write.
+- Theme PR [#13](https://github.com/anpuuuuu/apgo-theme/pull/13), `eb3b709`, introduced the GA4-only legacy watchdog (29 local tests passed). Central Live self-health [33742782522](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33742782522) and legacy GA4-only check [33742785483](https://github.com/anpuuuuu/apgo-theme/actions/runs/33742785483) both passed. The central self-test wrote `apgo-my:layer3` at `2026-09-03T10:09:44.111Z`; the legacy check skipped Layer 1/2/3 work and retained GA4 recovery.
 
 ## Next actions in order
 
-1. Observe the partial Shadow window through at least September 5, 17:35 MYT. Compare actual Layer 2 cadence/source SHA/results, failed/transient evidence, throttling, self-tests and schedule delays. A missing run or unchecked artifact is not success. Do not generate extra cart traffic merely to poll progress.
+1. Inspect the first Live Post-deploy [33742755562](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33742755562) when complete, and the next scheduled Central Live Daily plus its `playwright-central-daily` heartbeat. The Post-deploy plan passed, but its browser batch is still running at handoff. Keep the valid prior official Daily heartbeat meanwhile; never manufacture it from a Post-deploy run. No Codex review automation remains; cloud monitoring continues independently.
 2. GA4 remains a separate deferred task. When the owner resumes it, verify the correct Property/service account and remove only the approved revenue restriction while keeping Viewer; inherited wider scope needs confirmation. Re-run `diagnose-revenue`, Primary then Confirm and verify unrestricted results. Until then do not resume central Layer 4 or count it as accepted.
-3. After partial observation, report results and the remaining GA4 gap. No automatic Cutover; partial success alone cannot satisfy the full four-layer migration gate.
-4. Only after full validation and an explicit Cutover decision, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
-5. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
+3. Do not describe partial Live as complete four-layer migration. Central Layer 4 stays paused and old Theme GA4/watchdog stays operational until separate acceptance and cutover approval.
+4. Final cleanup is deferred: retain Theme `monitoring/**`, rollback workflows, WIF and credentials. They are still required by official GA4. Keep Layer 3 storefront snippet/reporting code permanently in Theme.
 
 ## Cutover and rollback
 
-After 48 hours of matching central/Theme results:
-
-1. Disable the six Theme monitoring workflows.
-2. Set central `MONITOR_MODE=live`.
-3. Observe another 48 hours for missing/duplicate Push, schedules, alerts and heartbeat.
-4. Remove Theme `monitoring/**` and old workflows only after stability; retain the Layer 3 Theme snippet/layout/cart-error code and a pointer to this Repo.
-5. Revoke the old WIF binding and old Cloudflare/GitHub secrets after the final stability window.
-
-Rollback: re-enable Theme workflows, set central mode back to `shadow`, and deploy the Error Worker commit preceding namespace rollout. Do not reverse or drop D1 data.
+Current partial cutover and the exact operational rollback are documented in [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md). Rollback Central to Shadow with schedules off, account for in-flight runs, restore Theme scope `all` and enable its Layer 2 workflow. Keep old GA4 active. No Error Worker rollback or reverse D1 migration is needed for this partial switch. The original full-migration sequence in [MIGRATION.md](MIGRATION.md) is not permission to remove active GA4 dependencies.
 
 ## Safety rules
 
