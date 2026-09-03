@@ -1,6 +1,6 @@
 # APGO Central Monitoring Handoff
 
-Updated: 2026-08-31 (MYT)
+Updated: 2026-09-03 (MYT)
 
 ## Current state
 
@@ -61,11 +61,12 @@ Updated: 2026-08-31 (MYT)
 
 ## Remaining external setup
 
-The GitHub App, installation and Dispatcher authentication are complete. The remaining credentials are:
+The GitHub App, installation and Dispatcher authentication are complete. The owner has now saved `CF_API_TOKEN` (2026-09-03 08:32 UTC), `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (08:50 UTC) to central Repository Secrets through hidden input. Only secret names/timestamps were checked; values were not read back.
 
-- New least-privilege `CF_API_TOKEN` scoped only to the two Workers, D1 and KV.
-- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (copy from the secure owner record or rotate; existing secret values cannot be read back).
-- Add the Telegram token/chat ID to both the central Repository Secrets and Dispatcher Worker secrets.
+- The replacement Cloudflare token has Workers Scripts Edit, D1 Edit and KV Edit on the selected account. Cloudflare's token UI scoped these permissions to the account, **not individual Workers/databases**; the owner accepted this scope. It has no DNS or billing permissions.
+- Telegram group discovery now requires the fresh, explicitly addressed `/monitor_setup@<verified-bot>` command and exact group selection. `-TelegramOnly` resumes without changing the saved Cloudflare token. API exceptions are reduced to safe stage/status hints and the window stays open for errors.
+- Remaining: run `Validate monitoring credentials` (read-only D1 probe and two clearly labelled Telegram delivery tests), then synchronize Dispatcher Telegram secrets using the existing protected-main deploy workflow. Do not claim notification delivery merely from the secret-list check.
+- Before stateful GA4 validation, Shadow reads/writes are isolated under `apgo-my:shadow:*`; Live continues using `apgo-my:*`. Daily Confirm must find that same mode's Primary result instead of silently passing when it is missing.
 
 Never copy credentials into this public Repo, logs or artifacts.
 
@@ -75,7 +76,7 @@ The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at
 
 1. Send one controlled no-content Theme `main` Push and verify the Dispatcher launches exactly one Central Post-deploy run for the exact full SHA. Replay its delivery ID and confirm deduplication.
 2. Manually run Layer 2 Daily three times and Post-deploy three times.
-3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider. Realtime/read-only validation is complete; stateful Daily Primary/Confirm remains pending until the replacement Cloudflare token is configured.
+3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider. Realtime/read-only validation is complete; run stateful Daily Primary then Confirm after the Shadow isolation change merges.
 4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts. Worker/Layer 3/D1 validation is complete; Telegram failure and recovery remain pending.
 5. Confirm Browser artifacts contain no Cart token, customer data or credentials.
 
@@ -85,8 +86,8 @@ Validation counter as of this update: Central Daily `3/3`; Central Post-deploy `
 
 ## Next actions in order
 
-1. When the owner is ready, create a replacement least-privilege Cloudflare token and add the Cloudflare/Telegram secrets through the hidden-input setup script; verify they do not appear in logs or artifacts.
-2. Configure the credentials, then validate Layer 4 Daily Primary/Confirm plus Telegram failure and recovery. Layer 3 self-test, Layer 4 realtime/read-only WIF, Worker health and namespaced D1 writes are already complete.
+1. Credentials are saved. Run the manual credential validation and synchronize Dispatcher secrets without changing the Error Worker or frontend.
+2. Validate isolated Layer 4 Daily Primary/Confirm plus labelled Telegram failure/recovery delivery. Layer 3 self-test, Layer 4 realtime/read-only WIF, Worker health and namespaced D1 writes are already complete.
 3. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
 4. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
 5. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
