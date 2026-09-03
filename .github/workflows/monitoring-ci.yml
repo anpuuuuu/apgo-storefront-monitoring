@@ -25,6 +25,7 @@ jobs:
       - run: npm run generate:check
       - run: npm run test:layer2-config
       - run: npm run test:worker
+      - run: bash tests/uptime-shadow.test.sh
       - name: Test secure setup without credentials
         shell: pwsh
         run: ./tests/secure-setup.test.ps1

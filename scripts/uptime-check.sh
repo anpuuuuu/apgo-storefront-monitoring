@@ -19,6 +19,9 @@ CF_TOKEN="${CF_API_TOKEN:-}"
 CF_ACCOUNT="${CF_ACCOUNT_ID:-}"
 RUN_URL="${RUN_URL:-}"
 FORCE_FAIL="${FORCE_FAIL:-false}"
+MONITOR_MODE="${MONITOR_MODE:-shadow}"
+case "$MONITOR_MODE" in live|shadow) ;; *) echo 'Invalid MONITOR_MODE'; exit 2 ;; esac
+FAILED=0
 
 DB_ID="$(jq -r '.cloudflare.database_id // empty' "$CONFIG")"
 RECHECK_DELAY="$(jq -r '.uptime.recheck_delay_s // 30' "$CONFIG")"
@@ -26,6 +29,10 @@ REALERT_MIN="$(jq -r '.uptime.realert_minutes // 60' "$CONFIG")"
 UA='Mozilla/5.0 (compatible; APGO-HealthCheck-Uptime)'
 
 STATELESS=0
+if [ "$MONITOR_MODE" = shadow ]; then
+  STATELESS=1
+  echo 'Shadow diagnostic: production state and Telegram writes disabled.'
+fi
 if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ] || [ -z "$DB_ID" ]; then
   echo "::notice::CF_API_TOKEN/CF_ACCOUNT_ID 未设定 — 无状态模式(持续宕机会重复告警、无恢复通知)"
   STATELESS=1
@@ -44,6 +51,10 @@ d1_query() { # $1 sql, $2 json params array; prints result rows, non-zero on fai
 }
 
 tg_send() { # $1 message text
+  if [ "$MONITOR_MODE" = shadow ]; then
+    echo 'Shadow: Telegram notification suppressed.'
+    return 0
+  fi
   if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
     echo "::warning::TELEGRAM secrets 未设定,以下通知未发出:"
     echo "$1"
@@ -123,6 +134,7 @@ while read -r site; do
   fi
 
   if [ -n "$reason" ]; then
+    FAILED=1
     echo "::error::$id DOWN: $reason"
     if [ "$prev_status" = "down" ]; then
       age_min=$(( (NOW_EPOCH - prev_last_alert) / 60 ))
@@ -161,4 +173,4 @@ ${RUN_URL}"
   fi
 done < <(jq -c '.sites[] | select(.enabled == true)' "$SITES")
 
-exit 0
+exit "$FAILED"

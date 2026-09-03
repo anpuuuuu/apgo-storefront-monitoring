@@ -36,6 +36,7 @@ jobs:
 
   site-health:
     needs: plan
+    if: always() && !cancelled() && needs.plan.outputs.matrix != ''
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -51,11 +52,14 @@ jobs:
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
         run: node scripts/worker-health.mjs
       - name: Refresh Layer 3 self-test
-        if: github.event_name == 'schedule' || inputs.layer3_selftest == true
+        if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.layer3_selftest == true)
         env:
+          MONITOR_MODE: ${{ vars.MONITOR_MODE || 'shadow' }}
           MONITOR_SITE_ID: ${{ matrix.siteId }}
           MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: node scripts/layer3-self-test.mjs
       - name: Notify failure only in Live mode
         if: failure() && vars.MONITOR_MODE == 'live'
