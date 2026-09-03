@@ -103,7 +103,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`。
 
-Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
+Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。`MONITOR_LAYER4_PAUSED=true` 暂停中央 Layer 4 定时及自检恢复触发，不影响 Layer 2 广告清单发现，也不代表 GA4 验收通过。`MONITOR_SHADOW_STARTED_AT`、`MONITOR_SHADOW_REVIEW_AFTER` 记录观察时间，不自动触发 Cutover。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
 
 任何必要值缺失都必须失败，不再“跳过后显示绿色”。
 
@@ -120,6 +120,6 @@ Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`
 
 完整迁移、GitHub App、WIF、Secrets 与回退步骤见 `docs/MIGRATION.md`。
 
-当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；Layer 2 Post-deploy `3/3`、Daily `3/3` 通过。D1 权限、Telegram 迁移测试消息及 Dispatcher 凭证同步已验证。GA4 Shadow 状态、Layer 3 自动自测及 Uptime 已隔离，云端自测确认不会刷新正式 Heartbeat。「27 笔交易但营收为零」已查明是服务账号的 `REVENUE_DATA` 读取限制，不是零销售的证据；已加入明确失败保护。用户目前暂停 GA4 权限调整，尚未核实真实营收，也未完成无限制的 Daily Primary/Confirm 验收。中央定时仍关闭、48 小时 Shadow 尚未开始，旧 Theme 任务继续负责正式监控。最新证据与后续步骤见 `docs/HANDOFF.md`。
+当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；观察前 Layer 2 Post-deploy `3/3`、Daily `3/3` 通过。D1、Telegram 迁移测试及 Dispatcher 凭证同步已验证；Shadow 状态/自测已隔离。「27 笔交易但营收为零」已查明是服务账号的 `REVENUE_DATA` 读取限制，已加入明确失败保护，权限调整按用户要求暂缓。用户批准先观察其他层，已于 **9 月 3 日 17:35 MYT** 开启部分 Shadow，最早 **9 月 5 日 17:35** 复盘。中央定时开启、模式保持 Shadow、中央 Layer 4 暂停，旧 Theme 任务仍负责正式监控；Layer 2 的非营收广告发现继续运行。GA4 不计入本次验收，不自动切换上线。范围、证据与暂停方式见 `docs/SHADOW-OBSERVATION.md` 和 `docs/HANDOFF.md`。
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。
