@@ -1,6 +1,6 @@
 # Central monitoring migration runbook
 
-**Current operational state (2026-09-03): full Live ownership since 20:26 MYT.** Central Daily, GA4 and self-health acceptance passed; existing Error Worker deployment is owned by protected central main. Theme monitoring code/workflows are retired with frontend trees unchanged. Old Theme WIF provider is disabled and its service account binding removed. Final Post-deploy acceptance and old CF token identity/sharing remain as detailed in [FINAL-CUTOVER.md](FINAL-CUTOVER.md). The initial setup and Shadow steps below are historical, not instructions to re-enable the old monitoring owner.
+**Current operational state (2026-09-03): full Live ownership since 20:26 MYT.** Central Daily, GA4 and self-health acceptance passed; existing Error Worker deployment is owned by protected central main. Theme monitoring code/workflows are retired with frontend trees unchanged. The automatic post-retirement check completed at 21:03 MYT, 13/13 first-attempt passes on the exact retired Theme commit; Daily heartbeat remains independent. Old Theme WIF provider is disabled and its service account binding removed. Only old CF token identity/sharing remains unresolved, as detailed in [FINAL-CUTOVER.md](FINAL-CUTOVER.md). The initial setup and Shadow steps below are historical, not instructions to re-enable the old monitoring owner.
 
 ## Identities
 
