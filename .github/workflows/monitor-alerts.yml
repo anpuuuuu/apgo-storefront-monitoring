@@ -21,7 +21,9 @@ permissions:
 
 jobs:
   plan:
-    if: github.event_name != 'schedule' || vars.MONITOR_SCHEDULE_ENABLED == 'true'
+    # Paused Layer 4 is excluded from partial Shadow acceptance, not a green result.
+    # An explicit manual diagnostic remains available when the owner resumes.
+    if: github.event_name != 'schedule' || (vars.MONITOR_SCHEDULE_ENABLED == 'true' && vars.MONITOR_LAYER4_PAUSED != 'true')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}

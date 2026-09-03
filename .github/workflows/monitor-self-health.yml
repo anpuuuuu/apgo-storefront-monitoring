@@ -32,6 +32,7 @@ jobs:
         if: inputs.rollout_validation != true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          MONITOR_LAYER4_PAUSED: ${{ vars.MONITOR_LAYER4_PAUSED || 'false' }}
         run: node scripts/github-schedule-health.mjs
 
   site-health:

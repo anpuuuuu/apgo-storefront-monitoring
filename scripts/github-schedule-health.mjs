@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { selectWorkflowFreshnessRun } from './github-schedule-health-lib.mjs';
+import { isWorkflowPaused, selectWorkflowFreshnessRun } from './github-schedule-health-lib.mjs';
 
 const token = process.env.GITHUB_TOKEN || '';
 const repository = process.env.GITHUB_REPOSITORY || '';
@@ -37,6 +37,11 @@ async function dispatchRecovery(check, reason) {
 }
 
 for (const check of checks) {
+  if (isWorkflowPaused(check.workflow, process.env.MONITOR_LAYER4_PAUSED || 'false')) {
+    console.log(JSON.stringify({ workflow: check.workflow, status: 'paused_by_owner', accepted: false,
+      message: 'Excluded from partial Shadow acceptance; do not query freshness or dispatch recovery' }));
+    continue;
+  }
   const url = `https://api.github.com/repos/${repository}/actions/workflows/${check.workflow}/runs?per_page=20`;
   const response = await fetch(url, {
     headers: githubHeaders(),
