@@ -1,5 +1,10 @@
 const NEUTRAL_CONCLUSIONS = new Set(['cancelled', 'skipped']);
 
+export function isWorkflowPaused(workflow, layer4Paused = 'false') {
+  if (!['true', 'false', ''].includes(layer4Paused)) throw new Error('Invalid MONITOR_LAYER4_PAUSED');
+  return workflow === 'monitor-alerts.yml' && layer4Paused === 'true';
+}
+
 /**
  * GitHub concurrency keeps at most one running and one pending run. A newer
  * push can therefore replace a pending scheduled run even when
