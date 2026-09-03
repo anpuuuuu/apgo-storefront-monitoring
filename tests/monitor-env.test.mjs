@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+
+test('production Worker deployment is main-only and migration remains opt-in', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy-worker.yml', import.meta.url), 'utf8');
+  const deployJob = workflow.split(/\n  deploy:\s*\r?\n/)[1];
+  assert.ok(deployJob, 'deployment job must exist');
+  assert.match(deployJob, /\n    if: github\.ref == 'refs\/heads\/main'\s*\r?\n/);
+  assert.match(deployJob, /\n    environment: production\s*\r?\n/);
+  assert.match(workflow, /apply_d1_migration:\s*\r?\n\s+type: boolean\s*\r?\n\s+default: false/);
+  assert.match(workflow, /if: inputs\.worker == 'error-monitor' && inputs\.apply_d1_migration/);
+});
 
 process.env.MONITOR_SITE_ID = 'apgo-my';
 process.env.GA4_PROPERTY_ID = 'test-property';

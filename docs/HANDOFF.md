@@ -2,6 +2,8 @@
 
 Updated: 2026-09-03 (MYT)
 
+**Latest objective:** the owner has requested completion of full central migration. Partial Live ownership below remains in place while final Live Daily run [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) runs and the owner completes Google reauthentication. GA4 permission work is now requested again, but no permissions have been changed or Layer 4 unpaused. Follow [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for remaining gates and credential-specific retirement; do not delete active GA4 dependencies prematurely.
+
 ## Current state
 
 - Central public repository: `anpuuuuu/apgo-storefront-monitoring` (`1349617089`).
@@ -101,8 +103,8 @@ Validation counter: Layer 2 pre-observation Central Daily `3/3`; Central Post-de
 
 ## Next actions in order
 
-1. Inspect the first Live Post-deploy [33742755562](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33742755562) when complete, and the next scheduled Central Live Daily plus its `playwright-central-daily` heartbeat. The Post-deploy plan passed, but its browser batch is still running at handoff. Keep the valid prior official Daily heartbeat meanwhile; never manufacture it from a Post-deploy run. No Codex review automation remains; cloud monitoring continues independently.
-2. GA4 remains a separate deferred task. When the owner resumes it, verify the correct Property/service account and remove only the approved revenue restriction while keeping Viewer; inherited wider scope needs confirmation. Re-run `diagnose-revenue`, Primary then Confirm and verify unrestricted results. Until then do not resume central Layer 4 or count it as accepted.
+1. First Live Post-deploy [33742755562](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33742755562) has completed successfully; summary is `ok` with no failed/missing/transient journeys. Final manual Live Daily [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) is running. Require its complete results and `playwright-central-daily` heartbeat, and separately verify actual scheduled Daily execution. Keep the valid prior official Daily heartbeat meanwhile; never manufacture it from Post-deploy. No Codex review automation remains; cloud monitoring continues independently.
+2. The owner has resumed full migration; Google reauthentication is still pending. Verify the correct Property/service account and remove only the approved revenue restriction while keeping Viewer; inherited wider scope needs confirmation. Follow the single-writer GA4 acceptance sequence in [FINAL-CUTOVER.md](FINAL-CUTOVER.md). Until then keep central Layer 4 paused and do not count it as accepted.
 3. Do not describe partial Live as complete four-layer migration. Central Layer 4 stays paused and old Theme GA4/watchdog stays operational until separate acceptance and cutover approval.
 4. Final cleanup is deferred: retain Theme `monitoring/**`, rollback workflows, WIF and credentials. They are still required by official GA4. Keep Layer 3 storefront snippet/reporting code permanently in Theme.
 
