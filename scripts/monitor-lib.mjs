@@ -34,7 +34,15 @@ export function requireEnv(options = {}) {
   if (missing.length) throw new Error(`Required monitoring configuration missing: ${missing.join(', ')}`);
 }
 
-export async function ga(method, body) {
+export function assertUnrestrictedMetrics(payload) {
+  const restricted = payload.metadata?.schemaRestrictionResponse?.activeMetricRestrictions || [];
+  if (restricted.length) {
+    const names = restricted.map((entry) => `${entry.metricName} (${(entry.restrictedMetricTypes || []).join(', ')})`).join('; ');
+    throw new Error(`GA4_METRIC_ACCESS_RESTRICTED: ${names}. Restricted zero values are unavailable data, not zero sales.`);
+  }
+}
+
+export async function ga(method, body, { allowRestrictedMetrics = false } = {}) {
   const response = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:${method}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
@@ -42,6 +50,7 @@ export async function ga(method, body) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.error) throw new Error(`GA4 ${method} HTTP ${response.status}: ${payload.error?.message || JSON.stringify(payload)}`);
+  if (!allowRestrictedMetrics) assertUnrestrictedMetrics(payload);
   return payload;
 }
 

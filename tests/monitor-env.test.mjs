@@ -10,7 +10,23 @@ delete process.env.CF_ACCOUNT_ID;
 delete process.env.CF_API_TOKEN;
 delete process.env.MONITOR_HEARTBEAT_TOKEN;
 
-const { missingRequiredEnv } = await import('../scripts/monitor-lib.mjs');
+const { missingRequiredEnv, assertUnrestrictedMetrics, ga } = await import('../scripts/monitor-lib.mjs');
+
+const restrictedReport = {
+  rows: [{ metricValues: [{ value: '0' }] }],
+  metadata: { schemaRestrictionResponse: { activeMetricRestrictions: [{ metricName: 'purchaseRevenue', restrictedMetricTypes: ['REVENUE_DATA'] }] } },
+};
+
+test('restricted zeros fail as an access problem instead of becoming zero revenue', () => {
+  assert.throws(() => assertUnrestrictedMetrics(restrictedReport), /GA4_METRIC_ACCESS_RESTRICTED: purchaseRevenue \(REVENUE_DATA\)/);
+  assert.doesNotThrow(() => assertUnrestrictedMetrics({ rows: restrictedReport.rows }));
+});
+
+test('only explicit diagnostic queries can inspect restricted results', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(restrictedReport));
+  await assert.rejects(ga('runReport', {}), /GA4_METRIC_ACCESS_RESTRICTED/);
+  assert.deepEqual(await ga('runReport', {}, { allowRestrictedMetrics: true }), restrictedReport);
+});
 
 test('GA4 validation in shadow mode does not require D1 or heartbeat credentials', () => {
   assert.deepEqual(missingRequiredEnv({ needsD1: false }), []);

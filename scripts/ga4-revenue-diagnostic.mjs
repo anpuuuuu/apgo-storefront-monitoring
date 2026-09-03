@@ -8,7 +8,7 @@ const requests = [
   { name: 'itemPurchase', dimensions: [{ name: 'date' }], metrics: ['itemsPurchased', 'itemRevenue'] },
 ];
 for (const { name, metrics, ...rest } of requests) {
-  const report = await ga('runReport', { ...rest, dateRanges: ranges, metrics: metrics.map((metric) => ({ name: metric })), limit: '1000' });
+  const report = await ga('runReport', { ...rest, dateRanges: ranges, metrics: metrics.map((metric) => ({ name: metric })), limit: '1000' }, { allowRestrictedMetrics: true });
   const headers = [...(report.dimensionHeaders || []), ...(report.metricHeaders || [])].map((header) => header.name);
   const rows = (report.rows || []).map((row) => Object.fromEntries(headers.map((header, i) => [header, [...(row.dimensionValues || []), ...(row.metricValues || [])][i]?.value])));
   // Aggregate reporting data only: no transaction IDs, customer data or credentials.
