@@ -6,13 +6,37 @@ The owner requested completion of the remaining migration, including GA4 accepta
 
 - Central Live Post-deploy [33742755562](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33742755562) completed successfully at 10:42 UTC. Its summary reports `ok`, with no failed, missing or transient journeys. Theme source is `eb3b709f226d749bc341428409ed0a0c17856301`.
 - Central **Live Daily** [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) completed successfully at 11:40:34 UTC. Downloaded plan, batch and aggregate evidence contains 15 expected/15 received unique journeys, all passed on their first attempt, with zero failed/missing/transient results. Every result uses exact Theme SHA `eb3b709f226d749bc341428409ed0a0c17856301`. `/health` independently confirms `apgo-my:layer2`, source `playwright-central-daily`, status `ok`, observed at `2026-09-03T11:40:31.963Z`. This verifies manual Live Daily acceptance, not scheduled execution.
-- After the owner's explicit confirmation, the service account's direct Property `547019474` No Revenue Metrics restriction was removed and saved. The resulting GA4 access screen confirms **Viewer, No Cost Metrics**; no account-level, Editor, Administrator or cost access was added. Central API acceptance is next. CLI IAM reauthentication is a separate gate.
-- Central Layer 4 remains paused; Theme GA4 and its GA4-only watchdog remain official. Existing Layer 1/3 Worker remains active. Old code, WIF and secrets are not retired yet.
+- After the owner's explicit confirmation, the service account's direct Property `547019474` No Revenue Metrics restriction was removed and saved. The resulting GA4 access screen confirms **Viewer, No Cost Metrics**; no account-level, Editor, Administrator or cost access was added. API acceptance below now passes. Google Cloud requires separate identity verification before old WIF retirement.
+- **Full Live ownership enabled at 12:26 UTC / 20:26 MYT**: central mode Live, schedules enabled, Layer 4 pause false. All six Theme monitoring workflows are disabled with no in-flight legacy runs. The existing Error Worker was deployed successfully from protected central main; its URL/D1/Cron remain unchanged.
 - Pre-retirement rollback tag was pushed and remotely verified: Theme `monitoring-pre-retirement-20260903` resolves to `eb3b709f226d749bc341428409ed0a0c17856301`. It is a recovery baseline, not a claim that retirement happened. Before any deletion, re-read current Theme main and preserve subsequent unrelated edits.
-- Read-only dependency audit found only six tracked Theme workflows, all monitoring-owned, and no tracked frontend reference into `monitoring/`. Retain `snippets/apgo-error-monitor.liquid` (baseline blob `4a84619ad4346acfdac1008967fea04aaf93a3a0`) and the entire assets/blocks/config/layout/locales/sections/snippets/templates trees. All six old workflow files and `monitoring/**` still exist.
+- Theme [PR #14](https://github.com/anpuuuuu/apgo-theme/pull/14) retired all 65 tracked monitoring/workflow files and added `MONITORING.md`, merged as `65546a24ba91a607e50e37013931db884b39a1ab`. Post-merge Git comparison proves the entire assets/blocks/config/layout/locales/sections/snippets/templates trees are byte-identical to the rollback tag; the Layer 3 snippet and all layout/cart reporting remain. Untracked local artifacts were preserved. Theme contract validation passed against this retired tree.
 - Old WIF Provider is exactly `projects/223821071753/locations/global/workloadIdentityPools/github-actions/providers/apgo-theme`. Live IAM policy inspection via gcloud failed on required reauthentication; no provider or binding was changed. Confirm actual binding/condition before revocation, never infer it from this variable alone.
 
-## Remaining sequence and pass criteria
+## Final acceptance evidence
+
+All GA4 runs below used central commit `5aaeeacdc194088f4eff5293fa40e4c878f3bc22`, Live transport and Observe business mode. Old GA4/watchdog were stopped before the first stateful central check.
+
+| Check | Run | Evidence |
+| --- | --- | --- |
+| Read-only revenue diagnostic | [33754714651](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33754714651) | All three reports unrestricted, positive purchase/item revenue; raw values suppressed |
+| Validate | [33754805580](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33754805580) | Queries, storefront health and Live heartbeat succeeded |
+| Daily Primary | [33754934057](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33754934057) | Target `20260902`, generated `2026-09-03T12:23:56.634Z`, positive revenue, no data-quality codes |
+| Daily Confirm | [33755039926](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755039926) | Same target; `primaryGeneratedAt` exactly matches this Primary, not the old restricted report |
+| Realtime | [33755108270](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755108270) | Success; D1 heartbeat at `12:25:50.964Z` points to this central run |
+| Full central self-health | [33755242476](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755242476) | Daily and GA4 freshness both verified; independent Layer 3 self-test succeeded |
+| Error Worker deployment | [33755751378](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755751378) | Existing Worker version `15aec2ca-7062-4dc0-9438-b1430c4a3777`; same URL and `*/5 * * * *`; no D1 migration |
+| Post-deployment self-health | [33755924252](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755924252) | Central NEXT-only authentication succeeded; Layer 3 heartbeat `12:34:14.802Z` |
+
+Independent read-only D1 queries confirmed the new Live Daily candidate under `apgo-my:ga4:daily:candidate:20260902` with the expected timestamp and positive transaction/revenue flags. Namespaced Layer 2 and Layer 4 heartbeats point to central runs; unnamespaced historical heartbeat rows remain unchanged from August 28. The automatic Theme-retirement Post-deploy run [33755569816](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33755569816) is still running at this record; do not launch a duplicate.
+
+## Credential retirement status
+
+- Error Worker legacy `MONITOR_HEARTBEAT_TOKEN` was deleted. Its central `MONITOR_HEARTBEAT_TOKEN_NEXT` and shared Telegram secrets remain; NEXT-only operation was verified after central deployment.
+- Theme GitHub secrets `CF_ACCOUNT_ID`, `MONITOR_HEARTBEAT_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and all four monitoring variables were removed. No Theme environments exist. The shared Telegram bot itself was not revoked.
+- Theme `CF_API_TOKEN` remains temporarily for exact identity resolution. The Cloudflare account has a new dedicated `APGO Central Monitoring - 2026-09` token and several broad/general tokens; names alone cannot prove which old token is monitoring-only or unused elsewhere. The owner has been asked to identify the old token and sharing. Do not guess or revoke a generic token, and do not publish its value.
+- Old Google provider/principal retirement remains pending the separate Google Cloud identity challenge. Central provider/service account/pool must be retained.
+
+## Cutover checklist (steps 1–5 executed; credential gates remain)
 
 1. Complete the Live Daily above. Inspect every expected result, exact Theme SHA, evidence hygiene and actual successful heartbeat. A completed Post-deploy cannot stand in for Daily. Also confirm the next actual daily schedule through the normal cloud self-health/Actions record.
 2. After Google sign-in, inspect the service account on Property `547019474`. Remove only the authorized No Revenue Metrics restriction, keeping Viewer and other restrictions. If it is inherited, establish the wider scope before changing it. Read-only central `diagnose-revenue` must confirm unrestricted metrics; a nonzero transaction count with restricted zero revenue is not acceptance.
@@ -32,6 +56,7 @@ Required CI [33748657228](https://github.com/anpuuuuu/apgo-storefront-monitoring
 - Before credentials are revoked: pause central Layer 4, account for in-flight jobs, restore old GA4/watchdog; restore old Layer 2/scope `all` only if rolling back those functions too. Central and legacy must not write the same state concurrently.
 - After removing tracked legacy code: restore the exact pre-retirement monitoring files/workflows from the retained tag through a normal reviewed commit, without resetting unrelated Theme changes. Then restore ownership gates.
 - After credential retirement: rollback requires freshly authorized replacement credentials/WIF bindings; old revoked tokens cannot be recovered. Keep central monitoring operational until replacement authentication is tested. Never promise one-click rollback after credential revocation.
+- GA4 revenue is now readable. Before enabling restored legacy GA4, backport the public-log privacy protection; the pre-retirement Daily script printed financial summaries. File recovery alone is not safe authorization to start that old script.
 
 No D1 reverse migration or historic-data deletion is part of retirement. The final report must distinguish manual acceptance, observed schedules, active ownership and any pending external access.
 

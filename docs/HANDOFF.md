@@ -2,7 +2,7 @@
 
 Updated: 2026-09-03 (MYT)
 
-**Latest objective:** the owner has requested completion of full central migration. Final Live Daily [33748270647](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33748270647) passed 15/15 first-attempt journeys and wrote the verified central Daily heartbeat at `2026-09-03T11:40:31.963Z`. After explicit owner confirmation, GA4 Property `547019474` now shows the service account as **Viewer, No Cost Metrics**, with the No Revenue Metrics restriction removed. API acceptance remains pending and Layer 4 is still paused centrally. Public financial-log suppression must be deployed before the unrestricted diagnostic. CLI IAM reauthentication remains separate. Follow [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for remaining gates and credential-specific retirement; do not delete active GA4 dependencies prematurely.
+**Latest objective:** full central Live ownership is verified and Theme monitoring code is retired. Live Daily passed 15/15; unrestricted GA4 diagnostic, Validate, Primary, Confirm, Realtime, full self-health, protected-main Error Worker deployment and NEXT-only self-test all passed. Remaining: finish the automatic retirement Post-deploy run, resolve the old Cloudflare token identity/sharing, and complete separate Google Cloud verification to revoke old WIF. See [FINAL-CUTOVER.md](FINAL-CUTOVER.md) for exact evidence and safe credential/rollback gates. Do not claim provider revocation is done.
 
 ## Current state
 
@@ -10,9 +10,9 @@ Updated: 2026-09-03 (MYT)
 - Theme repository: `anpuuuuu/apgo-theme` (`1154313539`).
 - Migration source tag: `monitoring-migration-source-fa976c1`.
 - Central `main` is protected: PR required, `test` required, force-push/deletion disabled.
-- **Partial Live cutover completed September 3, 18:09 MYT**: `MONITOR_MODE=live`, `MONITOR_SCHEDULE_ENABLED=true`, `MONITOR_LAYER4_PAUSED=true`.
-- Owner explicitly waived the 48-hour Shadow review after the current full Daily gate passed (15/15 first-attempt successes). The six-hour Codex review automation was deleted. This is not full Layer 1–4 acceptance; GA4 remains deferred. Current evidence and rollback: [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md). [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md) is historical.
-- Central owns Layer 2 and website self-health/Layer 3 self-test. Old Theme Layer 2 V2 is disabled. Old GA4 remains active; old self-health is active only as its schedule-recovery watchdog (`MONITOR_SELF_HEALTH_SCOPE=ga4-only`). Existing Error Worker Layer 1/3 continues unchanged. Do not disable all Theme workflows or remove old credentials while GA4 still depends on them.
+- **Full Live cutover September 3, 20:26 MYT**: `MONITOR_MODE=live`, `MONITOR_SCHEDULE_ENABLED=true`, `MONITOR_LAYER4_PAUSED=false`. GA4 business mode remains Observe, not Armed.
+- Owner waived the 48-hour Shadow review; the six-hour Codex review automation was deleted. [CUTOVER-LAYER23.md](CUTOVER-LAYER23.md) and [SHADOW-OBSERVATION.md](SHADOW-OBSERVATION.md) record earlier stages. Current acceptance and rollback: [FINAL-CUTOVER.md](FINAL-CUTOVER.md).
+- Central owns all monitoring workflows and the existing Error Worker deployment. Theme main `65546a24ba91a607e50e37013931db884b39a1ab` contains no tracked monitoring directory or workflows, only a central pointer and the unchanged frontend Layer 3 integration. All six old workflows are disabled. Old heartbeat value and four old repo secrets/all variables were removed; old CF API token identity and old WIF retirement remain unresolved.
 - Theme compatibility fix `e8a9bfa` restored explicit `apgo-my` Layer 2/4 heartbeats and multi-site health parsing; Layer 3/4 namespaced heartbeats were verified healthy on 2026-08-30.
 - No Shopify product, discount, inventory, tracking or customer-facing Theme behavior was changed by this migration.
 
