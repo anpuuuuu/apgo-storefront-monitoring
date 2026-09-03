@@ -119,6 +119,6 @@ Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`
 
 完整迁移、GitHub App、WIF、Secrets 与回退步骤见 `docs/MIGRATION.md`。
 
-当前迁移状态（2026-08-31）：GitHub App、Webhook、选定仓库安装、WIF、D1 Namespace 与两个 Worker 基础设施已完成；真实 Push 的精确 SHA Dispatch 与 Delivery 去重已通过，Layer 2 Post-deploy `3/3` 与 Daily `3/3` 均为全 Journey 首次通过、无 transient 且证据扫描干净。Layer 4 realtime/read-only WIF、Worker health、Layer 3 authenticated self-test 与 namespaced D1 write 也已验证。仍需补齐中央 Cloudflare/Telegram Secrets，验证 stateful Layer 4 Daily 和 Telegram failure/recovery，运行 48 小时 Shadow，再进行 Cutover。最新进度与下一步以 `docs/HANDOFF.md` 为准。
+当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；Layer 2 Post-deploy `3/3`、Daily `3/3` 通过。Cloudflare/Telegram Secrets 已保存，D1 权限、Telegram 两条迁移测试消息、Dispatcher 凭证同步及 Layer 4 Realtime/Daily Primary/Confirm 均已验证。GA4 Shadow 状态已与正式记录隔离；但 Self-health 的 Layer 3 自动自测仍需补齐 Shadow 隔离，因此定时仍关闭、48 小时 Shadow 尚未开始。GA4 另有「交易数非零、营收为零」的数据质量问题待查，不能当成零销售。最新证据与后续步骤见 `docs/HANDOFF.md`。
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。

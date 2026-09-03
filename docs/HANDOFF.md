@@ -48,6 +48,11 @@ Updated: 2026-09-03 (MYT)
 - Central Daily runs [`33368898065`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33368898065), [`33371855523`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33371855523) and [`33375533482`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33375533482) each completed with 15/15 first-attempt successes, no failed/missing/transient result, no second-attempt evidence, valid JSON evidence and zero credential/Cart-token pattern hits. Daily validation is now `3/3`.
 - PR [`#23`](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/23) separated read-only Layer 4 validation requirements from stateful D1 credentials. Central run [`33378562035`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33378562035) then verified the new Repository-ID-restricted WIF provider, GA4 realtime and historical queries, and Worker health. It read all five funnel events successfully and correctly suppressed the Layer 4 production Heartbeat in Shadow mode.
 - Central self-health run [`33378623513`](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33378623513) verified the live Worker endpoint, the fresh namespaced Layer 1 Cron heartbeat, and an authenticated Layer 3 beacon. The self-test wrote `apgo-my:layer3` and immediately read it back as healthy from D1.
+- PR [#25](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/25), merged as `0276019`, completed resumable credential setup and GA4 Shadow state isolation. Local checks passed: 45 Layer 2/config tests, 34 Worker/helper tests, the PowerShell setup test, and both Worker dry-runs; required cloud CI also passed.
+- Credential validation [33736074523](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33736074523) passed on 2026-09-03: authenticated D1 read, Telegram bot/group verification and two explicitly labelled migration-test messages. Telegram confirmed both deliveries to the configured group. This validates notification transport, not an actual production incident/recovery.
+- Dispatcher deployment [33736077305](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33736077305) synchronized all five App/Webhook/Telegram secrets. Version `23c82a03-2d55-4830-99e2-c63c6528bad9` is deployed; `/health` returns 200 and unsigned Webhooks return 401. Error Worker, D1 schema and storefront files were not deployed or changed.
+- Stateful Layer 4 Daily Primary [33736053254](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33736053254), Confirm [33736146209](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33736146209), and Realtime [33736149576](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33736149576) passed. Confirm read the isolated Primary generated at `2026-09-03T08:56:31.829Z`; production heartbeats and business Telegram were suppressed. No service-account JSON key was used.
+- GA4 data-quality issue remains: the September 2 result contains 27 transactions but `purchaseRevenue=0`, reproduced in Confirm as `PURCHASE_REVENUE_MISSING`. Do not interpret this as zero sales or claim Revenue/AOV monitoring is verified. Diagnose GA4 revenue permissions/tracking separately; no tracking code was changed.
 
 ## Production resources
 
@@ -65,8 +70,8 @@ The GitHub App, installation and Dispatcher authentication are complete. The own
 
 - The replacement Cloudflare token has Workers Scripts Edit, D1 Edit and KV Edit on the selected account. Cloudflare's token UI scoped these permissions to the account, **not individual Workers/databases**; the owner accepted this scope. It has no DNS or billing permissions.
 - Telegram group discovery now requires the fresh, explicitly addressed `/monitor_setup@<verified-bot>` command and exact group selection. `-TelegramOnly` resumes without changing the saved Cloudflare token. API exceptions are reduced to safe stage/status hints and the window stays open for errors.
-- Remaining: run `Validate monitoring credentials` (read-only D1 probe and two clearly labelled Telegram delivery tests), then synchronize Dispatcher Telegram secrets using the existing protected-main deploy workflow. Do not claim notification delivery merely from the secret-list check.
-- Before stateful GA4 validation, Shadow reads/writes are isolated under `apgo-my:shadow:*`; Live continues using `apgo-my:*`. Daily Confirm must find that same mode's Primary result instead of silently passing when it is missing.
+- Credential validation and Dispatcher synchronization are complete; run links are recorded above. Never claim credentials can be read back from GitHub.
+- Shadow GA4 reads/writes are now isolated under `apgo-my:shadow:*`; Live continues using `apgo-my:*`. Daily Confirm must find that same mode's Primary result instead of silently passing when it is missing.
 
 Never copy credentials into this public Repo, logs or artifacts.
 
@@ -76,18 +81,18 @@ The bootstrap Cloudflare token created on 2026-08-30 was accidentally entered at
 
 1. Send one controlled no-content Theme `main` Push and verify the Dispatcher launches exactly one Central Post-deploy run for the exact full SHA. Replay its delivery ID and confirm deduplication.
 2. Manually run Layer 2 Daily three times and Post-deploy three times.
-3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider. Realtime/read-only validation is complete; run stateful Daily Primary then Confirm after the Shadow isolation change merges.
-4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts. Worker/Layer 3/D1 validation is complete; Telegram failure and recovery remain pending.
+3. Validate Layer 4 realtime/daily GA4 access through the new WIF provider. Read-only and stateful Realtime/Primary/Confirm validation are complete; the Revenue data-quality caveat above remains.
+4. Validate Error Worker health, Layer 3 self-test, D1 writes and Telegram operational alerts. Worker/Layer 3/D1 validation and labelled failure/recovery message transport are complete.
 5. Confirm Browser artifacts contain no Cart token, customer data or credentials.
 
 Only then set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow` for 48 hours. Shadow must not send business Telegram or write production heartbeat.
 
-Validation counter as of this update: Central Daily `3/3`; Central Post-deploy `3/3`. All counted Layer 2 runs finished on their first attempts with no Storefront failure, missing result or transient retry and with clean evidence scans. WIF, Layer 4 realtime/read-only GA4 queries, Worker health, authenticated Layer 3 self-test and namespaced D1 writes now pass in addition to exact Theme SHA, GA4 discovery, GitHub App authentication, signed Dispatcher ping, delivery deduplication and selected-repository installation. The latest official Theme Post-deploy run `33305592587` completed successfully after the Layer 2 root fixes. The 48-hour Shadow window has not started because stateful Layer 4 Daily and Telegram notification/recovery validation still require the replacement Cloudflare and Telegram credentials.
+Validation counter: Central Daily `3/3`; Central Post-deploy `3/3`, with clean evidence scans. Credentials, stateful GA4, Telegram transport and Dispatcher synchronization now pass. The 48-hour Shadow window has **not** started: finish the self-health Shadow isolation audit first. In particular, central `monitor-self-health.yml` currently runs authenticated `layer3-self-test.mjs` without a Shadow guard; that path refreshes the production `apgo-my:layer3` heartbeat. Earlier manual rollout validation intentionally exercised that production path, but automatic Shadow runs must not mask an old official self-test failure. Do not enable schedules until this is isolated/guarded and tested.
 
 ## Next actions in order
 
-1. Credentials are saved. Run the manual credential validation and synchronize Dispatcher secrets without changing the Error Worker or frontend.
-2. Validate isolated Layer 4 Daily Primary/Confirm plus labelled Telegram failure/recovery delivery. Layer 3 self-test, Layer 4 realtime/read-only WIF, Worker health and namespaced D1 writes are already complete.
+1. Finish self-health Shadow isolation so scheduled central self-tests cannot refresh the old official production heartbeat. Audit other scheduled paths for the same side effect before enabling schedules.
+2. Investigate `PURCHASE_REVENUE_MISSING` separately; distinguish restricted/missing GA4 data from actual store revenue. Keep business alerts in Observe; do not change storefront tracking without an explicit scope decision.
 3. Set `MONITOR_SCHEDULE_ENABLED=true` while keeping `MONITOR_MODE=shadow`, then compare Central and Theme results for 48 hours.
 4. If results match, disable the old Theme schedules and switch Central to `MONITOR_MODE=live`; observe another 48 hours.
 5. Only after the live window succeeds, remove Theme `monitoring/**` and old workflows, retain the Layer 3 storefront snippet/reporting code, and revoke old WIF/Cloudflare/GitHub credentials.
