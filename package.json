@@ -4,7 +4,7 @@
   "description": "Synthetic health checks for APGO storefronts (add-to-cart and critical flows)",
   "scripts": {
     "test": "playwright test",
-    "test:worker": "node --test tests/github-schedule-health.test.mjs tests/layer3-alerts.test.mjs tests/uptime.test.mjs tests/dispatcher.test.mjs tests/monitor-env.test.mjs",
+    "test:worker": "node --test tests/github-schedule-health.test.mjs tests/layer3-alerts.test.mjs tests/uptime.test.mjs tests/dispatcher.test.mjs tests/monitor-env.test.mjs tests/monitor-state.test.mjs tests/credential-validation.test.mjs",
     "test:theme-contract": "node --test tests/theme-regressions.test.mjs",
     "generate:sites": "node scripts/generate-worker-sites.mjs",
     "generate:check": "node scripts/generate-worker-sites.mjs --check",

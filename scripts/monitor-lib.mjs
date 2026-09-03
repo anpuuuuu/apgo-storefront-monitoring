@@ -11,6 +11,12 @@ export const cfToken = process.env.CF_API_TOKEN || '';
 export const databaseId = config.cloudflare.database_id;
 export const workerUrl = (process.env.MONITOR_WORKER_URL || config.cloudflare.worker_url || '').replace(/\/$/, '');
 export const monitorMode = process.env.MONITOR_MODE || 'shadow';
+if (!['shadow', 'live'].includes(monitorMode)) throw new Error('Invalid MONITOR_MODE');
+
+export function stateKey(key) {
+  // Shadow must never read or overwrite Live counters/candidates during migration.
+  return `${siteId}:${monitorMode === 'live' ? '' : 'shadow:'}${key}`;
+}
 
 export function missingRequiredEnv({ needsD1 = true, needsHeartbeat = monitorMode === 'live' } = {}) {
   const missing = [];
@@ -51,7 +57,7 @@ export async function d1(sql, params = []) {
 }
 
 export async function getState(key) {
-  const rows = await d1('SELECT value FROM state WHERE key = ?1', [`${siteId}:${key}`]);
+  const rows = await d1('SELECT value FROM state WHERE key = ?1', [stateKey(key)]);
   if (!rows.length) return null;
   try { return JSON.parse(rows[0].value); } catch { return null; }
 }
@@ -60,7 +66,7 @@ export async function setState(key, value) {
   await d1(
     `INSERT INTO state (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-    [`${siteId}:${key}`, JSON.stringify(value)]
+    [stateKey(key), JSON.stringify(value)]
   );
 }
 

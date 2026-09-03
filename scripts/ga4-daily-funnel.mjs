@@ -266,6 +266,10 @@ if (stage === 'primary') {
   if (dataQualityIssues.length) await logAlert('layer4', 'data_quality', summary);
 } else {
   const primary = await getState(stateKey);
+  if (!primary || primary.targetDate !== targetDate || primary.stage !== 'primary') {
+    throw new Error(`GA4 daily primary is missing for ${targetDate}; confirm cannot pass without it`);
+  }
+  summary.primaryGeneratedAt = primary.generatedAt;
   const confirmedLabels = new Set(anomalies.map((item) => item.label));
   const persistent = (primary?.anomalies || []).filter((item) => confirmedLabels.has(item.label));
   summary.persistent = persistent;
