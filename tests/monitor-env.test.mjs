@@ -42,6 +42,21 @@ test('production Worker deployment is main-only and migration remains opt-in', (
   assert.match(workflow, /if: inputs\.worker == 'error-monitor' && inputs\.apply_d1_migration/);
 });
 
+test('both production Workers receive the same repository Telegram secrets', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy-worker.yml', import.meta.url), 'utf8');
+  const errorMonitor = workflow.split(/\n      - name: Deploy Error Monitor\s*\r?\n/)[1]?.split(/\n      - name: Deploy Dispatcher\s*\r?\n/)[0];
+  const dispatcher = workflow.split(/\n      - name: Deploy Dispatcher\s*\r?\n/)[1]?.split(/\n      - name: Notify deployment failure\s*\r?\n/)[0];
+
+  for (const [name, step] of [['Error Monitor', errorMonitor], ['Dispatcher', dispatcher]]) {
+    assert.ok(step, `${name} deployment step must exist`);
+    const secretList = step.split(/secrets:\s*\|\s*\r?\n/)[1]?.split(/\r?\n        env:/)[0] || '';
+    assert.match(secretList, /^\s+TELEGRAM_BOT_TOKEN\s*$/m);
+    assert.match(secretList, /^\s+TELEGRAM_CHAT_ID\s*$/m);
+    assert.match(step, /TELEGRAM_BOT_TOKEN: \$\{\{ secrets\.TELEGRAM_BOT_TOKEN \}\}/);
+    assert.match(step, /TELEGRAM_CHAT_ID: \$\{\{ secrets\.TELEGRAM_CHAT_ID \}\}/);
+  }
+});
+
 process.env.MONITOR_SITE_ID = 'apgo-my';
 process.env.GA4_PROPERTY_ID = 'test-property';
 process.env.GOOGLE_OAUTH_ACCESS_TOKEN = 'test-access-token';

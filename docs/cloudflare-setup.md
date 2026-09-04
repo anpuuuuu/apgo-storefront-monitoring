@@ -30,6 +30,11 @@
 3. 第一次部署保持 `CRON_ENABLED=false`，避免未验证前正式告警。
 4. 从日志取得 `workers.dev` URL，设置 Repository Variable `MONITOR_WORKER_URL`。
 5. 将 `${MONITOR_WORKER_URL}/beacon` 写入 `snippets/apgo-error-monitor.liquid`。
+
+`Deploy monitoring Workers` 会从中央 Repository Secrets 向 Dispatcher 和 Error Monitor
+同时上传 `TELEGRAM_BOT_TOKEN` 与 `TELEGRAM_CHAT_ID`。不要在 Cloudflare Dashboard
+为两个 Worker 分别维护不同的 Bot Token；重新部署 Error Monitor 时也必须同步这两个
+Secret，避免告警身份分叉。
 6. 验证 `/health`、Heartbeat、非法 Origin、Layer 3 self-test、D1 与 Telegram。
 7. 全部通过后才把 `CRON_ENABLED` 改为 `true` 重新部署。
 
