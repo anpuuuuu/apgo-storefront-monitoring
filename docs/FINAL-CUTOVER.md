@@ -36,6 +36,17 @@ The automatic Theme-retirement Post-deploy plan, batch and aggregate were downlo
 
 ## Credential retirement status
 
+- Telegram sender convergence completed on September 4. PR [#42](https://github.com/anpuuuuu/apgo-storefront-monitoring/pull/42)
+  made both production Worker deployments upload the central Repository Secrets
+  `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Error Worker deployment
+  [33854679035](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33854679035)
+  then synchronized those secrets without a D1 migration and deployed Worker version
+  `16246f6b-af72-4707-9ad5-3f345049cd6d`. The same central credentials had already passed
+  the bot/group delivery probe in run
+  [33736074523](https://github.com/anpuuuuu/apgo-storefront-monitoring/actions/runs/33736074523).
+  Dispatcher, central Actions and Error Monitor therefore share one configured Telegram
+  identity. The legacy bot credential is no longer referenced by the monitoring runtime;
+  provider-side revocation or removal of that old bot remains an explicit owner action.
 - Error Worker legacy `MONITOR_HEARTBEAT_TOKEN` was deleted. Its central `MONITOR_HEARTBEAT_TOKEN_NEXT` and shared Telegram secrets remain; NEXT-only operation was verified after central deployment.
 - Theme GitHub secrets `CF_ACCOUNT_ID`, `MONITOR_HEARTBEAT_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and all four monitoring variables were removed. No Theme environments exist. The shared Telegram bot itself was not revoked.
 - On September 3 at approximately 21:38 MYT, the owner-authorized deletion of the Theme repository's final `CF_API_TOKEN` Secret succeeded. A fresh GitHub API read confirms `total_count: 0` and no repository Actions Secret names. This removes the old repository copy, **not the underlying Cloudflare token**; no secret value was read or recovered. Restoring legacy monitoring would require supplying authorized credentials again.
