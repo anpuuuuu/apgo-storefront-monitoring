@@ -60,6 +60,15 @@ jobs:
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           workingDirectory: workers/error-monitor
           command: deploy --config wrangler.jsonc
+          # Keep every monitoring sender on the repository's single approved
+          # Telegram identity. Without this upload, Wrangler preserves whatever
+          # Bot token was already attached to the Worker.
+          secrets: |
+            TELEGRAM_BOT_TOKEN
+            TELEGRAM_CHAT_ID
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       - name: Deploy Dispatcher
         if: inputs.worker == 'dispatcher'
         uses: cloudflare/wrangler-action@v3
