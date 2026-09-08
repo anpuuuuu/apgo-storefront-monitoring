@@ -35,6 +35,7 @@ export function dailyPublicStatus(summary) {
     persistentAnomalyCount: summary.persistent?.length || 0,
     dataQualityCodes: summary.dataQualityIssues.map(({ code }) => code),
     persistentDataQualityCodes: (summary.persistentDataQualityIssues || []).map(({ code }) => code),
+    realtimeCoverage: summary.realtimeCoverage || null,
     hasTransactions: summary.overall.transactions > 0,
     hasPurchaseRevenue: summary.overall.revenue > 0,
     financialValuesSuppressed: true,

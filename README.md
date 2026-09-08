@@ -75,16 +75,19 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 认证使用 GitHub OIDC/WIF，不使用或保存 JSON Service Account Key。
 
-实时每小时第 19、49 分钟读取最近 30 分钟：`page_view`、`view_item`、`add_to_cart`、`begin_checkout`、`purchase`。
+实时每 30 分钟读取最近 30 分钟：`page_view`、`view_item`、`add_to_cart`、`begin_checkout`、`purchase`。
+
+排程由 Dispatcher Worker 的 Cloudflare Cron（`*/5`）负责：读取 `/health`，Layer 4 心跳 ≥28 分钟就 `workflow_dispatch` 一次 `realtime`；UTC 04:25 / 06:55 之后各派发一次 `daily-primary` / `daily-confirm`；Layer 3 心跳 >90 分钟派发 self-health。GitHub 自己的 `19,49 * * * *` 与 daily cron 保留作冗余——GitHub 对高频 cron 只送达约 18%，对每日 cron 会晚 4–6 小时，不能单独依赖。KV 锁、最近 15 分钟已有 run、以及失败后 60 分钟退避都会阻止重复派发。
 
 - Collection：Layer 1 正常、同期中位数 ≥10、连续两个窗口 page_view=0。
-- ATC：同期中位数 ≥3、连续两个窗口 add_to_cart=0。
+- ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。
+- 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
 - 不因 30 分钟没有 Purchase 单独告警。
 - API/WIF/D1/Heartbeat 失败必须让 Workflow 失败并发监控故障通知。
 - GA4 返回 `activeMetricRestrictions` 时，以 `GA4_METRIC_ACCESS_RESTRICTED` 非零退出：无权读取的营收不能当成零销售，也不能写入正常日报/基准。仅手动 `diagnose-revenue` 可输出带限制标记的只读诊断，供排查权限。
 
-每日报告计算三个转化率、Purchasers、Transactions、Revenue、AOV，并拆 MY/SG、device、洗衣精、Aurora、其他 Product、Campaign Page。异常需低于同星期 28 天基准的 50%，且满足最低 ATC/Checkout 样本；12:17 先记录，14:47 仍异常才确认。
+每日报告计算三个转化率、Purchasers、Transactions、Revenue、AOV，并拆 MY/SG、device、洗衣精、Aurora、其他 Product、Campaign Page。异常需低于同星期 28 天基准的 50%，且满足最低 ATC/Checkout 样本；12:17 先记录，14:47 仍异常才确认。同一 `targetDate` 的同一阶段在 12 小时内重复送达（Dispatcher 先跑、GitHub 迟到的 cron 后到）只写 `daily-skip` 心跳并退出，不重算、不重发；`DAILY_FORCE=true` 可强制重跑。
 
 `config/alerts-config.json` 默认 `observe`。前 14 天只写 `would_alert`；复盘后人工改为 `armed`。
 
@@ -98,14 +101,15 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 | 4 | 90 分钟 |
 
 - Worker Cron 检查 Layer 2/3/4。
-- GitHub 每小时检查 Worker `/health`、Layer 1、Layer 2/4 最近 scheduled run。
+- Dispatcher Cron 每 5 分钟按 `/health` 心跳年龄补派 Layer 4 realtime（≥28 分钟）、每日两阶段与 Layer 3 自检；`SCHEDULER_ENABLED=false` 关闭，`SCHEDULER_DRY_RUN=true` 只记录决策。
+- GitHub 每小时检查 Worker `/health`、Layer 1、Layer 2/4 最近 scheduled run；Layer 4 超过 45 分钟无完成 run 时补派，作为低于 90 分钟 warning 线的第二兜底。
 - Workflow 成功但 Heartbeat 写入失败仍视为失败。
 
 ## Secrets 与 Variables
 
 Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`。
 
-Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。`MONITOR_LAYER4_PAUSED=true` 暂停中央 Layer 4 定时及自检恢复触发，不影响 Layer 2 广告清单发现，也不代表 GA4 验收通过。`MONITOR_SHADOW_STARTED_AT`、`MONITOR_SHADOW_REVIEW_AFTER` 记录观察时间，不自动触发 Cutover。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
+Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。`MONITOR_LAYER4_PAUSED=true` 暂停中央 Layer 4 定时、自检恢复触发与 Dispatcher 派发（`trigger=scheduler` 的 run 会被跳过），不影响 Layer 2 广告清单发现，也不代表 GA4 验收通过；长时间暂停时同时把 Dispatcher 的 `SCHEDULER_ENABLED` 改为 `false`，避免每 15 分钟产生一条 skipped run。Dispatcher Worker 自身的 `vars`：`CENTRAL_REPOSITORY`、`MONITOR_WORKER_URL`、`SCHEDULER_ENABLED`、`SCHEDULER_DRY_RUN`（在 `workers/dispatcher/wrangler.jsonc`）。`MONITOR_SHADOW_STARTED_AT`、`MONITOR_SHADOW_REVIEW_AFTER` 记录观察时间，不自动触发 Cutover。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
 
 任何必要值缺失都必须失败，不再“跳过后显示绿色”。
 
@@ -124,4 +128,6 @@ Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`
 
 当前迁移状态（2026-09-03）：GitHub App、WIF、Worker 与 D1 已完成；此前 Layer 2 Post-deploy `3/3`、Daily `3/3` 通过，本次切换前追加 Daily 亦为 `15/15` 首次通过、无漏测/限流、证据扫描干净。用户随后批准不等 48 小时，现已部分 Live；六小时 Codex 复查已取消。中央 Live 自检与旧 GA4-only Watchdog 均已云端验证通过。新一次更新后浏览器批次仍在运行，首次 Live Daily 心跳待下一次每日任务确认，不把旧 Shadow 成功冒充 Live 心跳。「27 笔交易但营收为零」是服务账号的 `REVENUE_DATA` 读取限制，权限调整和中央 GA4 验收继续暂缓。尚未删除旧监控代码或撤销其凭证，本次未部署 Worker、未修改顾客页面。详情见 `docs/CUTOVER-LAYER23.md` 和 `docs/HANDOFF.md`。
 
-紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。
+紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。Dispatcher 排程回退：`SCHEDULER_ENABLED=false` 重新部署 dispatcher，GitHub 自身的 cron 与每小时 watchdog 继续运作。
+
+Dispatcher 排程上线顺序：合并时 `SCHEDULER_ENABLED=false` → 改 `true` + `SCHEDULER_DRY_RUN=true` 部署并看 ≥2 小时的 `scheduler_tick` 日志 → `SCHEDULER_DRY_RUN=false` 部署，观察 `/health` 的 `layer4.ageSeconds` 连续 2 小时不超过 40 分钟、无重复业务 Telegram。

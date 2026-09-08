@@ -8,7 +8,10 @@ if (!token || !repository) throw new Error('GITHUB_TOKEN and GITHUB_REPOSITORY a
 const checks = [
   // Post-deploy successes must not hide a missed daily commerce run.
   { workflow: 'site-health-v2.yml', maxAgeMinutes: 30 * 60, events: ['schedule', 'workflow_dispatch'], inputs: { cadence: 'daily', retry_delay_seconds: '60' } },
-  { workflow: 'monitor-alerts.yml', maxAgeMinutes: 100, events: ['schedule', 'workflow_dispatch'], inputs: { mode: 'realtime', simulate_zero: 'false' } },
+  // The Dispatcher Cron re-dispatches realtime at ~28 minutes; this hourly
+  // watchdog is the second fallback and must stay below the 90-minute
+  // heartbeat warning so recovery precedes the alert instead of following it.
+  { workflow: 'monitor-alerts.yml', maxAgeMinutes: 45, events: ['schedule', 'workflow_dispatch'], inputs: { mode: 'realtime', simulate_zero: 'false' } },
 ];
 const now = Date.now();
 const ref = process.env.GITHUB_REF_NAME || 'main';

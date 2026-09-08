@@ -1,4 +1,5 @@
 import { MONITOR_SITES } from '../site-catalog.generated.mjs';
+import { runSchedulerTick } from './scheduler.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DELIVERY_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -105,13 +106,18 @@ async function githubJson(url, options) {
   return body;
 }
 
-async function installationToken(env, sourceRepository) {
+function centralRepository(env) {
+  return String(env.CENTRAL_REPOSITORY || 'anpuuuuu/apgo-storefront-monitoring');
+}
+
+/* The App is installed on both the Theme and the central repository, so the
+   central repository itself resolves the installation for self-dispatch. */
+async function installationToken(env, sourceRepository = centralRepository(env)) {
   const jwt = await githubAppJwt(env);
   const installation = await githubJson(`${GITHUB_API}/repos/${sourceRepository}/installation`, {
     headers: githubHeaders(jwt),
   });
-  const centralRepository = String(env.CENTRAL_REPOSITORY || 'anpuuuuu/apgo-storefront-monitoring');
-  const centralName = centralRepository.split('/')[1];
+  const centralName = centralRepository(env).split('/')[1];
   if (!centralName) throw new Error('CENTRAL_REPOSITORY is invalid');
   const token = await githubJson(`${GITHUB_API}/app/installations/${installation.id}/access_tokens`, {
     method: 'POST',
@@ -125,23 +131,11 @@ async function installationToken(env, sourceRepository) {
   return token.token;
 }
 
-async function dispatchLayer2(env, push, deliveryId) {
-  const centralRepository = String(env.CENTRAL_REPOSITORY || 'anpuuuuu/apgo-storefront-monitoring');
-  const token = await installationToken(env, push.site.repository);
-  const response = await fetch(`${GITHUB_API}/repos/${centralRepository}/actions/workflows/site-health-v2.yml/dispatches`, {
+async function dispatchWorkflow(env, token, workflowFile, inputs) {
+  const response = await fetch(`${GITHUB_API}/repos/${centralRepository(env)}/actions/workflows/${workflowFile}/dispatches`, {
     method: 'POST',
     headers: githubHeaders(token),
-    body: JSON.stringify({
-      ref: 'main',
-      inputs: {
-        site_id: push.site.siteId,
-        cadence: 'post-deploy',
-        source_repo: push.site.repository,
-        source_repository_id: push.repositoryId,
-        source_sha: push.sourceSha,
-        delivery_id: deliveryId,
-      },
-    }),
+    body: JSON.stringify({ ref: 'main', inputs }),
   });
   if (response.status !== 204) {
     const body = await response.json().catch(() => ({}));
@@ -149,13 +143,58 @@ async function dispatchLayer2(env, push, deliveryId) {
   }
 }
 
-async function notifyFailure(env, site, deliveryId, error) {
+async function listWorkflowRuns(env, token, workflowFile) {
+  const body = await githubJson(`${GITHUB_API}/repos/${centralRepository(env)}/actions/workflows/${workflowFile}/runs?per_page=15`, {
+    headers: githubHeaders(token),
+  });
+  return body.workflow_runs || [];
+}
+
+async function dispatchLayer2(env, push, deliveryId) {
+  const token = await installationToken(env, push.site.repository);
+  await dispatchWorkflow(env, token, 'site-health-v2.yml', {
+    site_id: push.site.siteId,
+    cadence: 'post-deploy',
+    source_repo: push.site.repository,
+    source_repository_id: push.repositoryId,
+    source_sha: push.sourceSha,
+    delivery_id: deliveryId,
+  });
+}
+
+async function sendTelegram(env, text) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
-  const message = `🔴 [${site?.label || 'MONITOR'}][Dispatcher] Post-deploy dispatch failed\nDelivery: ${deliveryId}\n${String(error?.message || error).slice(0, 900)}`;
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: message, disable_web_page_preview: true }),
+    body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
+  });
+}
+
+async function notifyFailure(env, site, deliveryId, error) {
+  await sendTelegram(env, `🔴 [${site?.label || 'MONITOR'}][Dispatcher] Post-deploy dispatch failed\nDelivery: ${deliveryId}\n${String(error?.message || error).slice(0, 900)}`);
+}
+
+async function fetchMonitorHealth(env) {
+  const base = String(env.MONITOR_WORKER_URL || '');
+  if (!base) throw new Error('MONITOR_WORKER_URL is missing');
+  // /health answers 503 with the full body while Layer 1 is down; the
+  // scheduler still needs the heartbeats then, so parse regardless of status.
+  const response = await fetch(`${base}/health`, { headers: { 'user-agent': 'APGO-Storefront-Monitor-Dispatcher/1.0' } });
+  return response.json().catch(() => null);
+}
+
+async function scheduledTick(env, scheduledTime) {
+  let token = null;
+  const withToken = async () => { token ||= await installationToken(env); return token; };
+  return runSchedulerTick(env, scheduledTime, {
+    sites: MONITOR_SITES,
+    fetchHealth: () => fetchMonitorHealth(env),
+    listRuns: async (workflow) => listWorkflowRuns(env, await withToken(), workflow),
+    dispatch: async (workflow, inputs) => dispatchWorkflow(env, await withToken(), workflow, inputs),
+    kvGet: (key) => env.DELIVERIES.get(key),
+    kvPut: (key, value, options) => env.DELIVERIES.put(key, value, options),
+    notify: (error) => sendTelegram(env, `🔴 [MONITOR][Dispatcher] Scheduler tick failed\n${String(error?.message || error).slice(0, 900)}`),
   });
 }
 
@@ -195,5 +234,15 @@ export default {
     if (url.pathname === '/health' && request.method === 'GET') return responseJson({ ok: true, service: 'apgo-monitor-dispatcher' });
     if (url.pathname === '/github/webhook' && request.method === 'POST') return webhook(request, env, ctx);
     return responseJson({ ok: false, error: 'not found' }, 404);
+  },
+
+  // SCHEDULER_ENABLED is the rollout gate, like CRON_ENABLED on the error
+  // monitor. SCHEDULER_DRY_RUN logs every decision without dispatching.
+  async scheduled(controller, env, ctx) {
+    if (env.SCHEDULER_ENABLED !== 'true') {
+      console.log(JSON.stringify({ event: 'scheduler_skipped', scheduledTime: controller.scheduledTime, reason: 'SCHEDULER_ENABLED is not true' }));
+      return;
+    }
+    ctx.waitUntil(scheduledTick(env, controller.scheduledTime));
   },
 };

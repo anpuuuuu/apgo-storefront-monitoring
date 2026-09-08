@@ -11,6 +11,7 @@ import {
   telegram,
 } from './monitor-lib.mjs';
 import { dailyPublicStatus } from './ga4-public-status.mjs';
+import { coverageForDate, isDailyStageFresh } from './ga4-anomaly-lib.mjs';
 
 requireEnv();
 
@@ -169,6 +170,19 @@ function anomaliesFor(label, current, baseline) {
   return issues.length ? { label, issues, current: compact(current), baseline } : null;
 }
 
+/* The Dispatcher Cron runs each stage at its deadline and GitHub's own cron
+   still lands the same stage hours later. The second delivery must not
+   recompute the candidate or, once armed, send the daily alert twice. */
+const candidateKey = `ga4:daily:candidate:${targetDate}`;
+const confirmedKey = `ga4:daily:confirmed:${targetDate}`;
+const rerunMs = Number(config.ga4.daily.rerun_after_hours || 12) * 3_600_000;
+const priorStage = await getState(stage === 'primary' ? candidateKey : confirmedKey);
+if (isDailyStageFresh(priorStage, stage, targetDate, Date.now(), rerunMs) && process.env.DAILY_FORCE !== 'true') {
+  await heartbeat('layer4', { kind: 'daily-skip', stage, mode, targetDate, priorGeneratedAt: priorStage.generatedAt });
+  console.log(JSON.stringify({ ok: true, kind: 'daily', stage, targetDate, status: 'already_recorded', priorGeneratedAt: priorStage.generatedAt }));
+  process.exit(0);
+}
+
 const [eventReport, itemReport, globalReport, commerceReport] = await Promise.all([
   ga('runReport', {
     dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
@@ -250,6 +264,18 @@ if (overallCurrent.transactions > 0 && overallCurrent.revenue === 0) {
     message: `${overallCurrent.transactions} transactions were recorded, but GA4 purchaseRevenue is zero`,
   });
 }
+// How much of the target day the realtime rules actually observed. Missing
+// state means the coverage log has not started yet; do not report on it.
+const coverageState = await getState('ga4:realtime:coverage');
+const realtimeCoverage = coverageState
+  ? coverageForDate(coverageState.checkedAt, targetDate, config.ga4.timezone, config.ga4.realtime.window_minutes)
+  : null;
+if (realtimeCoverage && realtimeCoverage.ratio < Number(config.ga4.realtime.coverage_min_ratio || 0)) {
+  dataQualityIssues.push({
+    code: 'REALTIME_COVERAGE_LOW',
+    message: `realtime observed ${realtimeCoverage.windows}/${realtimeCoverage.expected} windows (${Math.round(realtimeCoverage.ratio * 100)}%) on ${targetDate}`,
+  });
+}
 const summary = {
   targetDate,
   stage,
@@ -261,15 +287,15 @@ const summary = {
   segments: targets.slice(1).map((target) => ({ label: target.label, current: compact(target.current), baseline: target.baseline })),
   anomalies,
   dataQualityIssues,
+  realtimeCoverage,
 };
 
-const stateKey = `ga4:daily:candidate:${targetDate}`;
 if (stage === 'primary') {
-  await setState(stateKey, summary);
+  await setState(candidateKey, summary);
   if (anomalies.length) await logAlert('layer4', 'daily_candidate', summary);
   if (dataQualityIssues.length) await logAlert('layer4', 'data_quality', summary);
 } else {
-  const primary = await getState(stateKey);
+  const primary = await getState(candidateKey);
   if (!primary || primary.targetDate !== targetDate || primary.stage !== 'primary') {
     throw new Error(`GA4 daily primary is missing for ${targetDate}; confirm cannot pass without it`);
   }
@@ -294,6 +320,14 @@ if (stage === 'primary') {
       await telegram(`APGO GA4 data quality alert (${targetDate})\n${summary.persistentDataQualityIssues.map((item) => item.message).join('\n')}\n${process.env.RUN_URL || ''}`);
     }
   }
+  await setState(confirmedKey, {
+    generatedAt: summary.generatedAt,
+    targetDate,
+    stage,
+    persistentCount: persistent.length,
+    persistentDataQualityCount: summary.persistentDataQualityIssues.length,
+    primaryGeneratedAt: primary.generatedAt,
+  });
 }
 
 await heartbeat('layer4', { kind: 'daily', stage, mode, targetDate, anomalyCount: anomalies.length });
