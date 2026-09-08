@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   appendCoverage,
   coverageForDate,
+  evaluateDropRules,
   isDailyStageFresh,
   nextRuleState,
   shouldRecordAlert,
@@ -87,4 +88,34 @@ test('isDailyStageFresh only skips a repeat of the same stage and date inside th
   assert.equal(isDailyStageFresh({ ...primary, stage: 'confirm' }, 'primary', '20260907', T0 + minutes(10), twelveHours), false);
   assert.equal(isDailyStageFresh({ targetDate: '20260907', generatedAt: at(0) }, 'confirm', '20260907', T0 + minutes(10), twelveHours), true);
   assert.equal(isDailyStageFresh(null, 'confirm', '20260907', T0, twelveHours), false);
+});
+
+test('evaluateDropRules fires only on partial collapses with normal upstream volume', () => {
+  const baseline = { page_view: 235, add_to_cart: 25, begin_checkout: 6 };
+  const settings = { traffic_floor_ratio: 0.6, drop_ratio: 0.35, add_to_cart_min_median: 8, begin_checkout_min_median: 2, current_atc_min: 8 };
+
+  const healthy = evaluateDropRules({ page_view: 215, add_to_cart: 17, begin_checkout: 19 }, baseline, settings);
+  assert.deepEqual([healthy.add_to_cart_drop, healthy.begin_checkout_drop, healthy.trafficOk], [false, false, true]);
+
+  const atcCollapsed = evaluateDropRules({ page_view: 220, add_to_cart: 6, begin_checkout: 2 }, baseline, settings);
+  assert.equal(atcCollapsed.add_to_cart_drop, true);
+
+  const trafficCollapsed = evaluateDropRules({ page_view: 60, add_to_cart: 3, begin_checkout: 1 }, baseline, settings);
+  assert.equal(trafficCollapsed.add_to_cart_drop, false, 'a traffic drop is not an add-to-cart failure');
+  assert.equal(trafficCollapsed.trafficOk, false);
+
+  const zeroAtc = evaluateDropRules({ page_view: 220, add_to_cart: 0, begin_checkout: 0 }, baseline, settings);
+  assert.equal(zeroAtc.add_to_cart_drop, false, 'zero stays with add_to_cart_zero');
+
+  const checkoutCollapsed = evaluateDropRules({ page_view: 220, add_to_cart: 30, begin_checkout: 1 }, baseline, settings);
+  assert.equal(checkoutCollapsed.begin_checkout_drop, true);
+  assert.equal(checkoutCollapsed.baselineRatio, 0.24);
+  assert.equal(checkoutCollapsed.currentRatio, 0.033);
+
+  const fewAtc = evaluateDropRules({ page_view: 220, add_to_cart: 5, begin_checkout: 1 }, baseline, settings);
+  assert.equal(fewAtc.begin_checkout_drop, false, 'below current_atc_min the ratio is too noisy');
+  const zeroCheckout = evaluateDropRules({ page_view: 220, add_to_cart: 30, begin_checkout: 0 }, baseline, settings);
+  assert.equal(zeroCheckout.begin_checkout_drop, false, 'zero stays with begin_checkout_zero');
+  const thinBaseline = evaluateDropRules({ page_view: 220, add_to_cart: 30, begin_checkout: 1 }, { page_view: 235, add_to_cart: 25, begin_checkout: 1 }, settings);
+  assert.equal(thinBaseline.begin_checkout_drop, false, 'baseline checkout median below the minimum');
 });

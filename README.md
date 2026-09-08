@@ -83,13 +83,14 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。
 - 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
+- 偏离带规则（`ga4.realtime.drop`，独立 `mode`，2026-09-08 起 observe）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥，同样需要相邻两窗确认。
 - 不因 30 分钟没有 Purchase 单独告警。
 - API/WIF/D1/Heartbeat 失败必须让 Workflow 失败并发监控故障通知。
 - GA4 返回 `activeMetricRestrictions` 时，以 `GA4_METRIC_ACCESS_RESTRICTED` 非零退出：无权读取的营收不能当成零销售，也不能写入正常日报/基准。仅手动 `diagnose-revenue` 可输出带限制标记的只读诊断，供排查权限。
 
 每日报告计算三个转化率、Purchasers、Transactions、Revenue、AOV，并拆 MY/SG、device、洗衣精、Aurora、其他 Product、Campaign Page。异常需低于同星期 28 天基准的 50%，且满足最低 ATC/Checkout 样本；12:17 先记录，14:47 仍异常才确认。同一 `targetDate` 的同一阶段在 12 小时内重复送达（Dispatcher 先跑、GitHub 迟到的 cron 后到）只写 `daily-skip` 心跳并退出，不重算、不重发；`DAILY_FORCE=true` 可强制重跑。
 
-`config/alerts-config.json` 默认 `observe`。前 14 天只写 `would_alert`；复盘后人工改为 `armed`。
+`config/alerts-config.json` 默认 `observe`。前 14 天只写 `would_alert`；复盘后人工改为 `armed`。零检测规则（`ga4.realtime.mode`）、偏离带规则（`ga4.realtime.drop.mode`）与日报（`ga4.daily.mode`）各自独立切换。
 
 ## Heartbeat 与自监控
 

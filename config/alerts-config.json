@@ -36,7 +36,16 @@
       "window_minutes": 30,
       "max_gap_minutes": 45,
       "min_gap_minutes": 15,
-      "coverage_min_ratio": 0.8
+      "coverage_min_ratio": 0.8,
+      "drop": {
+        "mode": "observe",
+        "observe_since": "2026-09-08",
+        "traffic_floor_ratio": 0.6,
+        "drop_ratio": 0.35,
+        "add_to_cart_min_median": 8,
+        "begin_checkout_min_median": 2,
+        "current_atc_min": 8
+      }
     },
     "daily": {
       "mode": "observe",

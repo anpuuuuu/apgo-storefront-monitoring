@@ -64,6 +64,40 @@ export function coverageForDate(timestamps, dateYYYYMMDD, timeZone, windowMinute
   return { windows: buckets.size, expected, ratio: expected ? buckets.size / expected : 0 };
 }
 
+/* Deviation-band rules for partial failures. Both require the current count
+   to be above zero so they stay disjoint from the *_zero rules.
+   - add_to_cart_drop: traffic at or above traffic_floor_ratio of baseline,
+     ATC at or below drop_ratio of its baseline median.
+   - begin_checkout_drop: enough current ATC, and the checkout/ATC ratio at
+     or below drop_ratio of the baseline ratio. */
+export function evaluateDropRules(current, baseline, settings) {
+  const cur = { page_view: 0, add_to_cart: 0, begin_checkout: 0, ...(current || {}) };
+  const base = { page_view: 0, add_to_cart: 0, begin_checkout: 0, ...(baseline || {}) };
+  const cfg = {
+    traffic_floor_ratio: 0.6, drop_ratio: 0.35, add_to_cart_min_median: 8, begin_checkout_min_median: 2, current_atc_min: 8,
+    ...(settings || {}),
+  };
+  const trafficOk = base.page_view > 0 && cur.page_view >= cfg.traffic_floor_ratio * base.page_view;
+  const addToCartDrop = trafficOk
+    && base.add_to_cart >= cfg.add_to_cart_min_median
+    && cur.add_to_cart > 0
+    && cur.add_to_cart <= cfg.drop_ratio * base.add_to_cart;
+  const baselineRatio = base.add_to_cart > 0 ? base.begin_checkout / base.add_to_cart : 0;
+  const currentRatio = cur.add_to_cart > 0 ? cur.begin_checkout / cur.add_to_cart : 0;
+  const beginCheckoutDrop = cur.add_to_cart >= cfg.current_atc_min
+    && base.begin_checkout >= cfg.begin_checkout_min_median
+    && baselineRatio > 0
+    && cur.begin_checkout > 0
+    && currentRatio <= cfg.drop_ratio * baselineRatio;
+  return {
+    add_to_cart_drop: addToCartDrop,
+    begin_checkout_drop: beginCheckoutDrop,
+    trafficOk,
+    baselineRatio: Math.round(baselineRatio * 1000) / 1000,
+    currentRatio: Math.round(currentRatio * 1000) / 1000,
+  };
+}
+
 /* A daily stage that already produced its result for the target date within
    rerunMs is a duplicate delivery (GitHub's late cron after the Dispatcher
    Cron already ran it), not a new day. */
