@@ -14,6 +14,11 @@ on:
       simulate_zero:
         type: boolean
         default: false
+      trigger:
+        description: Who requested the run. The Dispatcher Cron passes scheduler so the Layer 4 pause still applies.
+        type: choice
+        options: [manual, scheduler]
+        default: manual
 
 permissions:
   contents: read
@@ -22,8 +27,9 @@ permissions:
 jobs:
   plan:
     # Paused Layer 4 is excluded from partial Shadow acceptance, not a green result.
-    # An explicit manual diagnostic remains available when the owner resumes.
-    if: github.event_name != 'schedule' || (vars.MONITOR_SCHEDULE_ENABLED == 'true' && vars.MONITOR_LAYER4_PAUSED != 'true')
+    # An explicit manual diagnostic remains available when the owner resumes;
+    # the Dispatcher Cron (trigger=scheduler) honours the pause like a schedule.
+    if: (github.event_name != 'schedule' || (vars.MONITOR_SCHEDULE_ENABLED == 'true' && vars.MONITOR_LAYER4_PAUSED != 'true')) && !(inputs.trigger == 'scheduler' && vars.MONITOR_LAYER4_PAUSED == 'true')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}

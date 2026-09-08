@@ -10,6 +10,7 @@ import {
   telegram,
   workerHealthy,
 } from './monitor-lib.mjs';
+import { appendCoverage, nextRuleState, shouldRecordAlert } from './ga4-anomaly-lib.mjs';
 
 const validateOnly = process.env.VALIDATE_GA4 === 'true';
 requireEnv({ needsD1: !validateOnly });
@@ -73,16 +74,9 @@ function baselineCounts(report) {
 async function updateRule(rule, abnormal, detail) {
   const key = `ga4:realtime:${rule}`;
   const previous = await getState(key) || { consecutive: 0, active: false, lastAlertedAt: 0 };
-  const next = {
-    ...previous,
-    consecutive: abnormal ? previous.consecutive + 1 : 0,
-    active: abnormal ? previous.active : false,
-    checkedAt: new Date().toISOString(),
-    detail,
-  };
-  const confirmed = next.consecutive >= settings.consecutive_zeros;
-  const realertMs = settings.realert_hours * 3_600_000;
-  const shouldRecord = confirmed && (!previous.active || Date.now() - Number(previous.lastAlertedAt || 0) >= realertMs);
+  const { next, confirmed } = nextRuleState(previous, abnormal, Date.now(), settings);
+  next.detail = detail;
+  const shouldRecord = shouldRecordAlert(previous, confirmed, Date.now(), settings.realert_hours);
 
   if (shouldRecord) {
     next.active = true;
@@ -101,7 +95,10 @@ async function updateRule(rule, abnormal, detail) {
 
   if (!abnormal && previous.active) await logAlert('layer4', 'recovery', { rule, ...detail });
   await setState(key, next);
-  return { rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode };
+  return {
+    rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode,
+    gapMinutes: next.gapMinutes, coverageGap: next.coverageGap, duplicate: next.duplicate,
+  };
 }
 
 const [realtime, historical, storefrontHealthy] = await Promise.all([
@@ -149,6 +146,11 @@ results.push(await updateRule(
     && current.begin_checkout === 0,
   { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout } }
 ));
+
+// Rolling log of observed windows so the daily report can state how much of
+// the day realtime actually watched (REALTIME_COVERAGE_LOW below 80%).
+const coverageState = await getState('ga4:realtime:coverage');
+await setState('ga4:realtime:coverage', { checkedAt: appendCoverage(coverageState?.checkedAt, new Date().toISOString()) });
 
 await heartbeat('layer4', { kind: 'realtime', mode, current, baseline, results });
 console.log(JSON.stringify({ ok: true, kind: 'realtime', mode, current, baseline, storefrontHealthy, results }, null, 2));

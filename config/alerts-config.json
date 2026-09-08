@@ -32,7 +32,11 @@
       "begin_checkout_min_median": 2,
       "begin_checkout_current_atc_min": 5,
       "consecutive_zeros": 2,
-      "realert_hours": 6
+      "realert_hours": 6,
+      "window_minutes": 30,
+      "max_gap_minutes": 45,
+      "min_gap_minutes": 15,
+      "coverage_min_ratio": 0.8
     },
     "daily": {
       "mode": "observe",
@@ -40,7 +44,8 @@
       "atc_min": 20,
       "checkout_min": 10,
       "confirm_required": true,
-      "realert_hours": 24
+      "realert_hours": 24,
+      "rerun_after_hours": 12
     }
   }
 }

@@ -5,7 +5,15 @@
   "compatibility_date": "2026-08-20",
   "workers_dev": true,
   "vars": {
-    "CENTRAL_REPOSITORY": "anpuuuuu/apgo-storefront-monitoring"
+    "CENTRAL_REPOSITORY": "anpuuuuu/apgo-storefront-monitoring",
+    "MONITOR_WORKER_URL": "https://apgo-error-monitor.wadeyeh.workers.dev",
+    // Rollout gate for the Cron scheduler: false -> ticks are logged as skipped.
+    "SCHEDULER_ENABLED": "false",
+    // true -> plan and log every decision, never POST a workflow_dispatch.
+    "SCHEDULER_DRY_RUN": "true"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
   },
   "kv_namespaces": [
     {
