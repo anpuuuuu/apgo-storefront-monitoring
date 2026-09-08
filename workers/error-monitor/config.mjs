@@ -76,3 +76,20 @@ export const HEARTBEAT_LIMITS = {
 export const HEARTBEAT_CRITICAL_LIMITS = {
   layer2: 36 * 60 * 60_000,
 };
+
+// Shopify order heartbeat (orders.mjs). Mirrored in config/alerts-config.json
+// `orders` for documentation, like the js_errors limits above.
+export const ORDER_LIMITS = {
+  checkMinutes: 10,
+  baselineDays: 28,
+  sampleMinutes: 30,
+  percentile: 0.9,
+  multiplier: 1.5,
+  floorMinutes: 90,
+  capMinutes: 720,
+  criticalMultiplier: 2,
+  realertMs: 6 * 60 * 60_000,
+  baselineMaxAgeMs: 24 * 60 * 60_000,
+  failureNotifyMs: 6 * 60 * 60_000,
+  timeZone: 'Asia/Kuala_Lumpur',
+};

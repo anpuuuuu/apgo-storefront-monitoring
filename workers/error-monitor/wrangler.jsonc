@@ -6,7 +6,9 @@
   "workers_dev": true,
   "vars": {
     "CRON_ENABLED": "true",
-    "MONITOR_MODE": "live"
+    "MONITOR_MODE": "live",
+    // Shopify order heartbeat: observe writes would_alert only; armed sends Telegram.
+    "ORDERS_MODE": "observe"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
