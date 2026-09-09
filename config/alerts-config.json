@@ -60,9 +60,14 @@
     }
   },
   "orders": {
-    "_readme": "Shopify order heartbeat in workers/error-monitor/orders.mjs; values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",
+    "_readme": "Push-based order heartbeat in workers/error-monitor/orders.mjs (POST /orders/event from Shopify Flow, a WooCommerce webhook, or any backend); values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",
     "mode": "observe",
-    "observe_since": "2026-09-08",
+    "observe_since": "2026-09-09",
+    "source": "push",
+    "min_samples": 8,
+    "bootstrap_minutes": 360,
+    "push_stale_hours": 24,
+    "retention_days": 35,
     "check_minutes": 10,
     "baseline_days": 28,
     "sample_minutes": 30,

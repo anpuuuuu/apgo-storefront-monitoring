@@ -1,23 +1,37 @@
-/* First-party order heartbeat. GA4 tells us whether tracking works; the
-   Shopify order stream tells us whether commerce works, independent of
-   consent banners, ad blockers or a broken pixel. Purchases are sparse (about
-   one per 30 minutes at the afternoon peak, one per several hours at night),
-   so a fixed-window count would swing between 0 and 100%. Instead we measure
-   "minutes since the last order" and compare it with what that hour of the
-   week normally tolerates: the 90th percentile of the same measurement taken
-   every 30 minutes over the last 28 days, times 1.5, clamped to
-   [floor, cap]. Nothing here alerts on a quiet night that is normally quiet. */
-import { ORDER_LIMITS, siteKey } from './config.mjs';
+/* First-party order heartbeat, push based. GA4 tells us whether tracking
+   works; the order stream tells us whether commerce works, independent of
+   consent banners, ad blockers or a broken pixel.
+
+   Any platform that can send an HTTP request when an order is created feeds
+   the same endpoint (Shopify Flow "Send HTTP request", a WooCommerce
+   webhook, a custom backend, Make):
+
+     POST /orders/event
+     Authorization: Bearer <that site's ORDER_EVENT_TOKEN>
+     { "siteId": "apgo-my", "orderId": "…", "createdAt": "<ISO 8601>", "test": false }
+
+   Purchases are sparse (about one per 30 minutes at the afternoon peak, one
+   per several hours at night), so a fixed-window count would swing between
+   0 and 100%. Instead we measure "minutes since the last order" and compare
+   it with what that hour of the week normally tolerates: the 90th percentile
+   of the same measurement taken every 30 minutes over the last 28 days,
+   times 1.5, clamped to [floor, cap]. Buckets with too little history fall
+   back to a conservative bootstrap threshold, so the first weeks after a
+   site starts pushing cannot page on a normal quiet night. */
+import { ORDER_LIMITS, siteById, siteKey } from './config.mjs';
 import { getState, logAlert, setState } from './db.mjs';
+import { readLimitedText } from './errors.mjs';
+import { bearerToken, secretMatches } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
 import { shouldAlertHeartbeat } from './uptime.mjs';
-
-const SHOPIFY_API_VERSION = '2026-07';
-const MAX_BASELINE_PAGES = 10;
 
 function round(value, digits = 0) {
   const factor = 10 ** digits;
   return Math.round(Number(value) * factor) / factor;
+}
+
+function json(value, status = 200) {
+  return Response.json(value, { status, headers: { 'cache-control': 'no-store' } });
 }
 
 /* Hour-of-day buckets split weekday/weekend in the store's timezone:
@@ -40,7 +54,7 @@ export function percentile(values, fraction) {
 
 export function computeOrderBaseline(orderTimesMs, options) {
   const {
-    nowMs, baselineDays, sampleMinutes, percentile: fraction, multiplier, floorMinutes, capMinutes, timeZone,
+    nowMs, baselineDays, sampleMinutes, percentile: fraction, multiplier, floorMinutes, capMinutes, timeZone, minSamples, bootstrapMinutes,
   } = { ...ORDER_LIMITS, ...options };
   const orders = [...orderTimesMs].filter(Number.isFinite).sort((a, b) => a - b);
   const samples = new Map();
@@ -56,27 +70,38 @@ export function computeOrderBaseline(orderTimesMs, options) {
   const buckets = {};
   for (const [key, ages] of samples) {
     const p = percentile(ages, fraction);
+    const computed = Math.min(capMinutes, Math.max(floorMinutes, multiplier * p));
+    const immature = ages.length < minSamples;
     buckets[key] = {
       n: ages.length,
       p90Minutes: round(p),
-      thresholdMinutes: round(Math.min(capMinutes, Math.max(floorMinutes, multiplier * p))),
+      immature,
+      thresholdMinutes: round(immature ? Math.max(bootstrapMinutes, computed) : computed),
     };
   }
-  return { computedAt: new Date(nowMs).toISOString(), baselineDays, orderCount: orders.length, buckets };
+  const firstOrderAt = orders.length ? new Date(orders[0]).toISOString() : null;
+  return { computedAt: new Date(nowMs).toISOString(), baselineDays, orderCount: orders.length, firstOrderAt, buckets };
 }
 
-export function evaluateOrderGap({ baseline, lastOrderAtMs, nowMs, timeZone, criticalMultiplier = ORDER_LIMITS.criticalMultiplier }) {
+export function evaluateOrderGap({ baseline, lastOrderAtMs, nowMs, timeZone, criticalMultiplier = ORDER_LIMITS.criticalMultiplier, bootstrapMinutes = ORDER_LIMITS.bootstrapMinutes }) {
   const { key } = bucketFor(nowMs, timeZone);
   const ageMinutes = Number.isFinite(lastOrderAtMs) ? (nowMs - lastOrderAtMs) / 60_000 : Number.POSITIVE_INFINITY;
   const bucket = baseline?.buckets?.[key];
-  if (!bucket) return { severity: null, ageMinutes: round(ageMinutes), thresholdMinutes: null, bucket: key, reason: 'no_baseline_bucket' };
+  const thresholdMinutes = bucket ? bucket.thresholdMinutes : bootstrapMinutes;
   let severity = null;
-  if (ageMinutes > bucket.thresholdMinutes * criticalMultiplier) severity = 'critical';
-  else if (ageMinutes > bucket.thresholdMinutes) severity = 'warning';
-  return { severity, ageMinutes: round(ageMinutes), thresholdMinutes: bucket.thresholdMinutes, bucket: key };
+  if (ageMinutes > thresholdMinutes * criticalMultiplier) severity = 'critical';
+  else if (ageMinutes > thresholdMinutes) severity = 'warning';
+  return {
+    severity,
+    ageMinutes: round(ageMinutes),
+    thresholdMinutes,
+    bucket: key,
+    immature: !bucket || Boolean(bucket.immature),
+  };
 }
 
 export function formatMinutes(minutes) {
+  if (!Number.isFinite(minutes)) return 'ever';
   const total = Math.max(0, Math.round(minutes));
   const hours = Math.floor(total / 60);
   const rest = total % 60;
@@ -84,104 +109,135 @@ export function formatMinutes(minutes) {
 }
 
 function localClock(ms, timeZone) {
+  if (!Number.isFinite(ms)) return 'none on record';
   return new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
 }
 
 export function orderAlertText(site, evaluation, lastOrderAtMs, timeZone) {
   const icon = evaluation.severity === 'critical' ? '🔴' : '🟡';
   const bucketLabel = `${evaluation.bucket.startsWith('we') ? 'weekend' : 'weekday'} ${evaluation.bucket.slice(3)}:00`;
-  return `${icon} [${site.label}][Layer 4 · Orders] No Shopify orders for ${formatMinutes(evaluation.ageMinutes)} (expected ≤ ${formatMinutes(evaluation.thresholdMinutes)} for ${bucketLabel} ${timeZone})\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`;
+  const basis = evaluation.immature ? 'bootstrap threshold, baseline still maturing' : `${bucketLabel} ${timeZone}`;
+  return `${icon} [${site.label}][Layer 4 · Orders] No orders for ${formatMinutes(evaluation.ageMinutes)} (expected ≤ ${formatMinutes(evaluation.thresholdMinutes)}; ${basis})\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`;
 }
 
-async function shopifyGraphql(site, token, query, variables = {}) {
-  const response = await fetch(`https://${site.shopify.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-shopify-access-token': token, 'user-agent': 'APGO-HealthCheck/2.0 Orders' },
-    body: JSON.stringify({ query, variables }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Shopify Admin HTTP ${response.status}`);
-  if (body.errors?.length) throw new Error(`Shopify Admin GraphQL: ${body.errors.map((error) => error.message).join('; ').slice(0, 300)}`);
-  return body.data;
+/* ---- push endpoint --------------------------------------------------- */
+
+export function parseOrderEvent(body) {
+  if (!body || typeof body !== 'object') return { ok: false, error: 'invalid JSON body' };
+  const siteId = String(body.siteId || '').trim();
+  const orderId = String(body.orderId ?? '').trim().slice(0, 120);
+  const createdAtMs = Date.parse(String(body.createdAt || ''));
+  if (!siteId) return { ok: false, error: 'siteId is required' };
+  if (!orderId) return { ok: false, error: 'orderId is required' };
+  if (!Number.isFinite(createdAtMs)) return { ok: false, error: 'createdAt must be ISO 8601' };
+  const test = body.test === true || String(body.test).toLowerCase() === 'true';
+  return { ok: true, event: { siteId, orderId, createdAtMs, test } };
 }
 
-/* Newest real order. Test orders are excluded; cancelled orders still prove
-   that checkout worked, so they count. */
-export async function fetchLatestOrder(site, token, client = shopifyGraphql) {
-  const data = await client(site, token, `query LatestOrders {
-    orders(first: 10, sortKey: CREATED_AT, reverse: true) { edges { node { createdAt test } } }
-  }`);
-  const node = (data?.orders?.edges || []).map((edge) => edge.node).find((order) => !order.test);
-  return node ? Date.parse(node.createdAt) : null;
+/* Rolling list of {id, at} kept for retentionDays. Idempotent on orderId so
+   a platform retry never counts twice. */
+export function appendOrderLog(log, event, nowMs, { retentionDays = ORDER_LIMITS.retentionDays, cap = ORDER_LIMITS.logCap } = {}) {
+  const entries = Array.isArray(log?.entries) ? log.entries : [];
+  if (entries.some((entry) => entry.id === event.orderId)) return { log: { entries, updatedAt: log?.updatedAt || null }, duplicate: true };
+  const cutoff = nowMs - retentionDays * 86_400_000;
+  const kept = entries.filter((entry) => Number(entry.at) >= cutoff);
+  kept.push({ id: event.orderId, at: event.createdAtMs });
+  kept.sort((a, b) => a.at - b.at);
+  const trimmed = kept.length > cap ? kept.slice(kept.length - cap) : kept;
+  return { log: { entries: trimmed, updatedAt: new Date(nowMs).toISOString() }, duplicate: false };
 }
 
-export async function fetchBaselineOrderTimes(site, token, sinceMs, client = shopifyGraphql) {
-  const times = [];
-  let after = null;
-  for (let page = 0; page < MAX_BASELINE_PAGES; page += 1) {
-    const data = await client(site, token, `query BaselineOrders($after: String, $query: String!) {
-      orders(first: 250, after: $after, sortKey: CREATED_AT, query: $query) {
-        pageInfo { hasNextPage endCursor }
-        edges { node { createdAt test } }
-      }
-    }`, { after, query: `created_at:>=${new Date(sinceMs).toISOString()}` });
-    const connection = data?.orders;
-    for (const edge of connection?.edges || []) if (!edge.node.test) times.push(Date.parse(edge.node.createdAt));
-    if (!connection?.pageInfo?.hasNextPage) break;
-    after = connection.pageInfo.endCursor;
+export async function receiveOrderEvent(request, env) {
+  if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405);
+  let raw;
+  try { raw = await readLimitedText(request, ORDER_LIMITS.bodyBytes); }
+  catch (error) { return json({ ok: false, error: 'payload too large' }, error?.status === 413 ? 413 : 400); }
+  let body;
+  try { body = JSON.parse(raw); } catch { return json({ ok: false, error: 'invalid JSON' }, 400); }
+  const parsed = parseOrderEvent(body);
+  if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
+  const { event } = parsed;
+
+  const site = siteById(event.siteId);
+  if (!site?.orders?.tokenEnv) return json({ ok: false, error: 'unknown site or order events not enabled' }, 404);
+  const expected = env[site.orders.tokenEnv];
+  if (!expected) return json({ ok: false, error: 'order events not configured on the Worker' }, 503);
+  if (!(await secretMatches(bearerToken(request), expected))) return json({ ok: false, error: 'unauthorized' }, 401);
+  if (event.test) return new Response(null, { status: 204 });
+
+  const nowMs = Date.now();
+  const logKey = siteKey(site.id, 'orders:log');
+  const { log, duplicate } = appendOrderLog(await getState(env.DB, logKey), event, nowMs);
+  if (!duplicate) {
+    await setState(env.DB, logKey, log);
+    const lastKey = siteKey(site.id, 'orders:last');
+    const last = (await getState(env.DB, lastKey)) || {};
+    const lastMs = Date.parse(last.createdAt || '');
+    if (!Number.isFinite(lastMs) || event.createdAtMs > lastMs) {
+      await setState(env.DB, lastKey, { ...last, createdAt: new Date(event.createdAtMs).toISOString(), receivedAt: new Date(nowMs).toISOString(), checkedAt: last.checkedAt || new Date(nowMs).toISOString() });
+    }
   }
-  return times;
+  const pushKey = siteKey(site.id, 'orders:push');
+  const push = (await getState(env.DB, pushKey)) || { count: 0 };
+  await setState(env.DB, pushKey, { lastReceivedAt: new Date(nowMs).toISOString(), count: Number(push.count || 0) + 1 });
+  return json({ ok: true, siteId: site.id, duplicate, orders: log.entries.length }, 202);
 }
 
-async function notifyThrottled(env, site, text, nowMs) {
-  const key = siteKey(site.id, 'orders:notify-throttle');
-  const state = (await getState(env.DB, key)) || {};
+/* ---- scheduled evaluation -------------------------------------------- */
+
+async function notifyThrottled(env, site, key, text, nowMs, mode) {
+  const stateKey = siteKey(site.id, `orders:throttle:${key}`);
+  const state = (await getState(env.DB, stateKey)) || {};
   if (nowMs < Number(state.untilMs || 0)) return false;
-  await setState(env.DB, key, { untilMs: nowMs + ORDER_LIMITS.failureNotifyMs, text: String(text).slice(0, 200) });
-  await sendTelegram(env, text);
+  await setState(env.DB, stateKey, { untilMs: nowMs + ORDER_LIMITS.failureNotifyMs, text: String(text).slice(0, 200) });
+  if (mode === 'armed') await sendTelegram(env, text);
   return true;
 }
 
-export async function runOrderHeartbeat(env, site, nowMs = Date.now(), client = shopifyGraphql) {
-  const timeZone = site.shopify?.timeZone || ORDER_LIMITS.timeZone;
+export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
+  const timeZone = site.orders?.timeZone || ORDER_LIMITS.timeZone;
   const mode = env.ORDERS_MODE === 'armed' ? 'armed' : 'observe';
-  const token = env[site.shopify?.adminTokenEnv || ''];
-  if (!token) {
-    await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_check_failed', { siteId: site.id, reason: 'admin token missing', env: site.shopify?.adminTokenEnv });
-    await notifyThrottled(env, site, `🔴 [${site.label}][Layer 4 · Orders] Shopify Admin token ${site.shopify?.adminTokenEnv || ''} is not configured on the Worker`, nowMs);
-    return { ok: false, reason: 'token_missing' };
-  }
-
-  const baselineKey = siteKey(site.id, 'orders:baseline');
+  const logKey = siteKey(site.id, 'orders:log');
   const lastKey = siteKey(site.id, 'orders:last');
   const alertKey = siteKey(site.id, 'orders:alert');
-  try {
-    let baseline = await getState(env.DB, baselineKey);
-    if (!baseline || nowMs - Date.parse(baseline.computedAt) > ORDER_LIMITS.baselineMaxAgeMs) {
-      const times = await fetchBaselineOrderTimes(site, token, nowMs - ORDER_LIMITS.baselineDays * 86_400_000, client);
-      baseline = computeOrderBaseline(times, { nowMs, timeZone });
-      await setState(env.DB, baselineKey, baseline);
-    }
-    const lastOrderAtMs = await fetchLatestOrder(site, token, client);
-    await setState(env.DB, lastKey, { createdAt: lastOrderAtMs ? new Date(lastOrderAtMs).toISOString() : null, checkedAt: new Date(nowMs).toISOString() });
+  const pushKey = siteKey(site.id, 'orders:push');
 
-    const evaluation = evaluateOrderGap({ baseline, lastOrderAtMs, nowMs, timeZone });
-    const state = (await getState(env.DB, alertKey)) || { open: false, severity: null, lastAlertMs: 0 };
-    const detail = { siteId: site.id, mode, ...evaluation, lastOrderAt: lastOrderAtMs ? new Date(lastOrderAtMs).toISOString() : null };
-    if (shouldAlertHeartbeat(evaluation.severity, state, nowMs, ORDER_LIMITS.realertMs)) {
-      await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_gap' : 'would_alert', { rule: 'orders_gap', ...detail });
-      if (mode === 'armed') await sendTelegram(env, orderAlertText(site, evaluation, lastOrderAtMs, timeZone));
-      await setState(env.DB, alertKey, { open: true, severity: evaluation.severity, lastAlertMs: nowMs });
-    } else if (!evaluation.severity && state.open) {
-      await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_recovery' : 'would_recover', { rule: 'orders_gap', ...detail });
-      if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] Shopify orders resumed\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`);
-      await setState(env.DB, alertKey, { open: false, severity: null, lastAlertMs: state.lastAlertMs });
+  const log = await getState(env.DB, logKey);
+  const entries = Array.isArray(log?.entries) ? log.entries : [];
+  const push = (await getState(env.DB, pushKey)) || {};
+  if (!entries.length) {
+    // Nothing pushed yet: the site is catalogued but the platform side is not
+    // wired. Record it (throttled), do not claim "no orders".
+    if (await notifyThrottled(env, site, 'push-missing', `🟠 [${site.label}][Layer 4 · Orders] No order events have ever been received — the platform push (Shopify Flow) is not wired yet`, nowMs, mode)) {
+      await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_push_missing', { siteId: site.id, mode });
     }
-    return { ok: true, mode, ...evaluation, baselineComputedAt: baseline.computedAt };
-  } catch (error) {
-    const message = String(error?.message || error).slice(0, 300);
-    await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_check_failed', { siteId: site.id, reason: message });
-    await notifyThrottled(env, site, `🔴 [${site.label}][Layer 4 · Orders] Shopify order check failed\n${message}`, nowMs);
-    return { ok: false, reason: message };
+    return { ok: true, mode, status: 'awaiting_first_push' };
   }
+
+  const times = entries.map((entry) => Number(entry.at));
+  const baseline = computeOrderBaseline(times, { nowMs, timeZone });
+  const lastOrderAtMs = Math.max(...times);
+  await setState(env.DB, lastKey, { createdAt: new Date(lastOrderAtMs).toISOString(), receivedAt: push.lastReceivedAt || null, checkedAt: new Date(nowMs).toISOString() });
+
+  const evaluation = evaluateOrderGap({ baseline, lastOrderAtMs, nowMs, timeZone });
+  const state = (await getState(env.DB, alertKey)) || { open: false, severity: null, lastAlertMs: 0 };
+  const detail = { siteId: site.id, mode, ...evaluation, lastOrderAt: new Date(lastOrderAtMs).toISOString(), orderCount: baseline.orderCount, firstOrderAt: baseline.firstOrderAt };
+  if (shouldAlertHeartbeat(evaluation.severity, state, nowMs, ORDER_LIMITS.realertMs)) {
+    await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_gap' : 'would_alert', { rule: 'orders_gap', ...detail });
+    if (mode === 'armed') await sendTelegram(env, orderAlertText(site, evaluation, lastOrderAtMs, timeZone));
+    await setState(env.DB, alertKey, { open: true, severity: evaluation.severity, lastAlertMs: nowMs });
+  } else if (!evaluation.severity && state.open) {
+    await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_recovery' : 'would_recover', { rule: 'orders_gap', ...detail });
+    if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] Orders resumed\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`);
+    await setState(env.DB, alertKey, { open: false, severity: null, lastAlertMs: state.lastAlertMs });
+  }
+
+  // A long silence from the push source is ambiguous: no orders, or a broken
+  // Flow. Say so separately instead of letting it masquerade as either.
+  const receivedMs = Date.parse(push.lastReceivedAt || '');
+  if (Number.isFinite(receivedMs) && nowMs - receivedMs > ORDER_LIMITS.pushStaleMs) {
+    await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_push_stale', { siteId: site.id, lastReceivedAt: push.lastReceivedAt, ageMinutes: round((nowMs - receivedMs) / 60_000) });
+    await notifyThrottled(env, site, 'push-stale', `🟠 [${site.label}][Layer 4 · Orders] No order events received for ${formatMinutes((nowMs - receivedMs) / 60_000)} — check the platform push (Shopify Flow) before reading this as zero sales`, nowMs, mode);
+  }
+  return { ok: true, mode, ...evaluation, orderCount: baseline.orderCount };
 }

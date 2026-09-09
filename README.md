@@ -84,19 +84,24 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。
 - 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
 - 偏离带规则（`ga4.realtime.drop`，独立 `mode`，2026-09-08 起 observe）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥，同样需要相邻两窗确认。
-- 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由 Shopify 订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻两窗 → 追踪断了，不是生意问题（在 `ga4.realtime.drop` 块，observe）。
+- 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由平台推送的订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻两窗 → 追踪断了，不是生意问题（在 `ga4.realtime.drop` 块，observe）。
 
-### Shopify 订单心跳
+### 订单心跳（平台推送）
 
-商业健康的真相来源是第一方订单流，不经过浏览器、不受 consent 与广告拦截影响。`workers/error-monitor/orders.mjs` 每 10 分钟用只读 Admin API 取最新一笔非测试订单，算「距上一单多久」，与同一小时（工作日/周末分开）28 天的历史比较：每 30 分钟采样一次「当时距上一单多久」，取 p90 × 1.5，限制在 90–720 分钟之间。超过阈值 warning，超过两倍 critical，恢复时通知；6 小时内不重复。基准每 24 小时重算一次并存在 D1 `state`（`<site>:orders:baseline`），最新订单存 `<site>:orders:last` 供 GA4 交叉检查读取。
+商业健康的真相来源是第一方订单流，不经过顾客浏览器、不受 consent 与广告拦截影响。任何平台只要能在「订单创建」时发一个 HTTP 请求就能接入，不需要给监控任何平台 API 权限：
 
-启用方式（每站点）：Shopify 后台建只读 custom app，仅 `read_orders`；GitHub secret `SHOPIFY_ADMIN_TOKEN_<SITE>`（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；`config/sites.json` 该站点加 `"shopify": {"shopDomain": "<store>.myshopify.com", "adminTokenEnv": "SHOPIFY_ADMIN_TOKEN_<SITE>"}` 并 `npm run generate:sites`。Worker var `ORDERS_MODE=observe` 只写 `would_alert` / `would_recover`；复盘 7–14 天夜间无误报后改 `armed`。token 缺失或 Admin API 失败记 `orders_check_failed`，Telegram 6 小时节流，不影响 Layer 1/3。
-- API/WIF/D1/Heartbeat 失败必须让 Workflow 失败并发监控故障通知。
-- GA4 返回 `activeMetricRestrictions` 时，以 `GA4_METRIC_ACCESS_RESTRICTED` 非零退出：无权读取的营收不能当成零销售，也不能写入正常日报/基准。仅手动 `diagnose-revenue` 可输出带限制标记的只读诊断，供排查权限。
+```
+POST https://apgo-error-monitor.wadeyeh.workers.dev/orders/event
+Authorization: Bearer <该站点的 ORDER_EVENT_TOKEN>
+Content-Type: application/json
+{ "siteId": "apgo-my", "orderId": "<平台订单 ID>", "createdAt": "<ISO 8601>", "test": false }
+```
 
-每日报告计算三个转化率、Purchasers、Transactions、Revenue、AOV，并拆 MY/SG、device、洗衣精、Aurora、其他 Product、Campaign Page。异常需低于同星期 28 天基准的 50%，且满足最低 ATC/Checkout 样本；12:17 先记录，14:47 仍异常才确认。同一 `targetDate` 的同一阶段在 12 小时内重复送达（Dispatcher 先跑、GitHub 迟到的 cron 后到）只写 `daily-skip` 心跳并退出，不重算、不重发；`DAILY_FORCE=true` 可强制重跑。
-
-`config/alerts-config.json` 默认 `observe`。前 14 天只写 `would_alert`；复盘后人工改为 `armed`。零检测规则（`ga4.realtime.mode`）、偏离带规则（`ga4.realtime.drop.mode`）与日报（`ga4.daily.mode`）各自独立切换。
+- Shopify：Flow「Order created → Send HTTP request」，body 用 Liquid 模板填上面四个字段（`{{ order.id }}`、`{{ order.createdAt }}`、`{{ order.test }}`）。WooCommerce / 自建站 / Make 同样格式。
+- Worker 以 `orderId` 去重（平台重试不会重复计数），`test: true` 直接丢弃，订单时间保存在 D1 `state` 的 `<site>:orders:log`（保留 35 天），最新一笔在 `<site>:orders:last` 供 GA4 交叉检查读取。
+- 每 10 分钟评估「距上一单多久」：按同一小时（工作日/周末分开）28 天的历史，每 30 分钟采样「当时距上一单多久」，取 p90 × 1.5，限制在 90–720 分钟。样本不足 8 个的桶用 6 小时保底阈值，所以刚接入的前几周夜间不会误报。超过阈值 warning、超过两倍 critical、恢复时通知；6 小时内不重复。
+- 推送源自身的健康单独看：从未收到推送记 `orders_push_missing`；超过 24 小时没有任何推送记 `orders_push_stale` 并提示先检查 Flow，而不是把它读成零销售。
+- 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE=observe` 只写 `would_alert` / `would_recover`，复盘无误报后改 `armed`。
 
 ## Heartbeat 与自监控
 
@@ -114,7 +119,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 ## Secrets 与 Variables
 
-Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`；可选 `SHOPIFY_ADMIN_TOKEN_APGO_MY`（订单心跳，只读 `read_orders`）。
+Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`；可选 `ORDER_EVENT_TOKEN_APGO_MY`（订单心跳推送的共享密钥，同一值填在 Shopify Flow 的 Authorization header）。
 
 Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。`MONITOR_LAYER4_PAUSED=true` 暂停中央 Layer 4 定时、自检恢复触发与 Dispatcher 派发（`trigger=scheduler` 的 run 会被跳过），不影响 Layer 2 广告清单发现，也不代表 GA4 验收通过；长时间暂停时同时把 Dispatcher 的 `SCHEDULER_ENABLED` 改为 `false`，避免每 15 分钟产生一条 skipped run。Dispatcher Worker 自身的 `vars`：`CENTRAL_REPOSITORY`、`MONITOR_WORKER_URL`、`SCHEDULER_ENABLED`、`SCHEDULER_DRY_RUN`（在 `workers/dispatcher/wrangler.jsonc`）。`MONITOR_SHADOW_STARTED_AT`、`MONITOR_SHADOW_REVIEW_AFTER` 记录观察时间，不自动触发 Cutover。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
 
