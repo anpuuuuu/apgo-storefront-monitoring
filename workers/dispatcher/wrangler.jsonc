@@ -10,7 +10,7 @@
     // Rollout gate for the Cron scheduler: false -> ticks are logged as skipped.
     "SCHEDULER_ENABLED": "true",
     // true -> plan and log every decision, never POST a workflow_dispatch.
-    "SCHEDULER_DRY_RUN": "true"
+    "SCHEDULER_DRY_RUN": "false"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
