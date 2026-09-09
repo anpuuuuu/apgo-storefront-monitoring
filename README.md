@@ -130,4 +130,4 @@ Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`
 
 紧急回退：先把 `CRON_ENABLED` 改回 `false` 部署；Theme 错误监控 snippet 本身所有发送均为 fail-safe，不会阻挡页面或购物车。Dispatcher 排程回退：`SCHEDULER_ENABLED=false` 重新部署 dispatcher，GitHub 自身的 cron 与每小时 watchdog 继续运作。
 
-Dispatcher 排程上线顺序：合并时 `SCHEDULER_ENABLED=false` → 改 `true` + `SCHEDULER_DRY_RUN=true` 部署并看 ≥2 小时的 `scheduler_tick` 日志 → `SCHEDULER_DRY_RUN=false` 部署，观察 `/health` 的 `layer4.ageSeconds` 连续 2 小时不超过 40 分钟、无重复业务 Telegram。
+Dispatcher 排程已于 2026-09-09 16:54 MYT 上线（Version `a5921cbc`，`SCHEDULER_ENABLED=true`、`SCHEDULER_DRY_RUN=false`），证据见 `docs/FINAL-CUTOVER.md`。Worker 之间读 `/health` 必须走 Service Binding（`env.MONITOR`），直接 fetch 另一个 workers.dev 会被 Cloudflare 以 1042 拒绝。原上线顺序供新环境参考：合并时 `SCHEDULER_ENABLED=false` → 改 `true` + `SCHEDULER_DRY_RUN=true` 部署并看 ≥2 小时的 `scheduler_tick` 日志 → `SCHEDULER_DRY_RUN=false` 部署，观察 `/health` 的 `layer4.ageSeconds` 连续 2 小时不超过 40 分钟、无重复业务 Telegram。
