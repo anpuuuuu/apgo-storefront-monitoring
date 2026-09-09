@@ -8,7 +8,7 @@
     "CENTRAL_REPOSITORY": "anpuuuuu/apgo-storefront-monitoring",
     "MONITOR_WORKER_URL": "https://apgo-error-monitor.wadeyeh.workers.dev",
     // Rollout gate for the Cron scheduler: false -> ticks are logged as skipped.
-    "SCHEDULER_ENABLED": "false",
+    "SCHEDULER_ENABLED": "true",
     // true -> plan and log every decision, never POST a workflow_dispatch.
     "SCHEDULER_DRY_RUN": "true"
   },
