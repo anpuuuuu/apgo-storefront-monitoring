@@ -175,13 +175,29 @@ async function notifyFailure(env, site, deliveryId, error) {
   await sendTelegram(env, `🔴 [${site?.label || 'MONITOR'}][Dispatcher] Post-deploy dispatch failed\nDelivery: ${deliveryId}\n${String(error?.message || error).slice(0, 900)}`);
 }
 
+/* A Worker fetching another Worker's workers.dev hostname on the same
+   account is blocked by Cloudflare (error 1042), which the first dry-run
+   surfaced as `health_unreadable` on every tick. The MONITOR service binding
+   calls the error monitor directly; MONITOR_WORKER_URL stays as the fallback
+   for local `wrangler dev` without the binding. /health answers 503 with the
+   full body while Layer 1 is down, so the body is parsed regardless of status. */
 async function fetchMonitorHealth(env) {
-  const base = String(env.MONITOR_WORKER_URL || '');
-  if (!base) throw new Error('MONITOR_WORKER_URL is missing');
-  // /health answers 503 with the full body while Layer 1 is down; the
-  // scheduler still needs the heartbeats then, so parse regardless of status.
-  const response = await fetch(`${base}/health`, { headers: { 'user-agent': 'APGO-Storefront-Monitor-Dispatcher/1.0' } });
-  return response.json().catch(() => null);
+  const headers = { 'user-agent': 'APGO-Storefront-Monitor-Dispatcher/1.0' };
+  let response;
+  if (env.MONITOR && typeof env.MONITOR.fetch === 'function') {
+    response = await env.MONITOR.fetch('https://apgo-error-monitor/health', { headers });
+  } else {
+    const base = String(env.MONITOR_WORKER_URL || '');
+    if (!base) throw new Error('MONITOR_WORKER_URL is missing');
+    response = await fetch(`${base}/health`, { headers });
+  }
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    console.log(JSON.stringify({ event: 'health_unreadable', status: response.status, via: env.MONITOR ? 'binding' : 'url', snippet: text.slice(0, 200) }));
+    return null;
+  }
 }
 
 async function scheduledTick(env, scheduledTime) {
