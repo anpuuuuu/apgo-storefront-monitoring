@@ -77,8 +77,9 @@ export const HEARTBEAT_CRITICAL_LIMITS = {
   layer2: 36 * 60 * 60_000,
 };
 
-// Shopify order heartbeat (orders.mjs). Mirrored in config/alerts-config.json
-// `orders` for documentation, like the js_errors limits above.
+// Push-based order heartbeat (orders.mjs). Mirrored in
+// config/alerts-config.json `orders` for documentation, like the js_errors
+// limits above.
 export const ORDER_LIMITS = {
   checkMinutes: 10,
   baselineDays: 28,
@@ -87,9 +88,16 @@ export const ORDER_LIMITS = {
   multiplier: 1.5,
   floorMinutes: 90,
   capMinutes: 720,
+  // A bucket with fewer samples than this uses the bootstrap threshold, so a
+  // site that only started pushing cannot page on its first quiet night.
+  minSamples: 8,
+  bootstrapMinutes: 360,
   criticalMultiplier: 2,
   realertMs: 6 * 60 * 60_000,
-  baselineMaxAgeMs: 24 * 60 * 60_000,
   failureNotifyMs: 6 * 60 * 60_000,
+  pushStaleMs: 24 * 60 * 60_000,
+  retentionDays: 35,
+  logCap: 6000,
+  bodyBytes: 8_192,
   timeZone: 'Asia/Kuala_Lumpur',
 };

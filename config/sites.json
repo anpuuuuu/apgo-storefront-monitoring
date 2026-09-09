@@ -100,9 +100,9 @@
       "repositoryId": "1154313539",
       "defaultBranch": "main",
       "ga4PropertyId": "547019474",
-      "shopify": {
-        "shopDomain": "b0rgh6-pm.myshopify.com",
-        "adminTokenEnv": "SHOPIFY_ADMIN_TOKEN_APGO_MY",
+      "orders": {
+        "source": "push",
+        "tokenEnv": "ORDER_EVENT_TOKEN_APGO_MY",
         "timeZone": "Asia/Kuala_Lumpur"
       },
       "workerOrigin": "https://apgo-error-monitor.wadeyeh.workers.dev",

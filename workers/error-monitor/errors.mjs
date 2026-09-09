@@ -126,7 +126,7 @@ function cleanText(value, max) {
   return String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, max);
 }
 
-async function readLimitedText(request, maxBytes) {
+export async function readLimitedText(request, maxBytes) {
   const declaredLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     const error = new Error('payload too large');

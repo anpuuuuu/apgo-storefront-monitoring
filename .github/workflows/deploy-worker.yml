@@ -69,20 +69,20 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      # Shopify Admin token for the order heartbeat (workers/error-monitor/orders.mjs).
-      # Optional until the owner creates the read_orders custom app: an unset
+      # Shared order-event token for the push-based order heartbeat (workers/error-monitor/orders.mjs).
+      # Optional until the owner sets the shared token also used by the Shopify Flow: an unset
       # repository secret skips the upload instead of writing an empty value.
-      - name: Check Shopify Admin token availability
+      - name: Check order-event token availability
         if: inputs.worker == 'error-monitor'
-        id: shopify-token
-        run: echo "configured=${{ secrets.SHOPIFY_ADMIN_TOKEN_APGO_MY != '' }}" >> "$GITHUB_OUTPUT"
-      - name: Upload Shopify Admin token
-        if: inputs.worker == 'error-monitor' && steps.shopify-token.outputs.configured == 'true'
+        id: order-token
+        run: echo "configured=${{ secrets.ORDER_EVENT_TOKEN_APGO_MY != '' }}" >> "$GITHUB_OUTPUT"
+      - name: Upload order-event token
+        if: inputs.worker == 'error-monitor' && steps.order-token.outputs.configured == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          SHOPIFY_ADMIN_TOKEN_APGO_MY: ${{ secrets.SHOPIFY_ADMIN_TOKEN_APGO_MY }}
-        run: printf '%s' "$SHOPIFY_ADMIN_TOKEN_APGO_MY" | npx wrangler secret put SHOPIFY_ADMIN_TOKEN_APGO_MY --config workers/error-monitor/wrangler.jsonc
+          ORDER_EVENT_TOKEN_APGO_MY: ${{ secrets.ORDER_EVENT_TOKEN_APGO_MY }}
+        run: printf '%s' "$ORDER_EVENT_TOKEN_APGO_MY" | npx wrangler secret put ORDER_EVENT_TOKEN_APGO_MY --config workers/error-monitor/wrangler.jsonc
       - name: Deploy Dispatcher
         if: inputs.worker == 'dispatcher'
         uses: cloudflare/wrangler-action@v3

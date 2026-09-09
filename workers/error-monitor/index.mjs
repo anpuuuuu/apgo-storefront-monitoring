@@ -3,7 +3,7 @@ import { listHeartbeats, writeHeartbeat } from './db.mjs';
 import { corsHeaders, digestBrowserErrors, receiveError } from './errors.mjs';
 import { bearerToken, secretMatches } from './security.mjs';
 import { runScheduledUptime } from './uptime.mjs';
-import { runOrderHeartbeat } from './orders.mjs';
+import { receiveOrderEvent, runOrderHeartbeat } from './orders.mjs';
 
 function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'cache-control': 'no-store', ...headers } });
@@ -62,6 +62,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/health' && request.method === 'GET') return health(env);
     if (url.pathname === '/heartbeat' && request.method === 'POST') return heartbeat(request, env);
+    if (url.pathname === '/orders/event') return receiveOrderEvent(request, env);
     if (url.pathname === '/beacon' || url.pathname === '/') return receiveError(request, env);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request.headers.get('origin') || '') });
     return json({ ok: false, error: 'not found' }, 404);
@@ -75,12 +76,12 @@ export default {
     ctx.waitUntil((async () => {
       const result = await runScheduledUptime(env, controller.scheduledTime);
       if (!result.duplicate) await digestBrowserErrors(env);
-      // Shopify order heartbeat every 10 minutes for sites with a catalogued
-      // Admin token. Its own try/catch: an Admin API outage must not stop
-      // Layer 1 samples or Layer 3 digests.
+      // Order heartbeat every 10 minutes for sites that push order events.
+      // Its own try/catch: a bad state row must not stop Layer 1 samples or
+      // Layer 3 digests.
       const orders = [];
       if (!result.duplicate && new Date(controller.scheduledTime).getUTCMinutes() % ORDER_LIMITS.checkMinutes === 0) {
-        for (const site of SITES.filter((candidate) => candidate.shopify)) {
+        for (const site of SITES.filter((candidate) => candidate.orders)) {
           try { orders.push({ siteId: site.id, ...(await runOrderHeartbeat(env, site)) }); }
           catch (error) { orders.push({ siteId: site.id, ok: false, reason: String(error?.message || error).slice(0, 300) }); }
         }

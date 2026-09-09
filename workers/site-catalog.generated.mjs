@@ -17,9 +17,9 @@ export const MONITOR_SITES = [
       "layer3",
       "layer4"
     ],
-    "shopify": {
-      "shopDomain": "b0rgh6-pm.myshopify.com",
-      "adminTokenEnv": "SHOPIFY_ADMIN_TOKEN_APGO_MY",
+    "orders": {
+      "source": "push",
+      "tokenEnv": "ORDER_EVENT_TOKEN_APGO_MY",
       "timeZone": "Asia/Kuala_Lumpur"
     }
   }
