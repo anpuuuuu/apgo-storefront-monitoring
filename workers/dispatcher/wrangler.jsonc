@@ -15,6 +15,14 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  // Worker-to-Worker call for /health; a plain fetch to the other workers.dev
+  // hostname is refused by Cloudflare (error 1042).
+  "services": [
+    {
+      "binding": "MONITOR",
+      "service": "apgo-error-monitor"
+    }
+  ],
   "kv_namespaces": [
     {
       "binding": "DELIVERIES",
