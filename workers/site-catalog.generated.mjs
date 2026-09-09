@@ -16,6 +16,11 @@ export const MONITOR_SITES = [
       "layer2",
       "layer3",
       "layer4"
-    ]
+    ],
+    "shopify": {
+      "shopDomain": "b0rgh6-pm.myshopify.com",
+      "adminTokenEnv": "SHOPIFY_ADMIN_TOKEN_APGO_MY",
+      "timeZone": "Asia/Kuala_Lumpur"
+    }
   }
 ];
