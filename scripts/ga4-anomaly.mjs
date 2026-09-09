@@ -10,7 +10,7 @@ import {
   telegram,
   workerHealthy,
 } from './monitor-lib.mjs';
-import { appendCoverage, nextRuleState, shouldRecordAlert } from './ga4-anomaly-lib.mjs';
+import { appendCoverage, evaluateDropRules, nextRuleState, shouldRecordAlert } from './ga4-anomaly-lib.mjs';
 
 const validateOnly = process.env.VALIDATE_GA4 === 'true';
 requireEnv({ needsD1: !validateOnly });
@@ -71,7 +71,21 @@ function baselineCounts(report) {
   ]));
 }
 
-async function updateRule(rule, abnormal, detail) {
+/* Deviation-band rules arm separately from the zero rules: they start in
+   observe (would_alert only) and are promoted after their own review, the
+   same path the zero rules took. */
+const dropSettings = settings.drop || {};
+const dropMode = dropSettings.mode || 'observe';
+
+const RULE_TEXT = {
+  ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
+  add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
+  begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
+  add_to_cart_drop: '流量正常但「加入购物车」塌到平时的 35% 以下（加购按钮/选项可能坏了 → 对照第1/2层巡检）',
+  begin_checkout_drop: '加购正常但「进入结账」比例塌到平时的 35% 以下（结账入口可能坏了 → 手机实测走一遍结账）',
+};
+
+async function updateRule(rule, abnormal, detail, ruleMode = mode) {
   const key = `ga4:realtime:${rule}`;
   const previous = await getState(key) || { consecutive: 0, active: false, lastAlertedAt: 0 };
   const { next, confirmed } = nextRuleState(previous, abnormal, Date.now(), settings);
@@ -81,14 +95,10 @@ async function updateRule(rule, abnormal, detail) {
   if (shouldRecord) {
     next.active = true;
     next.lastAlertedAt = Date.now();
-    const kind = mode === 'armed' ? 'business_alert' : 'would_alert';
-    await logAlert('layer4', kind, { rule, mode, ...detail });
-    if (mode === 'armed') {
-      const ruleText = {
-        ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
-        add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
-        begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
-      }[rule] || rule;
+    const kind = ruleMode === 'armed' ? 'business_alert' : 'would_alert';
+    await logAlert('layer4', kind, { rule, mode: ruleMode, ...detail });
+    if (ruleMode === 'armed') {
+      const ruleText = RULE_TEXT[rule] || rule;
       await telegram(`🟡 [第4层·业务指标] ${ruleText}\n当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}\n${process.env.RUN_URL || ''}`);
     }
   }
@@ -96,7 +106,7 @@ async function updateRule(rule, abnormal, detail) {
   if (!abnormal && previous.active) await logAlert('layer4', 'recovery', { rule, ...detail });
   await setState(key, next);
   return {
-    rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode,
+    rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode: ruleMode,
     gapMinutes: next.gapMinutes, coverageGap: next.coverageGap, duplicate: next.duplicate,
   };
 }
@@ -145,6 +155,27 @@ results.push(await updateRule(
     && baseline.begin_checkout >= settings.begin_checkout_min_median
     && current.begin_checkout === 0,
   { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout } }
+));
+
+// Partial failures the zero rules cannot see: traffic is normal but ATC
+// collapsed, or ATC is normal but the checkout ratio collapsed. Disjoint
+// from the zero rules (current must be > 0) so an armed zero rule and an
+// armed drop rule never page twice for the same window.
+const drop = evaluateDropRules(current, baseline, dropSettings);
+results.push(await updateRule(
+  'add_to_cart_drop',
+  drop.add_to_cart_drop,
+  { current: { page_view: current.page_view, add_to_cart: current.add_to_cart }, baseline: { page_view: baseline.page_view, add_to_cart: baseline.add_to_cart }, trafficOk: drop.trafficOk },
+  dropMode,
+));
+results.push(await updateRule(
+  'begin_checkout_drop',
+  drop.begin_checkout_drop,
+  {
+    current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout, checkout_ratio: drop.currentRatio },
+    baseline: { add_to_cart: baseline.add_to_cart, begin_checkout: baseline.begin_checkout, checkout_ratio: drop.baselineRatio },
+  },
+  dropMode,
 ));
 
 // Rolling log of observed windows so the daily report can state how much of
