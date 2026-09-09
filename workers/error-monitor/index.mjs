@@ -1,8 +1,9 @@
-import { HEARTBEAT_LIMITS, SITES, siteById, siteKey } from './config.mjs';
+import { HEARTBEAT_LIMITS, ORDER_LIMITS, SITES, siteById, siteKey } from './config.mjs';
 import { listHeartbeats, writeHeartbeat } from './db.mjs';
 import { corsHeaders, digestBrowserErrors, receiveError } from './errors.mjs';
 import { bearerToken, secretMatches } from './security.mjs';
 import { runScheduledUptime } from './uptime.mjs';
+import { runOrderHeartbeat } from './orders.mjs';
 
 function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'cache-control': 'no-store', ...headers } });
@@ -74,7 +75,17 @@ export default {
     ctx.waitUntil((async () => {
       const result = await runScheduledUptime(env, controller.scheduledTime);
       if (!result.duplicate) await digestBrowserErrors(env);
-      console.log(JSON.stringify({ event: 'scheduled_complete', scheduledTime: controller.scheduledTime, ...result }));
+      // Shopify order heartbeat every 10 minutes for sites with a catalogued
+      // Admin token. Its own try/catch: an Admin API outage must not stop
+      // Layer 1 samples or Layer 3 digests.
+      const orders = [];
+      if (!result.duplicate && new Date(controller.scheduledTime).getUTCMinutes() % ORDER_LIMITS.checkMinutes === 0) {
+        for (const site of SITES.filter((candidate) => candidate.shopify)) {
+          try { orders.push({ siteId: site.id, ...(await runOrderHeartbeat(env, site)) }); }
+          catch (error) { orders.push({ siteId: site.id, ok: false, reason: String(error?.message || error).slice(0, 300) }); }
+        }
+      }
+      console.log(JSON.stringify({ event: 'scheduled_complete', scheduledTime: controller.scheduledTime, ...result, orders }));
     })());
   },
 };

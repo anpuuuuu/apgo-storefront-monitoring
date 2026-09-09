@@ -83,6 +83,7 @@ const RULE_TEXT = {
   begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
   add_to_cart_drop: '流量正常但「加入购物车」塌到平时的 35% 以下（加购按钮/选项可能坏了 → 对照第1/2层巡检）',
   begin_checkout_drop: '加购正常但「进入结账」比例塌到平时的 35% 以下（结账入口可能坏了 → 手机实测走一遍结账）',
+  purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
 };
 
 async function updateRule(rule, abnormal, detail, ruleMode = mode) {
@@ -174,6 +175,29 @@ results.push(await updateRule(
   {
     current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout, checkout_ratio: drop.currentRatio },
     baseline: { add_to_cart: baseline.add_to_cart, begin_checkout: baseline.begin_checkout, checkout_ratio: drop.baselineRatio },
+  },
+  dropMode,
+));
+
+// Cross-check against the Worker's Shopify order heartbeat: an order placed
+// inside this window that GA4 did not see as a purchase is a tracking gap,
+// not a business problem. Only evaluated when the Worker checked recently,
+// so a stale orders:last cannot fabricate a gap.
+const lastOrder = await getState('orders:last');
+const orderCheckAgeMin = lastOrder?.checkedAt ? (Date.now() - Date.parse(lastOrder.checkedAt)) / 60_000 : null;
+const lastOrderAgeMin = lastOrder?.createdAt ? (Date.now() - Date.parse(lastOrder.createdAt)) / 60_000 : null;
+const orderCheckFresh = orderCheckAgeMin !== null && orderCheckAgeMin <= Number(dropSettings.purchase_tracking_check_max_age_minutes || 20);
+results.push(await updateRule(
+  'purchase_tracking_gap',
+  orderCheckFresh
+    && lastOrderAgeMin !== null
+    && lastOrderAgeMin <= Number(dropSettings.purchase_tracking_order_minutes || 25)
+    && baseline.purchase >= 1
+    && current.purchase === 0,
+  {
+    current: { purchase: current.purchase, last_shopify_order_minutes: lastOrderAgeMin === null ? null : Math.round(lastOrderAgeMin) },
+    baseline: { purchase: baseline.purchase },
+    orderCheckFresh,
   },
   dropMode,
 ));

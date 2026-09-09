@@ -44,7 +44,9 @@
         "drop_ratio": 0.35,
         "add_to_cart_min_median": 8,
         "begin_checkout_min_median": 2,
-        "current_atc_min": 8
+        "current_atc_min": 8,
+        "purchase_tracking_order_minutes": 25,
+        "purchase_tracking_check_max_age_minutes": 20
       }
     },
     "daily": {
@@ -56,5 +58,19 @@
       "realert_hours": 24,
       "rerun_after_hours": 12
     }
+  },
+  "orders": {
+    "_readme": "Shopify order heartbeat in workers/error-monitor/orders.mjs; values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",
+    "mode": "observe",
+    "observe_since": "2026-09-08",
+    "check_minutes": 10,
+    "baseline_days": 28,
+    "sample_minutes": 30,
+    "percentile": 0.9,
+    "multiplier": 1.5,
+    "floor_minutes": 90,
+    "cap_minutes": 720,
+    "critical_multiplier": 2,
+    "realert_hours": 6
   }
 }
