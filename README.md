@@ -14,7 +14,7 @@
 ## Layer 1
 
 - Cloudflare Cron `*/5 * * * *` 并行检查 `https://apgo.my/` 与 `https://apgo.my/cart.js`。
-- 10 秒超时；连续两次失败才告警；故障每 60 分钟重报；成功一次即 Recovery。
+- 10 秒超时；连续两次失败才告警；故障每 60 分钟重报；成功一次即 Recovery。HTTP 429 单独计数：那是 Shopify 在限流探测器而不是网站故障，连续 3 次（15 分钟）才以 `[Layer 1 Throttled]` 提示，不计入失败次数。
 - 连续三次超过 5 秒发 Slow Response。
 - D1 保存样本、状态、告警和 Scheduled Time 去重。
 - `CRON_ENABLED` 是上线闸门。初次部署为 `false`；HTTP、D1、Telegram、Heartbeat 验证完成后才改成 `true`。
@@ -63,7 +63,8 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - 只有 Shopify Cart API 实际返回 HTTP 5xx 才会立即发送 Critical Cart Error。`Failed to fetch`、`Load failed` 与 status `0` 属于客户端网络/导航中断，必须达到多人门槛才告警。
 - `Failed to fetch` 代表顾客浏览器当次请求确实失败，但不能单独证明 Shopify 服务器故障；必须结合 Layer 1 Cart API、Layer 2 加购测试与不同网络数量判断。监控不会自动重试 Cart POST，避免服务器已收到第一次请求时造成重复加购。
 - Browser Error Digest 会列出受影响页面、独立网络数与客户端类型。`meta-externalads`、`facebookexternalhit`、`Facebot` 等社交预览/广告爬虫会在写入 D1 前被过滤；真实顾客使用的 Facebook 内置浏览器 `FB_IAB` 仍会保留。
-- 两小时内同 Signature 不重复；已知 Signature 可在 `known_signatures.muted=1` 静音。
+- 两小时内同 Signature 不重复；已知 Signature 可在 `known_signatures.muted=1` 静音（手动 Workflow `D1 maintenance` → `mute-signature`，不需要进 Cloudflare 后台）。
+- 资源错误的来源若是「店铺域名 + `/extensions/…`」，归为 `client-rewrite`：Shopify 只从 `cdn.shopify.com` 提供 app 扩展资源，把主机改写成店铺域名的是抓取器/镜像代理，不进 Digest，D1 照存。
 - `/web-pixels@.../worker.modern.js` 与 “Failed to load web worker for pixel” 归类为 `SHOPIFY-PLATFORM/WEB-PIXELS`；至少 15 Sessions、5 Networks 才告警，六小时内不重复。
 - Cart Network Signature 若全部事件都发生在 `page_leaving=1` 且页面为 `hidden/unloaded`，仍保留 D1 证据但不进入 Digest；只要有任何可见或非离页样本，原有门槛继续生效。
 - Signature 计算前会把 message 中的 URL、≥8 位十六进制串与 ≥4 位数字归一化为占位符，同一错误家族不会因内嵌地址/编号而裂成多个 Signature（分类判断仍使用原文）。

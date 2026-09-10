@@ -173,3 +173,29 @@ test('social apps and generic WebViews are classified separately', () => {
   assert.equal(classifyClientType('Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 Mobile/22F76'), 'ios-webview');
   assert.equal(classifyClientType('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140 Safari/537.36'), 'desktop-browser');
 });
+
+test('extension assets requested from the store host are client rewrites, not theme errors', async () => {
+  const { isStorefrontExtensionPath, shouldAlertDigestRow: shouldAlert, classifyBrowserSignal: classify } = await import('../workers/error-monitor/errors.mjs');
+  const rewritten = 'https://apgo.my/extensions/01a07b47-8731-7942-b84d-482b472047c9/aiod-automatic-discounts-871/assets/widget-engine.js';
+  const cdn = 'https://cdn.shopify.com/extensions/01a07b47-8731-7942-b84d-482b472047c9/aiod-automatic-discounts-871/assets/widget-engine.js';
+  assert.equal(isStorefrontExtensionPath(rewritten), true);
+  assert.equal(isStorefrontExtensionPath(cdn), false);
+  assert.equal(isStorefrontExtensionPath('https://apgo.my/cdn/shop/t/6/assets/critical.js'), false);
+  assert.equal(isStorefrontExtensionPath(''), false);
+  assert.equal(classify({ kind: 'resource', message: 'First-party resource failed to load', source: rewritten }), 'client-rewrite');
+  assert.equal(classify({ kind: 'resource', message: 'First-party resource failed to load', source: 'https://apgo.my/cdn/shop/t/6/assets/critical.js' }), 'theme');
+  assert.equal(classify({ kind: 'error', message: 'x is not a function', source: rewritten }), 'theme', 'only resource loads are rewrite noise');
+  assert.equal(shouldAlert({ kind: 'resource', message: 'First-party resource failed to load', source: rewritten, occurrences: 13, sessions: 13, networks: 12 }), false);
+  assert.equal(shouldAlert({ kind: 'resource', message: 'First-party resource failed to load', source: cdn, occurrences: 13, sessions: 13, networks: 12 }), true);
+});
+
+test('D1 maintenance only ever interpolates a validated signature and a sanitised note', async () => {
+  const { buildMaintenanceSql } = await import('../scripts/d1-maintenance-lib.mjs');
+  const mute = buildMaintenanceSql({ action: 'mute-signature', signature: 'e7d6635f60b0e3f51f825166f6735c6f', note: "Horizon overflow-list 'Missing shadow root'; hidden on mobile" });
+  assert.match(mute.sql, /VALUES \('e7d6635f60b0e3f51f825166f6735c6f', '', 1, 'Horizon overflow-list Missing shadow root hidden on mobile'\)/);
+  assert.match(mute.verify, /WHERE signature = 'e7d6635f60b0e3f51f825166f6735c6f'$/);
+  assert.match(buildMaintenanceSql({ action: 'unmute-signature', signature: 'e7d6635f60b0e3f51f825166f6735c6f' }).sql, /muted = 0/);
+  assert.equal(buildMaintenanceSql({ action: 'list-muted' }).verify, null);
+  assert.throws(() => buildMaintenanceSql({ action: 'mute-signature', signature: "x' OR 1=1 --" }), /32 lowercase hex/);
+  assert.throws(() => buildMaintenanceSql({ action: 'drop', signature: 'e7d6635f60b0e3f51f825166f6735c6f' }), /unknown action/);
+});
