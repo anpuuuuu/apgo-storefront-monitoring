@@ -6,8 +6,9 @@ async function probe(target) {
   const started = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort('timeout'), LIMITS.requestTimeoutMs);
+  let response = null;
   try {
-    const response = await fetch(target.url, {
+    response = await fetch(target.url, {
       headers: {
         accept: target.id.endsWith(':cart-api') ? 'application/json' : 'text/html',
         'user-agent': 'APGO-HealthCheck/2.0 Cloudflare-Cron',
@@ -23,7 +24,8 @@ async function probe(target) {
       id: target.id,
       url: target.url,
       ok: false,
-      status: 0,
+      // Keep the real status so a 429 can be told apart from a timeout or 5xx.
+      status: response?.status || 0,
       latencyMs: Date.now() - started,
       error: error?.name === 'AbortError' ? 'timeout after 10s' : String(error?.message || error),
     };
@@ -32,52 +34,92 @@ async function probe(target) {
   }
 }
 
-async function updateTargetState(env, sample) {
-  const key = `uptime:${sample.id}`;
-  const site = SITES.find((entry) => sample.id.startsWith(`${entry.id}:`));
-  const label = site?.label || sample.id.split(':')[0];
-  const state = (await getState(env.DB, key)) || {
+export function isThrottledSample(sample) {
+  return !sample.ok && Number(sample.status) === 429;
+}
+
+/* Pure state machine for one probe result. Returns the next state and the
+   events the caller should announce ('recovery', 'down', 'throttled',
+   'slow'). A 429 is Shopify rate-limiting the probe, not the storefront
+   failing: it never adds to `failures`, and only a run of throttleThreshold
+   consecutive 429s (15 minutes at the 5-minute cadence) opens an incident,
+   under its own wording. Observed 2026-09-09: 429 for exactly two probes
+   every 20 minutes for three hours while /cart.js stayed 200 and recovery
+   latency was ~130 ms — 18 Telegram messages for a limiter cycle. */
+export function evaluateUptimeSample(previous, sample, now, limits = LIMITS) {
+  const state = {
     failures: 0,
+    throttled: 0,
     slowSamples: 0,
     incidentOpen: false,
     slowIncidentOpen: false,
     lastAlertMs: 0,
     lastSlowAlertMs: 0,
+    ...(previous || {}),
   };
-  const now = Date.now();
+  const events = [];
+  const canAlert = !state.incidentOpen || now - Number(state.lastAlertMs || 0) >= limits.uptimeRealertMs;
 
   if (sample.ok) {
-    if (state.incidentOpen) {
-      await sendTelegram(env, `🟢 [${label}][Layer 1 Recovery] ${sample.id} has recovered\nHTTP ${sample.status} · ${sample.latencyMs} ms\n${sample.url}`);
-      await logAlert(env.DB, siteKey(site?.id || 'unknown', 'layer1'), 'recovery', sample);
-    }
+    if (state.incidentOpen) events.push('recovery');
     state.failures = 0;
+    state.throttled = 0;
     state.incidentOpen = false;
+  } else if (isThrottledSample(sample)) {
+    state.throttled += 1;
+    if (state.throttled >= limits.throttleThreshold && canAlert) {
+      events.push('throttled');
+      state.incidentOpen = true;
+      state.lastAlertMs = now;
+    }
   } else {
     state.failures += 1;
-    const shouldAlert = state.failures >= LIMITS.failureThreshold && (
-      !state.incidentOpen || now - state.lastAlertMs >= LIMITS.uptimeRealertMs
-    );
-    if (shouldAlert) {
-      await sendTelegram(env, `🔴 [${label}][Layer 1] ${sample.id} failed ${state.failures} consecutive probes\n${sample.error}\n${sample.url}`);
-      await logAlert(env.DB, siteKey(site?.id || 'unknown', 'layer1'), 'down', { ...sample, failures: state.failures });
+    state.throttled = 0;
+    if (state.failures >= limits.failureThreshold && canAlert) {
+      events.push('down');
       state.incidentOpen = true;
       state.lastAlertMs = now;
     }
   }
 
-  if (sample.ok && sample.latencyMs > LIMITS.slowMs) state.slowSamples += 1;
+  if (sample.ok && sample.latencyMs > limits.slowMs) state.slowSamples += 1;
   else state.slowSamples = 0;
 
-  if (state.slowSamples >= LIMITS.slowThreshold && (
-    !state.slowIncidentOpen || now - state.lastSlowAlertMs >= LIMITS.uptimeRealertMs
+  if (state.slowSamples >= limits.slowThreshold && (
+    !state.slowIncidentOpen || now - Number(state.lastSlowAlertMs || 0) >= limits.uptimeRealertMs
   )) {
-    await sendTelegram(env, `🟠 [${label}][Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`);
-    await logAlert(env.DB, siteKey(site?.id || 'unknown', 'layer1'), 'slow', { ...sample, slowSamples: state.slowSamples });
+    events.push('slow');
     state.slowIncidentOpen = true;
     state.lastSlowAlertMs = now;
-  } else if (sample.latencyMs <= LIMITS.slowMs) {
+  } else if (sample.latencyMs <= limits.slowMs) {
     state.slowIncidentOpen = false;
+  }
+
+  return { state, events };
+}
+
+async function updateTargetState(env, sample) {
+  const key = `uptime:${sample.id}`;
+  const site = SITES.find((entry) => sample.id.startsWith(`${entry.id}:`));
+  const label = site?.label || sample.id.split(':')[0];
+  const layer = siteKey(site?.id || 'unknown', 'layer1');
+  const now = Date.now();
+  const { state, events } = evaluateUptimeSample(await getState(env.DB, key), sample, now);
+
+  for (const event of events) {
+    if (event === 'recovery') {
+      await sendTelegram(env, `🟢 [${label}][Layer 1 Recovery] ${sample.id} has recovered\nHTTP ${sample.status} · ${sample.latencyMs} ms\n${sample.url}`);
+      await logAlert(env.DB, layer, 'recovery', sample);
+    } else if (event === 'down') {
+      await sendTelegram(env, `🔴 [${label}][Layer 1] ${sample.id} failed ${state.failures} consecutive probes\n${sample.error}\n${sample.url}`);
+      await logAlert(env.DB, layer, 'down', { ...sample, failures: state.failures });
+    } else if (event === 'throttled') {
+      await sendTelegram(env, `🟠 [${label}][Layer 1 Throttled] ${sample.id} rate-limited (HTTP 429) for ${state.throttled} consecutive probes\nShopify is limiting the monitor, not necessarily customers — compare with /cart.js and Layer 2\n${sample.url}`);
+      await logAlert(env.DB, layer, 'throttled', { ...sample, throttled: state.throttled });
+    } else if (event === 'slow') {
+      await sendTelegram(env, `🟠 [${label}][Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`);
+      await logAlert(env.DB, layer, 'slow', { ...sample, slowSamples: state.slowSamples });
+    }
   }
 
   state.lastSample = sample;

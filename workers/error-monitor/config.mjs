@@ -49,6 +49,9 @@ export const LIMITS = {
   requestTimeoutMs: 10_000,
   slowMs: 5_000,
   failureThreshold: 2,
+  // HTTP 429 is the platform limiting the probe; it needs a longer run than a
+  // real failure before it is worth a message (3 probes = 15 minutes).
+  throttleThreshold: 3,
   slowThreshold: 3,
   uptimeRealertMs: 60 * 60_000,
   // Heartbeat incidents already alert again when warning escalates to

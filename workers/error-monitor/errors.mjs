@@ -1,4 +1,4 @@
-import { LIMITS, siteForOrigin, siteKey } from './config.mjs';
+import { LIMITS, STORE_ORIGINS, siteForOrigin, siteKey } from './config.mjs';
 import { getState, logAlert, setState, writeHeartbeat } from './db.mjs';
 import { bearerToken, cleanPath, cleanSource, secretMatches, sha256Hex } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
@@ -48,9 +48,25 @@ export function classifyClientType(userAgent) {
   return 'desktop-browser';
 }
 
+/* Shopify serves app-extension assets only from cdn.shopify.com. A resource
+   error whose source is <storefront origin>/extensions/... means the client
+   rewrote the CDN host to the store host — scrapers and mirroring proxies do
+   this, real browsers do not (observed 2026-09-10: 13 desktop "sessions" on
+   12 networks in ten minutes, homepage only, at 00:20 MYT, while a real
+   Chrome loaded all 17 AIOD scripts from the CDN). */
+export function isStorefrontExtensionPath(source, origins = STORE_ORIGINS) {
+  try {
+    const url = new URL(String(source || ''));
+    return origins.includes(url.origin) && url.pathname.startsWith('/extensions/');
+  } catch {
+    return false;
+  }
+}
+
 export function classifyBrowserSignal({ kind, message, source, stage }) {
   if (kind === 'cart' && stage === 'verified-success') return 'cart-recovered';
   if (kind === 'cart') return 'cart-network';
+  if (kind === 'resource' && isStorefrontExtensionPath(source)) return 'client-rewrite';
   const evidence = `${message || ''} ${source || ''} ${stage || ''}`;
   if (/\/shopifycloud\/shop-js\/modules\/|\/cdn\/wpm\/|\/web-pixels@|Failed to load web worker for pixel|#moveItemsToDefaultSlot|shop-(?:login|user-recognition|cart-sync)/i.test(evidence)) {
     return 'shopify-platform';
@@ -95,6 +111,7 @@ export function shouldAlertDigestRow(row) {
   const sessions = Number(row.sessions || 0);
   const networks = Number(row.networks || 0);
   if (category === 'cart-recovered') return false;
+  if (category === 'client-rewrite') return false;
   if (category === 'cart-network' && isLeavingCartNoise(row)) return false;
   if (category === 'shopify-platform') return occurrences >= 15 && sessions >= 15 && networks >= 5;
   if (category === 'font-resource') return sessions >= 20 && networks >= 5;
