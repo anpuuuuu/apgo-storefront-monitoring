@@ -38,8 +38,11 @@
       "min_gap_minutes": 15,
       "coverage_min_ratio": 0.8,
       "drop": {
-        "mode": "observe",
+        "mode": "armed",
         "observe_since": "2026-09-08",
+        "armed_since": "2026-09-11",
+        "consecutive_windows": 3,
+        "purchase_tracking_mode": "observe",
         "traffic_floor_ratio": 0.6,
         "drop_ratio": 0.35,
         "add_to_cart_min_median": 8,
@@ -61,8 +64,9 @@
   },
   "orders": {
     "_readme": "Push-based order heartbeat in workers/error-monitor/orders.mjs (POST /orders/event from Shopify Flow, a WooCommerce webhook, or any backend); values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",
-    "mode": "observe",
+    "mode": "armed",
     "observe_since": "2026-09-09",
+    "armed_since": "2026-09-11",
     "source": "push",
     "min_samples": 8,
     "bootstrap_minutes": 360,

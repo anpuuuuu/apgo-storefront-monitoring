@@ -86,10 +86,19 @@ const RULE_TEXT = {
   purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
 };
 
-async function updateRule(rule, abnormal, detail, ruleMode = mode) {
+/* Deviation-band rules confirm over more windows than the zero rules: three
+   days of full-coverage observe showed two begin_checkout_drop windows that
+   healed on the very next sample; a third adjacent window would have caught
+   neither. */
+const dropRuleSettings = { ...settings, consecutive_zeros: Number(dropSettings.consecutive_windows) || settings.consecutive_zeros };
+// Orders from POS, draft orders and other untracked channels can legitimately
+// have no GA4 purchase, so the tracking cross-check arms on its own switch.
+const purchaseTrackingMode = dropSettings.purchase_tracking_mode || dropMode;
+
+async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings = settings) {
   const key = `ga4:realtime:${rule}`;
   const previous = await getState(key) || { consecutive: 0, active: false, lastAlertedAt: 0 };
-  const { next, confirmed } = nextRuleState(previous, abnormal, Date.now(), settings);
+  const { next, confirmed } = nextRuleState(previous, abnormal, Date.now(), ruleSettings);
   next.detail = detail;
   const shouldRecord = shouldRecordAlert(previous, confirmed, Date.now(), settings.realert_hours);
 
@@ -168,6 +177,7 @@ results.push(await updateRule(
   drop.add_to_cart_drop,
   { current: { page_view: current.page_view, add_to_cart: current.add_to_cart }, baseline: { page_view: baseline.page_view, add_to_cart: baseline.add_to_cart }, trafficOk: drop.trafficOk },
   dropMode,
+  dropRuleSettings,
 ));
 results.push(await updateRule(
   'begin_checkout_drop',
@@ -177,6 +187,7 @@ results.push(await updateRule(
     baseline: { add_to_cart: baseline.add_to_cart, begin_checkout: baseline.begin_checkout, checkout_ratio: drop.baselineRatio },
   },
   dropMode,
+  dropRuleSettings,
 ));
 
 // Cross-check against the Worker's Shopify order heartbeat: an order placed
@@ -199,7 +210,8 @@ results.push(await updateRule(
     baseline: { purchase: baseline.purchase },
     orderCheckFresh,
   },
-  dropMode,
+  purchaseTrackingMode,
+  dropRuleSettings,
 ));
 
 // Rolling log of observed windows so the daily report can state how much of

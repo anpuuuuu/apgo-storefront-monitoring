@@ -84,8 +84,8 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。
 - 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
-- 偏离带规则（`ga4.realtime.drop`，独立 `mode`，2026-09-08 起 observe）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥，同样需要相邻两窗确认。
-- 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由平台推送的订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻两窗 → 追踪断了，不是生意问题（在 `ga4.realtime.drop` 块，observe）。
+- 偏离带规则（`ga4.realtime.drop`，独立 `mode`；2026-09-08 起 observe，**2026-09-11 起 armed**）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥；确认窗口为 `consecutive_windows: 3`（相邻三窗，90 分钟）——三天全覆盖 observe 里两次 `begin_checkout_drop` 都在下一窗自愈，三窗确认可以过滤这类抖动。
+- 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由平台推送的订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻三窗 → 追踪断了，不是生意问题（`ga4.realtime.drop.purchase_tracking_mode`，单独开关，仍为 observe：POS / 草稿订单等未追踪渠道会让 GA4 合理地没有 purchase）。
 
 ### 订单心跳（平台推送）
 
@@ -102,7 +102,7 @@ Content-Type: application/json
 - Worker 以 `orderId` 去重（平台重试不会重复计数），`test: true` 直接丢弃，订单时间保存在 D1 `state` 的 `<site>:orders:log`（保留 35 天），最新一笔在 `<site>:orders:last` 供 GA4 交叉检查读取。
 - 每 10 分钟评估「距上一单多久」：按同一小时（工作日/周末分开）28 天的历史，每 30 分钟采样「当时距上一单多久」，取 p90 × 1.5，限制在 90–720 分钟。样本不足 8 个的桶用 6 小时保底阈值，所以刚接入的前几周夜间不会误报。超过阈值 warning、超过两倍 critical、恢复时通知；6 小时内不重复。
 - 推送源自身的健康单独看：从未收到推送记 `orders_push_missing`；超过 24 小时没有任何推送记 `orders_push_stale` 并提示先检查 Flow，而不是把它读成零销售。
-- 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE=observe` 只写 `would_alert` / `would_recover`，复盘无误报后改 `armed`。
+- 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE`：observe 只写 `would_alert` / `would_recover`；**2026-09-11 起 armed**——桶成熟前用 6 小时保底阈值，对约 60 单/天的店任何时段 6 小时没单都值得知道，桶成熟后阈值自动收紧。
 
 ## Heartbeat 与自监控
 
@@ -114,7 +114,7 @@ Content-Type: application/json
 | 4 | 90 分钟 |
 
 - Worker Cron 检查 Layer 2/3/4。
-- Dispatcher Cron 每 5 分钟按 `/health` 心跳年龄补派 Layer 4 realtime（≥28 分钟）、每日两阶段与 Layer 3 自检；`SCHEDULER_ENABLED=false` 关闭，`SCHEDULER_DRY_RUN=true` 只记录决策。
+- Dispatcher Cron 每 5 分钟按 `/health` 心跳年龄补派 Layer 4 realtime（≥28 分钟）、每日两阶段、Layer 3 自检，以及 Layer 2 daily（UTC 02:10 = 10:10 MYT 之后心跳仍超过 6 小时就派 `site-health-v2.yml cadence=daily`，每站点每日一次；`site-health-v2.yml` 的 `gate` job 会让迟到的 GitHub 排程在心跳 8 小时内新鲜时跳过，避免同一天跑两遍浏览器批次）；`SCHEDULER_ENABLED=false` 关闭，`SCHEDULER_DRY_RUN=true` 只记录决策。
 - GitHub 每小时检查 Worker `/health`、Layer 1、Layer 2/4 最近 scheduled run；Layer 4 超过 45 分钟无完成 run 时补派，作为低于 90 分钟 warning 线的第二兜底。
 - Workflow 成功但 Heartbeat 写入失败仍视为失败。
 

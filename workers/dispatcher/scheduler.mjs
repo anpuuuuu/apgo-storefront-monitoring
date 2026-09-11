@@ -29,6 +29,22 @@ export const SCHEDULER_DEFAULTS = {
     recentRunMinutes: 15,
     failureBackoffMinutes: 60,
   },
+  // GitHub's daily Layer 2 cron (01:37 UTC) arrived 4-5 hours late on
+  // 2026-09-10/11. After the deadline, a layer2 heartbeat older than
+  // minAgeMinutes means today's daily has not reported; dispatch it once per
+  // UTC day per site. site-health-v2.yml itself skips a later scheduled run
+  // when the heartbeat is already fresh, so the two paths never double-run.
+  layer2: {
+    enabled: true,
+    workflow: 'site-health-v2.yml',
+    layer: 'layer2',
+    afterUtc: '02:10',
+    minAgeMinutes: 6 * 60,
+    markerTtlSeconds: 36 * 60 * 60,
+    recentRunMinutes: 60,
+    failureBackoffMinutes: 120,
+    inputs: { cadence: 'daily', retry_delay_seconds: '60' },
+  },
   layer3: {
     enabled: true,
     workflow: 'monitor-self-health.yml',
@@ -55,6 +71,10 @@ function utcClock(nowMs) {
 
 export function dailyMarkerKey(nowMs, stage) {
   return `daily:${utcDateKey(nowMs)}:${stage}`;
+}
+
+export function layer2MarkerKey(nowMs, siteId) {
+  return `daily:${utcDateKey(nowMs)}:layer2:${siteId}`;
 }
 
 /* Age of a layer per site, from the /health body. A site the catalog says
@@ -136,6 +156,21 @@ export function planDispatches({ health, now, locks = new Set(), markers = new S
     }
   }
 
+  const layer2 = config.layer2;
+  if (layer2 && layer2.enabled !== false) {
+    for (const entry of layerAges(health, sites, layer2.layer)) {
+      if (clock < layer2.afterUtc) { skipped.push({ target: `layer2:${entry.siteId}`, reason: 'before_deadline' }); continue; }
+      if (entry.ageSeconds < layer2.minAgeMinutes * 60) { skipped.push({ target: `layer2:${entry.siteId}`, reason: 'fresh', maxAgeSeconds: entry.ageSeconds }); continue; }
+      consider(`layer2:${entry.siteId}`, {
+        workflow: layer2.workflow,
+        inputs: { site_id: entry.siteId, ...layer2.inputs },
+        markerKey: layer2MarkerKey(nowMs, entry.siteId),
+        markerTtl: layer2.markerTtlSeconds,
+        gate: layer2,
+      });
+    }
+  }
+
   for (const rule of [config.realtime, config.layer3]) {
     if (rule.enabled === false) continue;
     const ages = layerAges(health, sites, rule.layer);
@@ -157,12 +192,13 @@ export function planDispatches({ health, now, locks = new Set(), markers = new S
   return { decisions, skipped };
 }
 
-function candidateKeys(nowMs, config) {
+function candidateKeys(nowMs, config, sites = []) {
   return [
     config.realtime.lockKey,
     config.layer3.lockKey,
     dailyMarkerKey(nowMs, 'primary'),
     dailyMarkerKey(nowMs, 'confirm'),
+    ...sites.filter((site) => (site.enabledLayers || []).includes('layer2')).map((site) => layer2MarkerKey(nowMs, site.id)),
   ];
 }
 
@@ -187,7 +223,7 @@ export async function runSchedulerTick(env, scheduledTime, deps) {
   try {
     const health = await fetchHealth();
     const present = new Set();
-    for (const key of candidateKeys(nowMs, config)) if (await kvGet(key)) present.add(key);
+    for (const key of candidateKeys(nowMs, config, sites)) if (await kvGet(key)) present.add(key);
     const base = { health, now: nowMs, locks: present, markers: present, config, sites };
 
     // Most ticks find every heartbeat fresh; only touch GitHub when something is due.
