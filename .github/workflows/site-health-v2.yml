@@ -39,8 +39,41 @@ permissions:
   id-token: write
 
 jobs:
-  plan:
+  # The Dispatcher Cron dispatches today's daily at 02:10 UTC when GitHub's
+  # own 01:37 cron has not delivered. When that cron then arrives hours late,
+  # a fresh Layer 2 heartbeat proves the daily already ran: skip instead of
+  # running the whole browser batch (and its cart writes) a second time.
+  gate:
     if: github.event_name != 'schedule' || vars.MONITOR_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          SITE_ID: ${{ inputs.site_id || 'apgo-my' }}
+        run: |
+          if [ "$EVENT_NAME" != schedule ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          age=$(curl -sS --max-time 20 "$MONITOR_WORKER_URL/health" | node -e '
+            let d = ""; process.stdin.on("data", (c) => d += c).on("end", () => {
+              try { const site = JSON.parse(d).sites.find((s) => s.siteId === process.env.SITE_ID);
+                    const row = site && site.layers.find((l) => l.layer === "layer2");
+                    console.log(row && !row.missing ? Math.round(row.ageSeconds / 60) : "unknown"); }
+              catch { console.log("unknown"); } });' || echo unknown)
+          echo "layer2 heartbeat age: ${age} minutes"
+          if [ "$age" != unknown ] && [ "$age" -lt 480 ]; then
+            echo "Today's daily already reported ${age} minutes ago; this late scheduled run is skipped."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  plan:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:

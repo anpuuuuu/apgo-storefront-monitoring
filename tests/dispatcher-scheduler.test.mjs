@@ -7,20 +7,21 @@ import {
   planDispatches,
   runGate,
   runSchedulerTick,
+  layer2MarkerKey,
 } from '../workers/dispatcher/scheduler.mjs';
 
 const SITES = [{ id: 'apgo-my', label: 'APGO MY', enabledLayers: ['layer1', 'layer2', 'layer3', 'layer4'] }];
 // Before the 04:25 UTC daily deadline so only the realtime rule is in play.
 const NOON = Date.parse('2026-09-08T02:00:00Z');
 
-function health({ layer4 = 60, layer3 = 60, missing = false } = {}) {
+function health({ layer4 = 60, layer3 = 60, layer2 = 60, missing = false } = {}) {
   return {
     ok: true,
     sites: [{
       siteId: 'apgo-my',
       layers: missing
-        ? [{ layer: 'layer4', missing: true, stale: true }, { layer: 'layer3', missing: true, stale: true }]
-        : [{ layer: 'layer4', ageSeconds: layer4 * 60 }, { layer: 'layer3', ageSeconds: layer3 * 60 }],
+        ? [{ layer: 'layer4', missing: true, stale: true }, { layer: 'layer3', missing: true, stale: true }, { layer: 'layer2', missing: true, stale: true }]
+        : [{ layer: 'layer4', ageSeconds: layer4 * 60 }, { layer: 'layer3', ageSeconds: layer3 * 60 }, { layer: 'layer2', ageSeconds: layer2 * 60 }],
     }],
   };
 }
@@ -162,4 +163,25 @@ test('daily marker is written only after a successful dispatch', async () => {
   assert.deepEqual(failing.calls.notify, ['GitHub workflow dispatch HTTP 502']);
   await assert.rejects(runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 6, failing.deps), /HTTP 502/);
   assert.equal(failing.calls.notify.length, 1, 'second failure inside the throttle window does not page again');
+});
+
+test('Layer 2 daily is dispatched once per site after 02:10 UTC when the heartbeat is stale', () => {
+  const day = (clock) => Date.parse(`2026-09-11T${clock}:00Z`);
+  const stale = { layer4: 5, layer3: 5, layer2: 25 * 60 };
+  const early = planDispatches({ health: health(stale), now: day('02:05'), sites: SITES });
+  assert.ok(!early.decisions.some((d) => d.workflow === 'site-health-v2.yml'));
+  assert.ok(early.skipped.some((entry) => entry.target === 'layer2:apgo-my' && entry.reason === 'before_deadline'));
+
+  const due = planDispatches({ health: health(stale), now: day('02:10'), sites: SITES });
+  const decision = due.decisions.find((d) => d.workflow === 'site-health-v2.yml');
+  assert.deepEqual(decision.inputs, { site_id: 'apgo-my', cadence: 'daily', retry_delay_seconds: '60' });
+  assert.equal(decision.markerKey, layer2MarkerKey(day('02:10'), 'apgo-my'));
+  assert.equal(decision.markerKey, 'daily:2026-09-11:layer2:apgo-my');
+
+  const fresh = planDispatches({ health: health({ ...stale, layer2: 30 }), now: day('02:10'), sites: SITES });
+  assert.ok(!fresh.decisions.some((d) => d.workflow === 'site-health-v2.yml'), 'a daily that already reported today is not repeated');
+  const marked = planDispatches({ health: health(stale), now: day('03:00'), sites: SITES, markers: new Set(['daily:2026-09-11:layer2:apgo-my']) });
+  assert.ok(!marked.decisions.some((d) => d.workflow === 'site-health-v2.yml'));
+  const running = planDispatches({ health: health(stale), now: day('02:10'), sites: SITES, runs: { 'site-health-v2.yml': [{ id: 1, status: 'in_progress', conclusion: null, created_at: new Date(day('01:40')).toISOString() }] } });
+  assert.ok(running.skipped.some((entry) => entry.target === 'layer2:apgo-my' && entry.reason === 'recent_run:in_progress'), 'an on-time GitHub daily still running blocks the dispatch');
 });

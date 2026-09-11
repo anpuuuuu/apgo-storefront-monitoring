@@ -8,7 +8,7 @@
     "CRON_ENABLED": "true",
     "MONITOR_MODE": "live",
     // Shopify order heartbeat: observe writes would_alert only; armed sends Telegram.
-    "ORDERS_MODE": "observe"
+    "ORDERS_MODE": "armed"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
