@@ -9,6 +9,20 @@ export function buildMaintenanceSql({ action, signature = '', note = '' }) {
       verify: null,
     };
   }
+  if (action === 'list-alerts') {
+    // Read-only: the last 48 hours of alert_log, newest first, so "why was
+    // Telegram quiet" can be answered without the Cloudflare dashboard.
+    return {
+      sql: "SELECT created_at, layer, kind, substr(detail, 1, 200) AS detail FROM alert_log WHERE created_at >= datetime('now', '-48 hours') ORDER BY created_at DESC LIMIT 200",
+      verify: null,
+    };
+  }
+  if (action === 'list-orders') {
+    return {
+      sql: "SELECT key, substr(value, 1, 400) AS value, updated_at FROM state WHERE key LIKE '%:orders:%' ORDER BY key",
+      verify: null,
+    };
+  }
   if (action !== 'mute-signature' && action !== 'unmute-signature') throw new Error(`unknown action: ${action}`);
   if (!SIGNATURE.test(signature)) throw new Error('signature must be 32 lowercase hex characters');
   const muted = action === 'mute-signature' ? 1 : 0;
