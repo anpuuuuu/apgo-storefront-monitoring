@@ -196,8 +196,8 @@ test('D1 maintenance only ever interpolates a validated signature and a sanitise
   assert.match(mute.verify, /WHERE signature = 'e7d6635f60b0e3f51f825166f6735c6f'$/);
   assert.match(buildMaintenanceSql({ action: 'unmute-signature', signature: 'e7d6635f60b0e3f51f825166f6735c6f' }).sql, /muted = 0/);
   assert.equal(buildMaintenanceSql({ action: 'list-muted' }).verify, null);
-  assert.match(buildMaintenanceSql({ action: 'list-alerts' }).sql, /^SELECT .* FROM alert_log WHERE created_at >= datetime('now', '-48 hours')/);
-  assert.match(buildMaintenanceSql({ action: 'list-orders' }).sql, /^SELECT .* FROM state WHERE key LIKE '%:orders:%'/);
+  assert.ok(buildMaintenanceSql({ action: 'list-alerts' }).sql.startsWith("SELECT created_at, layer, kind, substr(detail, 1, 200) AS detail FROM alert_log WHERE created_at >= datetime('now', '-48 hours')"));
+  assert.ok(buildMaintenanceSql({ action: 'list-orders' }).sql.includes("FROM state WHERE key LIKE '%:orders:%'"));
   assert.throws(() => buildMaintenanceSql({ action: 'mute-signature', signature: "x' OR 1=1 --" }), /32 lowercase hex/);
   assert.throws(() => buildMaintenanceSql({ action: 'drop', signature: 'e7d6635f60b0e3f51f825166f6735c6f' }), /unknown action/);
 });
