@@ -2,7 +2,13 @@
 /* Generic workflow-failure notification. Unlike telegram-notify.js this does
    not depend on a Playwright results.json file, so it is safe for Worker,
    GA4 and self-health jobs. Notification failure never masks the job that
-   already failed. */
+   already failed.
+
+   By default the message is only sent on the second consecutive failure of
+   the same workflow file (see workflow-failure-notify-lib.mjs); set
+   MONITOR_NOTIFY_MIN_CONSECUTIVE=1 to send on every failure. */
+import { fetchWorkflowRuns, shouldNotifyFailure, workflowFileFromRef } from './workflow-failure-notify-lib.mjs';
+
 const token = process.env.TELEGRAM_BOT_TOKEN || '';
 const chatId = process.env.TELEGRAM_CHAT_ID || '';
 const title = process.env.ALERT_TITLE || 'APGO monitoring workflow failed';
@@ -17,13 +23,23 @@ if (!token || !chatId) {
   process.exit(0);
 }
 
-try {
+const minConsecutive = Number(process.env.MONITOR_NOTIFY_MIN_CONSECUTIVE || 2);
+const workflowFile = workflowFileFromRef(process.env.GITHUB_WORKFLOW_REF);
+const runs = minConsecutive > 1
+  ? await fetchWorkflowRuns({ repo: process.env.GITHUB_REPOSITORY, workflowFile, token: process.env.GITHUB_TOKEN })
+  : null;
+const decision = shouldNotifyFailure({ runs, currentRunId: process.env.GITHUB_RUN_ID, minConsecutive });
+console.log(JSON.stringify({ event: 'workflow_failure_notify', workflow: workflowFile, minConsecutive, ...decision }));
+// No process.exit() after the GitHub fetch: Node on Windows can abort while
+// the socket is still closing. Fall through and let the process end.
+if (decision.notify) try {
   const lines = [
     `🚨 ${title}`,
     workflow ? `Workflow: ${workflow}` : '',
     job ? `Job: ${job}` : '',
     commit ? `Commit: ${commit}` : '',
     detail ? `Detail: ${detail}` : '',
+    decision.reason.startsWith('consecutive_failures:') ? `Consecutive failures: ${decision.reason.split(':')[1]}` : '',
     runUrl ? `Details: ${runUrl}` : '',
   ].filter(Boolean);
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

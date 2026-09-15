@@ -102,7 +102,17 @@ test('browser signals are classified and noisy platform errors need stronger evi
   assert.equal(shouldAlertDigestRow({ category: 'cart-network', occurrences: 3, sessions: 3, networks: 2 }), true);
   assert.equal(shouldAlertDigestRow({ category: 'cart-recovered', occurrences: 100, sessions: 100, networks: 50 }), false);
   assert.equal(shouldAlertDigestRow({ category: 'theme', occurrences: 3, sessions: 3, networks: 2 }), true);
-  assert.equal(browserRealertMs({ category: 'shopify-platform' }), 6 * 60 * 60_000);
+  assert.equal(browserRealertMs({ category: 'shopify-platform' }), 24 * 60 * 60_000);
+});
+
+test('a digested signature waits a day before it can be digested again; critical cart keeps two hours', async () => {
+  const { LIMITS } = await import('../workers/error-monitor/config.mjs');
+  // 2026-09-13/15: a3efd479… and 5ffdd555… each sent four digests in 48 h under the 2 h window.
+  assert.equal(LIMITS.errorRealertMs, 24 * 60 * 60_000);
+  assert.equal(LIMITS.criticalCartRealertMs, 2 * 60 * 60_000);
+  for (const category of ['theme', 'shopify-platform', 'font-resource', 'cart-network']) {
+    assert.equal(browserRealertMs({ category }), LIMITS.errorRealertMs, category);
+  }
 });
 
 test('cart fetch aborts are suppressed only when every event happened while leaving', () => {
@@ -198,6 +208,9 @@ test('D1 maintenance only ever interpolates a validated signature and a sanitise
   assert.equal(buildMaintenanceSql({ action: 'list-muted' }).verify, null);
   assert.ok(buildMaintenanceSql({ action: 'list-alerts' }).sql.startsWith("SELECT created_at, layer, kind, substr(detail, 1, 200) AS detail FROM alert_log WHERE created_at >= datetime('now', '-48 hours')"));
   assert.ok(buildMaintenanceSql({ action: 'list-orders' }).sql.includes("FROM state WHERE key LIKE '%:orders:%'"));
+  const signatures = buildMaintenanceSql({ action: 'list-signatures' });
+  assert.ok(signatures.sql.startsWith('SELECT signature, muted, first_seen_at, last_alerted_at, substr(sample_message, 1, 120) AS sample, note FROM known_signatures'));
+  assert.equal(signatures.verify, null);
   assert.ok(buildMaintenanceSql({ action: 'list-recent-orders' }).sql.includes("json_each(json_extract(state.value, '$.entries'))"));
   assert.throws(() => buildMaintenanceSql({ action: 'mute-signature', signature: "x' OR 1=1 --" }), /32 lowercase hex/);
   assert.throws(() => buildMaintenanceSql({ action: 'drop', signature: 'e7d6635f60b0e3f51f825166f6735c6f' }), /unknown action/);

@@ -62,6 +62,24 @@ test('transient second-attempt success keeps aggregate healthy', () => {
   assert.equal(heartbeat.journeys[0].attempts, 2);
 });
 
+test('soft journey notes reach the heartbeat detail without failing the aggregate', () => {
+  const note = { type: 'header_cart_bubble_lag', description: 'header showed 9 for 10 items until reload on /products/apgo-laundry-detergent-special-promotion-1' };
+  const result = {
+    ...expectedJob,
+    finalStatus: 'passed',
+    classification: 'ok',
+    attempts: [{ attempt: 1, status: 'passed', notes: [note] }],
+    notes: [note],
+  };
+  const { aggregate, heartbeat, output } = runAggregate(result, { cadence: 'daily' });
+  assert.equal(aggregate.status, 'ok');
+  assert.deepEqual(aggregate.noteCounts, { header_cart_bubble_lag: 1 });
+  assert.deepEqual(heartbeat.noteCounts, { header_cart_bubble_lag: 1 });
+  assert.deepEqual(heartbeat.journeys[0].notes, [note]);
+  assert.match(output, /notify=false/);
+  assert.match(output, /detail=1 journeys passed; transient=0; notes=header_cart_bubble_lag×1/);
+});
+
 test('two access challenges use a distinct synthetic-browser alert', () => {
   const result = {
     ...expectedJob,

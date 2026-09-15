@@ -63,7 +63,14 @@ export const LIMITS = {
   resourceMinOccurrences: 8,
   resourceMinSessions: 5,
   errorDigestMaxItems: 6,
-  errorRealertMs: 2 * 60 * 60_000,
+  // A signature that already made the digest says nothing new two hours
+  // later: on 2026-09-13/15 the same two signatures each sent four digests
+  // in 48 hours. One digest per signature per day; D1 keeps every event and
+  // `D1 maintenance → list-signatures` shows the message text.
+  errorRealertMs: 24 * 60 * 60_000,
+  // A Shopify 5xx on cart/checkout pages as it happens and keeps its own
+  // shorter window so a second wave the same day is not swallowed.
+  criticalCartRealertMs: 2 * 60 * 60_000,
 };
 
 export const HEARTBEAT_LIMITS = {

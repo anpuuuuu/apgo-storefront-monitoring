@@ -32,6 +32,10 @@ const missing = expected.map((entry) => entry.id).filter((id) => !byId.has(id));
 const failed = results.filter((result) => result.finalStatus === 'failed');
 const transient = results.filter((result) => result.finalStatus === 'transient');
 const status = planningFailed || failed.length || missing.length ? 'failed' : 'ok';
+// Soft findings a journey noted but did not fail on (e.g. header_cart_bubble_lag).
+const noteCounts = {};
+for (const result of results) for (const note of result.notes || []) noteCounts[note.type] = (noteCounts[note.type] || 0) + 1;
+const noteSummary = Object.entries(noteCounts).map(([type, count]) => `${type}×${count}`).join(', ');
 const attemptSummary = (result) => (result.attempts || [])
   .filter((attempt) => attempt.status === 'failed')
   .map((attempt) => `#${attempt.attempt} ${attempt.classification || 'failed'}: ${attempt.error || 'failed'}`)
@@ -43,7 +47,7 @@ const detail = planningFailed
   ? `Layer 2 planning failed (plan=${planResult}, expected=${expected.length}${planError ? `, error=${planError}` : ''}${matrixError ? `, matrix=${matrixError}` : ''})`
   : failed.length || missing.length
     ? `journeys failed=${failed.length}, missing=${missing.length}; ${failedSummary || `missing: ${missing.slice(0, 3).join(', ')}`}`
-    : `${results.length} journeys passed; transient=${transient.length}`;
+    : `${results.length} journeys passed; transient=${transient.length}${noteSummary ? `; notes=${noteSummary}` : ''}`;
 const failureClassifications = new Set(failed.map((result) => result.classification));
 const cadence = process.env.MONITOR_CADENCE || '';
 const challengeOnly = !planningFailed
@@ -81,6 +85,7 @@ const aggregate = {
   missing,
   failed,
   transient,
+  noteCounts,
   results,
 };
 fs.writeFileSync(outputPath, `${JSON.stringify(aggregate, null, 2)}\n`);
@@ -91,6 +96,7 @@ fs.writeFileSync(heartbeatPath, `${JSON.stringify({
   expectedCount: expected.length,
   receivedCount: results.length,
   missing,
+  noteCounts,
   journeys: results.map((result) => ({
     id: result.id,
     status: result.finalStatus,
@@ -99,6 +105,7 @@ fs.writeFileSync(heartbeatPath, `${JSON.stringify({
     landingPath: result.landingPath || '',
     channel: result.channel || '',
     commit: result.commit || '',
+    notes: result.notes || [],
   })),
 }, null, 2)}\n`);
 console.log(JSON.stringify({ status, detail, expected: expected.length, received: results.length, failed: failed.length, transient: transient.length, missing }));

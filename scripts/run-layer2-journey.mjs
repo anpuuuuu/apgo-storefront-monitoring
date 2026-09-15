@@ -46,6 +46,23 @@ function findFirstError(node) {
   return '';
 }
 
+/* Journey annotations (test.info().annotations) survive in the Playwright
+   JSON report; they carry soft findings such as header_cart_bubble_lag that
+   passed after a recheck and should reach the heartbeat, not Telegram. */
+function findAnnotations(node, found = []) {
+  if (!node || typeof node !== 'object') return found;
+  if (Array.isArray(node.annotations)) {
+    for (const annotation of node.annotations) {
+      if (annotation?.type) found.push({ type: String(annotation.type), description: String(annotation.description || '').slice(0, 300) });
+    }
+  }
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) value.forEach((entry) => findAnnotations(entry, found));
+    else if (value && typeof value === 'object') findAnnotations(value, found);
+  }
+  return found;
+}
+
 function classifyError(error, exitCode) {
   if (exitCode === 0) return 'ok';
   if (/TEST_CONFIG_STALE/.test(error)) return 'TEST_CONFIG_STALE';
@@ -80,8 +97,13 @@ async function runAttempt(number) {
     child.on('exit', (code) => resolve(code ?? 1));
   });
   let error = '';
+  let notes = [];
   if (fs.existsSync(resultsFile)) {
-    try { error = findFirstError(JSON.parse(fs.readFileSync(resultsFile, 'utf8'))); } catch (_) {}
+    try {
+      const report = JSON.parse(fs.readFileSync(resultsFile, 'utf8'));
+      error = findFirstError(report);
+      notes = findAnnotations(report);
+    } catch (_) {}
   }
   return {
     attempt: number,
@@ -91,6 +113,7 @@ async function runAttempt(number) {
     status: exitCode === 0 ? 'passed' : 'failed',
     classification: classifyError(error, exitCode),
     error: String(error || (exitCode === 0 ? '' : `Playwright exited ${exitCode}`)).replace(/\s+/g, ' ').slice(0, 800),
+    notes,
   };
 }
 
@@ -135,6 +158,7 @@ const result = {
   finalStatus,
   classification,
   attempts,
+  notes: attempts.flatMap((attempt) => attempt.notes || []),
 };
 fs.writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify({ layer2Result: result }));

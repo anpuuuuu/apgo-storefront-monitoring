@@ -256,6 +256,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Layer 2 runs once a day: its second consecutive failure would be tomorrow.
+          MONITOR_NOTIFY_MIN_CONSECUTIVE: "1"
           ALERT_TITLE: ${{ steps.aggregate.outputs.alert_title }}
           ALERT_DETAIL: ${{ steps.aggregate.outputs.detail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

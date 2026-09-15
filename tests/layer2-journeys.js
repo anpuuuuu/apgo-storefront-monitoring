@@ -1,4 +1,5 @@
 const {
+  test,
   expect,
   TestConfigStaleError,
   assertNoAccessChallenge,
@@ -51,16 +52,39 @@ async function assertHomepage(page, site, { followCampaign = false } = {}) {
   }
 }
 
+// Horizon's <cart-icon> re-applies a sessionStorage cart-count younger than
+// this on page load, so a reload inside the window would show the stale badge.
+const HEADER_COUNT_CACHE_MS = 10_500;
+
 async function assertHeaderCartCount(page, expectedCount) {
   // The theme intentionally hides the numeric bubble when the count is zero,
   // but the span still contains the canonical "0" for accessibility updates.
   // Requiring :visible makes an empty, correct cart look like a timeout.
   const bubble = page.locator('header [data-testid="cart-bubble"], [data-header-section] [data-testid="cart-bubble"]').first();
   await expect(bubble, 'header cart count element must exist').toHaveCount(1);
-  await expect.poll(async () => {
-    const text = await bubble.textContent();
-    return Number(String(text).trim() || 0);
-  }, { message: 'Header cart count did not match Shopify cart item_count' }).toBe(expectedCount);
+  const readCount = async () => Number(String(await bubble.textContent()).trim() || 0);
+  try {
+    await expect.poll(readCount, { message: 'Header cart count did not match Shopify cart item_count' }).toBe(expectedCount);
+    return;
+  } catch (error) {
+    if (!/Header cart count did not match/.test(String(error?.message || error))) throw error;
+  }
+  // Store-side automation (since 2026-09-14: buy 9 packs, a free gift line is
+  // added afterwards) changes the cart after the theme has already refreshed
+  // the badge from /cart.js, and nothing tells the theme. The server-rendered
+  // badge on the next page load is what the shopper sees next, so only a
+  // mismatch that survives a reload is a theme fault.
+  const seen = await readCount().catch(() => NaN);
+  await page.waitForTimeout(HEADER_COUNT_CACHE_MS);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(readCount, {
+    message: `Header cart count still did not match Shopify cart item_count after a reload (showed ${seen} before)`,
+  }).toBe(expectedCount);
+  const note = { event: 'header_cart_bubble_lag', expected: expectedCount, seen, page: new URL(page.url()).pathname };
+  console.log(JSON.stringify(note));
+  try {
+    test.info().annotations.push({ type: 'header_cart_bubble_lag', description: `header showed ${seen} for ${expectedCount} items until reload on ${note.page}` });
+  } catch (_) { /* outside a running test */ }
 }
 
 async function addNormalV3(page, site) {

@@ -15,7 +15,8 @@
     "min_occurrences": 3,
     "min_sessions": 2,
     "critical_cart_immediate": true,
-    "realert_hours": 2,
+    "realert_hours": 24,
+    "critical_cart_realert_hours": 2,
     "retention_days": 30,
     "alert_retention_days": 90
   },

@@ -9,6 +9,15 @@ export function buildMaintenanceSql({ action, signature = '', note = '' }) {
       verify: null,
     };
   }
+  if (action === 'list-signatures') {
+    // Read-only: every signature that ever made a digest, with the message
+    // text that alert_log truncates, so a mute decision can be made from the
+    // Actions log instead of the Cloudflare dashboard.
+    return {
+      sql: 'SELECT signature, muted, first_seen_at, last_alerted_at, substr(sample_message, 1, 120) AS sample, note FROM known_signatures ORDER BY last_alerted_at DESC LIMIT 100',
+      verify: null,
+    };
+  }
   if (action === 'list-alerts') {
     // Read-only: the last 48 hours of alert_log, newest first, so "why was
     // Telegram quiet" can be answered without the Cloudflare dashboard.
