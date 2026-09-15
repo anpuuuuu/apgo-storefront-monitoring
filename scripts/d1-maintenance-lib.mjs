@@ -17,6 +17,14 @@ export function buildMaintenanceSql({ action, signature = '', note = '' }) {
       verify: null,
     };
   }
+  if (action === 'list-recent-orders') {
+    // Read-only: order timestamps pushed in the last 48 hours, so a
+    // checkout alert can be checked against what the store actually sold.
+    return {
+      sql: "SELECT datetime(json_extract(e.value, '$.at') / 1000, 'unixepoch') AS created_at_utc, json_extract(e.value, '$.id') AS order_id FROM state, json_each(json_extract(state.value, '$.entries')) AS e WHERE state.key LIKE '%:orders:log' AND json_extract(e.value, '$.at') >= (strftime('%s', 'now') - 172800) * 1000 ORDER BY 1 DESC LIMIT 300",
+      verify: null,
+    };
+  }
   if (action === 'list-orders') {
     return {
       sql: "SELECT key, substr(value, 1, 400) AS value, updated_at FROM state WHERE key LIKE '%:orders:%' ORDER BY key",
