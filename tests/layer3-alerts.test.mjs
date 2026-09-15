@@ -209,7 +209,9 @@ test('D1 maintenance only ever interpolates a validated signature and a sanitise
   assert.ok(buildMaintenanceSql({ action: 'list-alerts' }).sql.startsWith("SELECT created_at, layer, kind, substr(detail, 1, 200) AS detail FROM alert_log WHERE created_at >= datetime('now', '-48 hours')"));
   assert.ok(buildMaintenanceSql({ action: 'list-orders' }).sql.includes("FROM state WHERE key LIKE '%:orders:%'"));
   const signatures = buildMaintenanceSql({ action: 'list-signatures' });
-  assert.ok(signatures.sql.startsWith('SELECT signature, muted, first_seen_at, last_alerted_at, substr(sample_message, 1, 120) AS sample, note FROM known_signatures'));
+  assert.ok(signatures.sql.startsWith('SELECT k.signature, k.muted, k.first_seen_at, k.last_alerted_at, substr(k.sample_message, 1, 120) AS sample, '));
+  assert.ok(signatures.sql.includes('(SELECT substr(e.source, 1, 120) FROM js_errors e WHERE e.signature = k.signature ORDER BY e.created_at DESC LIMIT 1) AS source'));
+  assert.ok(signatures.sql.includes('AS page, k.note FROM known_signatures k ORDER BY k.last_alerted_at DESC LIMIT 100'));
   assert.equal(signatures.verify, null);
   assert.ok(buildMaintenanceSql({ action: 'list-recent-orders' }).sql.includes("json_each(json_extract(state.value, '$.entries'))"));
   assert.throws(() => buildMaintenanceSql({ action: 'mute-signature', signature: "x' OR 1=1 --" }), /32 lowercase hex/);

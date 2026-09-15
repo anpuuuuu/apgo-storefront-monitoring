@@ -65,7 +65,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - 只有 Shopify Cart API 实际返回 HTTP 5xx 才会立即发送 Critical Cart Error。`Failed to fetch`、`Load failed` 与 status `0` 属于客户端网络/导航中断，必须达到多人门槛才告警。
 - `Failed to fetch` 代表顾客浏览器当次请求确实失败，但不能单独证明 Shopify 服务器故障；必须结合 Layer 1 Cart API、Layer 2 加购测试与不同网络数量判断。监控不会自动重试 Cart POST，避免服务器已收到第一次请求时造成重复加购。
 - Browser Error Digest 会列出受影响页面、独立网络数与客户端类型。`meta-externalads`、`facebookexternalhit`、`Facebot` 等社交预览/广告爬虫会在写入 D1 前被过滤；真实顾客使用的 Facebook 内置浏览器 `FB_IAB` 仍会保留。
-- 同一 Signature 24 小时内只进一次 Digest（2026-09-13/15 两个签名在旧的 2 小时窗口下各发了 4 次，没有新信息）；D1 照存每一笔事件。已知 Signature 可在 `known_signatures.muted=1` 静音（手动 Workflow `D1 maintenance` → `mute-signature`）；要先看讯息文字再决定，用 `D1 maintenance` → `list-signatures`（`alert_log` 的 detail 只存前 200 字）。Critical Cart Error 仍是 2 小时窗口。
+- 同一 Signature 24 小时内只进一次 Digest（2026-09-13/15 两个签名在旧的 2 小时窗口下各发了 4 次，没有新信息）；D1 照存每一笔事件。已知 Signature 可在 `known_signatures.muted=1` 静音（手动 Workflow `D1 maintenance` → `mute-signature`）；要先看讯息文字再决定，用 `D1 maintenance` → `list-signatures`（`alert_log` 的 detail 只存前 200 字；每个签名附 `js_errors` 最近一次的 source 与页面，30 天外为 null）。Critical Cart Error 仍是 2 小时窗口。
 - 资源错误的来源若是「店铺域名 + `/extensions/…`」，归为 `client-rewrite`：Shopify 只从 `cdn.shopify.com` 提供 app 扩展资源，把主机改写成店铺域名的是抓取器/镜像代理，不进 Digest，D1 照存。
 - `/web-pixels@.../worker.modern.js` 与 “Failed to load web worker for pixel” 归类为 `SHOPIFY-PLATFORM/WEB-PIXELS`；至少 15 Sessions、5 Networks 才告警，六小时内不重复。
 - Cart Network Signature 若全部事件都发生在 `page_leaving=1` 且页面为 `hidden/unloaded`，仍保留 D1 证据但不进入 Digest；只要有任何可见或非离页样本，原有门槛继续生效。
