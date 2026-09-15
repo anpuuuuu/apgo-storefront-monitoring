@@ -107,16 +107,3 @@ export function isDailyStageFresh(prior, stage, targetDate, nowMs, rerunMs) {
   const generatedMs = Date.parse(prior.generatedAt);
   return Number.isFinite(generatedMs) && nowMs - generatedMs < rerunMs;
 }
-
-/* Orders pushed by the platform are the ground truth for "checkout works".
-   When the Worker checked recently and an order was placed inside the
-   window, a GA4 checkout rule cannot mean the checkout is broken; at worst
-   GA4 missed the event. Two armed begin_checkout_zero pages on 2026-09-15
-   (5 and 7 add-to-carts at 00:46 and 07:16 MYT) motivated this gate. */
-export function hasRecentOrder(lastOrder, nowMs, { checkMaxAgeMinutes = 20, orderWindowMinutes = 60 } = {}) {
-  const checkedMs = Date.parse(lastOrder?.checkedAt || '');
-  const createdMs = Date.parse(lastOrder?.createdAt || '');
-  if (!Number.isFinite(checkedMs) || !Number.isFinite(createdMs)) return false;
-  if (nowMs - checkedMs > checkMaxAgeMinutes * 60_000) return false;
-  return nowMs - createdMs <= orderWindowMinutes * 60_000;
-}
