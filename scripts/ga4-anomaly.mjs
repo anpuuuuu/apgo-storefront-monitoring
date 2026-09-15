@@ -10,7 +10,7 @@ import {
   telegram,
   workerHealthy,
 } from './monitor-lib.mjs';
-import { appendCoverage, evaluateDropRules, nextRuleState, shouldRecordAlert } from './ga4-anomaly-lib.mjs';
+import { appendCoverage, durationText, evaluateDropRules, nextRuleState, shouldRecordAlert, topScreensForEvent } from './ga4-anomaly-lib.mjs';
 
 const validateOnly = process.env.VALIDATE_GA4 === 'true';
 requireEnv({ needsD1: !validateOnly });
@@ -77,6 +77,18 @@ function baselineCounts(report) {
 const dropSettings = settings.drop || {};
 const dropMode = dropSettings.mode || 'observe';
 
+/* What to check first. Store-side changes (shipping, discounts, stock,
+   checkout settings, app/theme updates) cause most real hits; the 2026-09-15
+   checkout incident was a free-shipping rule switched off by mistake. */
+const RULE_ADVICE = {
+  ga4_collection_zero: '先查：GA4 / Web Pixel 设置最近有没有改；主题或 app 有没有更新',
+  add_to_cart_zero: '先查：广告商品的变体 / 库存 / 加购按钮；主题或 app 有没有更新',
+  begin_checkout_zero: '先查：广告商品的运费（free shipping）、折扣、库存、结账设置最近有没有改',
+  add_to_cart_drop: '先查：广告商品的变体 / 库存 / 价格显示；主题或 app 有没有更新',
+  begin_checkout_drop: '先查：广告商品的运费（free shipping）、折扣、库存、结账设置最近有没有改',
+  purchase_tracking_gap: '先查：Web Pixel / GA4 结账事件设置',
+};
+
 const RULE_TEXT = {
   ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
   add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
@@ -95,25 +107,64 @@ const dropRuleSettings = { ...settings, consecutive_zeros: Number(dropSettings.c
 // have no GA4 purchase, so the tracking cross-check arms on its own switch.
 const purchaseTrackingMode = dropSettings.purchase_tracking_mode || dropMode;
 
+// Which pages were producing the events: one extra realtime query, only when
+// an armed rule is about to page, cached for the run.
+let screensPromise = null;
+async function screensEvidence(eventName) {
+  screensPromise ||= ga('runRealtimeReport', {
+    minuteRanges: [{ name: 'last30', startMinutesAgo: 29, endMinutesAgo: 0 }],
+    dimensions: [{ name: 'eventName' }, { name: 'unifiedScreenName' }],
+    metrics: [{ name: 'eventCount' }],
+    dimensionFilter: eventFilter(),
+    limit: '200',
+  }).catch((error) => ({ error: String(error?.message || error) }));
+  const report = await screensPromise;
+  if (report?.error) return '';
+  const top = topScreensForEvent(report, eventName);
+  return top.length ? `${eventName} 来自: ${top.map((row) => `${row.screen} (${row.count})`).join(' · ')}` : '';
+}
+
 async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings = settings) {
   const key = `ga4:realtime:${rule}`;
   const previous = await getState(key) || { consecutive: 0, active: false, lastAlertedAt: 0 };
-  const { next, confirmed } = nextRuleState(previous, abnormal, Date.now(), ruleSettings);
+  const now = Date.now();
+  const { next, confirmed } = nextRuleState(previous, abnormal, now, ruleSettings);
   next.detail = detail;
-  const shouldRecord = shouldRecordAlert(previous, confirmed, Date.now(), settings.realert_hours);
+  const schedule = settings.realert_schedule_hours || settings.realert_hours;
+  const shouldRecord = shouldRecordAlert(previous, confirmed, now, schedule);
 
   if (shouldRecord) {
     next.active = true;
-    next.lastAlertedAt = Date.now();
+    next.lastAlertedAt = now;
+    next.alertCount = (Number(previous.alertCount) || 0) + 1;
+    next.firstAlertedAt = previous.active ? previous.firstAlertedAt : new Date(now).toISOString();
     const kind = ruleMode === 'armed' ? 'business_alert' : 'would_alert';
-    await logAlert('layer4', kind, { rule, mode: ruleMode, ...detail });
+    await logAlert('layer4', kind, { rule, mode: ruleMode, alertCount: next.alertCount, abnormalSince: next.abnormalSince, ...detail });
     if (ruleMode === 'armed') {
       const ruleText = RULE_TEXT[rule] || rule;
-      await telegram(`🟡 [第4层·业务指标] ${ruleText}\n当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}\n${process.env.RUN_URL || ''}`);
+      const since = durationText(next.abnormalSince, now);
+      const header = next.alertCount > 1 ? `🟠 [第4层·业务指标] 仍在持续（第 ${next.alertCount} 次提醒，已持续 ${since}）` : `🟡 [第4层·业务指标] ${ruleText}`;
+      const lines = [header];
+      if (next.alertCount > 1) lines.push(ruleText);
+      lines.push(`当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}`);
+      const evidenceEvent = rule.startsWith('begin_checkout') || rule === 'purchase_tracking_gap' ? 'add_to_cart' : 'view_item';
+      const screens = await screensEvidence(evidenceEvent);
+      if (screens) lines.push(screens);
+      if (RULE_ADVICE[rule]) lines.push(RULE_ADVICE[rule]);
+      lines.push(process.env.RUN_URL || '');
+      await telegram(lines.join('\n'));
     }
   }
 
-  if (!abnormal && previous.active) await logAlert('layer4', 'recovery', { rule, ...detail });
+  if (!abnormal && previous.active) {
+    const lasted = durationText(previous.abnormalSince || previous.firstAlertedAt, now);
+    await logAlert('layer4', 'recovery', { rule, lasted, ...detail });
+    if (ruleMode === 'armed') {
+      await telegram(`🟢 [第4层·业务指标] 已恢复：${RULE_TEXT[rule] ? RULE_TEXT[rule].split('（')[0] : rule}\n持续了 ${lasted || '不到一个窗口'}\n当前: ${JSON.stringify(detail.current)}\n${process.env.RUN_URL || ''}`, { silent: true });
+    }
+    next.alertCount = 0;
+    next.firstAlertedAt = null;
+  }
   await setState(key, next);
   return {
     rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode: ruleMode,

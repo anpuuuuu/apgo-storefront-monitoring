@@ -317,7 +317,7 @@ if (stage === 'primary') {
     const kind = mode === 'armed' ? 'data_quality_alert' : 'would_alert';
     await logAlert('layer4', kind, summary);
     if (mode === 'armed') {
-      await telegram(`APGO GA4 data quality alert (${targetDate})\n${summary.persistentDataQualityIssues.map((item) => item.message).join('\n')}\n${process.env.RUN_URL || ''}`);
+      await telegram(`APGO GA4 data quality alert (${targetDate})\n${summary.persistentDataQualityIssues.map((item) => item.message).join('\n')}\n${process.env.RUN_URL || ''}`, { silent: true });
     }
   }
   await setState(confirmedKey, {

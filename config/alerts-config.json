@@ -33,6 +33,7 @@
       "begin_checkout_current_atc_min": 5,
       "consecutive_zeros": 2,
       "realert_hours": 6,
+      "realert_schedule_hours": [1, 2, 3],
       "window_minutes": 30,
       "max_gap_minutes": 45,
       "min_gap_minutes": 15,

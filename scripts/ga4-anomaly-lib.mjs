@@ -19,10 +19,13 @@ export function nextRuleState(previous, abnormal, nowMs, settings) {
     else if (duplicate) consecutive = Math.max(Number(prior.consecutive) || 0, 1);
     else consecutive = (Number(prior.consecutive) || 0) + 1;
   }
+  const restarted = abnormal && (consecutive === 1 || !prior.abnormalSince);
   const next = {
     ...prior,
     consecutive,
     active: abnormal ? Boolean(prior.active) : false,
+    // When the abnormal streak began, for "已持续 X" in alerts and recovery.
+    abnormalSince: abnormal ? (restarted ? new Date(nowMs).toISOString() : prior.abnormalSince) : null,
     checkedAt: new Date(nowMs).toISOString(),
     gapMinutes: gapMinutes === null ? null : Math.round(gapMinutes * 10) / 10,
     coverageGap,
@@ -31,10 +34,43 @@ export function nextRuleState(previous, abnormal, nowMs, settings) {
   return { next, confirmed: consecutive >= settings.consecutive_zeros };
 }
 
-export function shouldRecordAlert(previous, confirmed, nowMs, realertHours) {
+/* Re-alert cadence for a persisting condition. `schedule` is either a number
+   of hours (fixed) or an array such as [1, 2, 3]: 1 h after the first page,
+   2 h after the second, then every 3 h — dense while the owner can still
+   stop the bleeding, sparse once it is old news. The 2026-09-15 checkout
+   incident paged at 00:46 and then not until 07:16 under the old flat 6 h. */
+export function realertDelayHours(schedule, alertCount) {
+  if (Array.isArray(schedule) && schedule.length) return Number(schedule[Math.min(Math.max(alertCount, 1) - 1, schedule.length - 1)]);
+  return Number(schedule) || 6;
+}
+
+export function shouldRecordAlert(previous, confirmed, nowMs, schedule) {
   if (!confirmed) return false;
   const prior = previous || {};
-  return !prior.active || nowMs - Number(prior.lastAlertedAt || 0) >= realertHours * 3_600_000;
+  if (!prior.active) return true;
+  const delayHours = realertDelayHours(schedule, Number(prior.alertCount) || 1);
+  return nowMs - Number(prior.lastAlertedAt || 0) >= delayHours * 3_600_000;
+}
+
+export function durationText(fromIso, nowMs) {
+  const fromMs = Date.parse(fromIso || '');
+  if (!Number.isFinite(fromMs)) return '';
+  const minutes = Math.max(0, Math.round((nowMs - fromMs) / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours ? `${hours} 小时${rest ? ` ${rest} 分钟` : ''}` : `${rest} 分钟`;
+}
+
+/* Top screens for one event from a realtime report with dimensions
+   [eventName, unifiedScreenName], so a checkout alert can say which product
+   pages were producing the add-to-carts. */
+export function topScreensForEvent(report, eventName, limit = 5) {
+  const rows = (report?.rows || [])
+    .filter((row) => row.dimensionValues?.[0]?.value === eventName)
+    .map((row) => ({ screen: String(row.dimensionValues?.[1]?.value || '').slice(0, 60), count: Number(row.metricValues?.[0]?.value || 0) }))
+    .filter((row) => row.count > 0)
+    .sort((a, b) => b.count - a.count);
+  return rows.slice(0, limit);
 }
 
 export function appendCoverage(list, nowIso, cap = 96) {

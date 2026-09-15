@@ -3,10 +3,13 @@ import test from 'node:test';
 import {
   appendCoverage,
   coverageForDate,
+  durationText,
   evaluateDropRules,
   isDailyStageFresh,
   nextRuleState,
+  realertDelayHours,
   shouldRecordAlert,
+  topScreensForEvent,
 } from '../scripts/ga4-anomaly-lib.mjs';
 
 const SETTINGS = { consecutive_zeros: 2, max_gap_minutes: 45, min_gap_minutes: 15 };
@@ -52,11 +55,56 @@ test('a normal window resets the count and clears active', () => {
   assert.equal(result.confirmed, false);
 });
 
-test('shouldRecordAlert respects the realert window', () => {
+test('shouldRecordAlert respects a flat realert window', () => {
   assert.equal(shouldRecordAlert({ active: false }, false, T0, 6), false);
   assert.equal(shouldRecordAlert({ active: false }, true, T0, 6), true);
   assert.equal(shouldRecordAlert({ active: true, lastAlertedAt: T0 - minutes(60) }, true, T0, 6), false);
   assert.equal(shouldRecordAlert({ active: true, lastAlertedAt: T0 - minutes(7 * 60) }, true, T0, 6), true);
+});
+
+test('escalating realert schedule: 1 h after the first page, 2 h, then every 3 h', () => {
+  const schedule = [1, 2, 3];
+  assert.deepEqual([1, 2, 3, 4, 9].map((count) => realertDelayHours(schedule, count)), [1, 2, 3, 3, 3]);
+  assert.equal(realertDelayHours(6, 5), 6);
+  assert.equal(realertDelayHours(undefined, 1), 6);
+  const after = (count, minutesAgo) => shouldRecordAlert({ active: true, alertCount: count, lastAlertedAt: T0 - minutes(minutesAgo) }, true, T0, schedule);
+  assert.equal(after(1, 59), false);
+  assert.equal(after(1, 60), true, 'second page one hour after the first');
+  assert.equal(after(2, 119), false);
+  assert.equal(after(2, 120), true, 'third page two hours after the second');
+  assert.equal(after(3, 179), false);
+  assert.equal(after(3, 180), true);
+  assert.equal(after(7, 180), true, 'then every three hours');
+  // Replay of 2026-09-15: first page 00:46; under [1,2,3] the owner sees pages at 01:46, 03:46, 06:46 instead of one at 07:16.
+});
+
+test('nextRuleState remembers when the abnormal streak started', () => {
+  const first = nextRuleState(null, true, T0, SETTINGS);
+  assert.equal(first.next.abnormalSince, at(0));
+  const second = nextRuleState(first.next, true, T0 + minutes(30), SETTINGS);
+  assert.equal(second.next.abnormalSince, at(0), 'kept across the streak');
+  const healed = nextRuleState(second.next, false, T0 + minutes(60), SETTINGS);
+  assert.equal(healed.next.abnormalSince, null);
+  const restarted = nextRuleState({ ...second.next, checkedAt: at(60) }, true, T0 + minutes(240), SETTINGS);
+  assert.equal(restarted.next.abnormalSince, at(240), 'a coverage gap restarts the streak clock');
+});
+
+test('durationText and topScreensForEvent format the alert evidence', () => {
+  assert.equal(durationText(at(-95), T0), '1 小时 35 分钟');
+  assert.equal(durationText(at(-120), T0), '2 小时');
+  assert.equal(durationText(at(-7), T0), '7 分钟');
+  assert.equal(durationText(null, T0), '');
+  const report = { rows: [
+    { dimensionValues: [{ value: 'add_to_cart' }, { value: 'APGO Atomic Crystal Merdeka Set' }], metricValues: [{ value: '4' }] },
+    { dimensionValues: [{ value: 'add_to_cart' }, { value: 'APGO Kitchen Cleaner 500ml' }], metricValues: [{ value: '1' }] },
+    { dimensionValues: [{ value: 'view_item' }, { value: 'APGO Kitchen Cleaner 500ml' }], metricValues: [{ value: '9' }] },
+    { dimensionValues: [{ value: 'add_to_cart' }, { value: 'Empty' }], metricValues: [{ value: '0' }] },
+  ] };
+  assert.deepEqual(topScreensForEvent(report, 'add_to_cart'), [
+    { screen: 'APGO Atomic Crystal Merdeka Set', count: 4 },
+    { screen: 'APGO Kitchen Cleaner 500ml', count: 1 },
+  ]);
+  assert.deepEqual(topScreensForEvent({ rows: [] }, 'add_to_cart'), []);
 });
 
 test('appendCoverage keeps the newest entries within the cap', () => {

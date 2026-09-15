@@ -109,7 +109,7 @@ export async function workerHealthy() {
   return response.ok && payload.ok && layer1 && !layer1.stale;
 }
 
-export async function telegram(text) {
+export async function telegram(text, { silent = false } = {}) {
   if (monitorMode !== 'live') {
     console.log(JSON.stringify({ shadow: true, telegramSuppressed: true, siteId, textSuppressed: true }));
     return;
@@ -122,7 +122,7 @@ export async function telegram(text) {
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: namespacedText.slice(0, 3900), disable_web_page_preview: true }),
+    body: JSON.stringify({ chat_id: chatId, text: namespacedText.slice(0, 3900), disable_web_page_preview: true, disable_notification: Boolean(silent) }),
   });
   if (!response.ok) throw new Error(`Telegram HTTP ${response.status}`);
 }

@@ -190,7 +190,7 @@ async function notifyThrottled(env, site, key, text, nowMs, mode) {
   const state = (await getState(env.DB, stateKey)) || {};
   if (nowMs < Number(state.untilMs || 0)) return false;
   await setState(env.DB, stateKey, { untilMs: nowMs + ORDER_LIMITS.failureNotifyMs, text: String(text).slice(0, 200) });
-  if (mode === 'armed') await sendTelegram(env, text);
+  if (mode === 'armed') await sendTelegram(env, text, { silent: true });
   return true;
 }
 
@@ -228,7 +228,7 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
     await setState(env.DB, alertKey, { open: true, severity: evaluation.severity, lastAlertMs: nowMs });
   } else if (!evaluation.severity && state.open) {
     await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_recovery' : 'would_recover', { rule: 'orders_gap', ...detail });
-    if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] Orders resumed\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`);
+    if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] Orders resumed\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`, { silent: true });
     await setState(env.DB, alertKey, { open: false, severity: null, lastAlertMs: state.lastAlertMs });
   }
 
