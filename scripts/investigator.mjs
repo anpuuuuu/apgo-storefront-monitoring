@@ -38,15 +38,19 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function probeHandles(client, catalog, handles) {
+/* One fresh client per product: a new cart cookie means an empty cart, so the
+   probe needs no opening clear. Requests are spaced because GitHub-hosted
+   runners share egress ranges that Shopify rate-limits — the same reason Layer
+   2 waits MONITOR_WRITE_COOLDOWN_MS between its cart writes. */
+async function probeHandles(catalog, handles, { pauseMs }) {
   const byHandle = new Map(catalog.map((product) => [product.handle, product]));
   const probes = [];
   const missing = [];
   for (const handle of handles) {
     const product = byHandle.get(handle);
     if (!product) { missing.push(handle); continue; }
-    if (probes.length) await sleep(Number(settings.pause_ms) || 1_500);
-    probes.push(await probeProduct(client, product, settings.address));
+    if (probes.length) await sleep(pauseMs);
+    probes.push(await probeProduct(createStorefrontClient({ baseUrl: site.baseUrl }), product, settings.address));
   }
   return { probes, missing, byHandle };
 }
@@ -64,7 +68,8 @@ export async function snapshot() {
     console.log(JSON.stringify({ event: 'investigator_ad_targets_unavailable', reason: String(error?.message || error).slice(0, 200) }));
   }
   const handles = snapshotHandles(site, adTargets).slice(0, Number(settings.max_snapshot_products) || 8);
-  const { probes, missing } = await probeHandles(client, catalog, handles);
+  // Nightly: nobody is waiting, so pace it well under the rate limit.
+  const { probes, missing } = await probeHandles(catalog, handles, { pauseMs: Number(settings.snapshot_pause_ms) || 20_000 });
   const current = buildSnapshot({ takenAt: new Date().toISOString(), address: settings.address, products: catalog, probes });
   const latest = await getState(SNAPSHOT_KEY);
   if (latest) await setState(PREVIOUS_KEY, latest);
@@ -74,6 +79,7 @@ export async function snapshot() {
     takenAt: current.takenAt,
     handles,
     missingFromCatalog: missing,
+    rateLimited: probes.filter((probe) => probe.rateLimited).map((probe) => probe.handle),
     results: probes.map((probe) => ({ handle: probe.handle, cart: probe.cart?.itemCount ?? null, rates: probe.rates?.map((rate) => `${rate.name}=${rate.price}`) ?? null, error: probe.ratesError || probe.add?.error || probe.error || null })),
   };
   console.log(JSON.stringify(summary));
@@ -100,7 +106,7 @@ async function runInvestigation({ rule, ruleLabel, screens }) {
   const catalog = await fetchCatalog(client);
   const { matched, unmatched } = matchScreensToProducts(screens || [], catalog, Number(settings.max_products) || 3);
   const latest = await getState(SNAPSHOT_KEY);
-  const { probes, byHandle } = await probeHandles(client, catalog, matched.map((entry) => entry.handle));
+  const { probes, byHandle } = await probeHandles(catalog, matched.map((entry) => entry.handle), { pauseMs: Number(settings.pause_ms) || 4_000 });
   const results = probes.map((probe) => {
     const target = matched.find((entry) => entry.handle === probe.handle) || {};
     const previous = latest?.products?.[probe.handle] || null;
@@ -124,7 +130,7 @@ async function runInvestigation({ rule, ruleLabel, screens }) {
     matched: matched.map((entry) => entry.handle),
     unmatched,
     snapshotTakenAt: latest?.takenAt || null,
-    results: results.map((entry) => ({ handle: entry.handle, cart: entry.probe.cart?.itemCount ?? null, rates: entry.probe.rates?.length ?? null, ratesError: entry.probe.ratesError, addError: entry.probe.add?.error || null, changes: entry.changes })),
+    results: results.map((entry) => ({ handle: entry.handle, cart: entry.probe.cart?.itemCount ?? null, rates: entry.probe.rates?.length ?? null, ratesError: entry.probe.ratesError, addError: entry.probe.add?.error || null, rateLimited: entry.probe.rateLimited, changes: entry.changes })),
   };
   await logAlert('layer4', 'investigation', summary);
   console.log(JSON.stringify({ event: 'investigation', ...summary }));

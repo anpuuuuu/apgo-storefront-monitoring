@@ -19,9 +19,27 @@ export const PROBE_USER_AGENT = 'APGO-Investigator/1.0 (storefront probe; no che
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* HTTP 429 is Shopify limiting this IP, not the storefront failing — the same
+   distinction Layer 1 makes in uptime.mjs. GitHub-hosted runners share egress
+   ranges, and the first snapshot from one (2026-09-15 14:04 UTC) was throttled
+   on 7 of 8 products while the identical probe from a home IP passed. A
+   throttled probe must never be reported as a broken store. */
+export function isRateLimited(response) {
+  return Number(response?.status) === 429;
+}
+
 /* Minimal cookie jar: Shopify keys the anonymous cart on the `cart` cookie,
    so every request after /cart/add.js must send it back. */
-export function createStorefrontClient({ baseUrl, fetchImpl = globalThis.fetch, userAgent = PROBE_USER_AGENT, timeoutMs = 15_000 }) {
+export function createStorefrontClient({
+  baseUrl,
+  fetchImpl = globalThis.fetch,
+  userAgent = PROBE_USER_AGENT,
+  timeoutMs = 15_000,
+  rateLimitRetries = 2,
+  backoffMs = 5_000,
+  maxBackoffMs = 20_000,
+  sleep = defaultSleep,
+}) {
   const base = String(baseUrl || '').replace(/\/$/, '');
   if (!base) throw new Error('baseUrl is required');
   const jar = new Map();
@@ -37,7 +55,7 @@ export function createStorefrontClient({ baseUrl, fetchImpl = globalThis.fetch, 
   };
   const cookieHeader = () => [...jar].map(([key, value]) => `${key}=${value}`).join('; ');
 
-  async function request(path, { method = 'GET', body, headers = {} } = {}) {
+  async function once(path, { method = 'GET', body, headers = {} } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
     try {
@@ -53,10 +71,25 @@ export function createStorefrontClient({ baseUrl, fetchImpl = globalThis.fetch, 
       const text = await response.text();
       let json = null;
       try { json = JSON.parse(text); } catch { /* not JSON */ }
-      return { status: response.status, ok: response.ok, json, text: text.slice(0, 300) };
+      const retryAfter = Number(response.headers?.get?.('retry-after'));
+      return { status: response.status, ok: response.ok, json, text: text.slice(0, 300), retryAfter: Number.isFinite(retryAfter) ? retryAfter : null };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /* A short burst of 429s can pass after a pause; a genuinely hot IP will not,
+     and the caller then reports that honestly rather than waiting minutes. */
+  async function request(path, options = {}) {
+    let response = await once(path, options);
+    for (let attempt = 0; isRateLimited(response) && attempt < rateLimitRetries; attempt += 1) {
+      const waitMs = response.retryAfter > 0
+        ? Math.min(response.retryAfter * 1_000, maxBackoffMs)
+        : Math.min(backoffMs * (2 ** attempt), maxBackoffMs);
+      await sleep(waitMs);
+      response = await once(path, options);
+    }
+    return response;
   }
 
   return { request, cookies: () => cookieHeader() };
@@ -156,6 +189,7 @@ function summarizeCart(cart) {
 }
 
 function responseError(response) {
+  if (isRateLimited(response)) return 'Shopify 限流（HTTP 429），这次没测到';
   const json = response.json;
   if (json && typeof json === 'object') {
     if (typeof json.description === 'string') return json.description;
@@ -181,22 +215,29 @@ export async function probeProduct(client, product, address, { pollAttempts = 6,
     ratesStatus: null,
     rates: null,
     ratesError: null,
+    rateLimited: false,
     error: null,
   };
   if (!variant) { result.error = 'product has no variants'; return result; }
   try {
-    await client.request('/cart/clear.js', { method: 'POST' });
+    // No opening clear: each product gets a fresh client, so the cart cookie is
+    // new and the cart already empty. One request less against the rate limit,
+    // and the trailing clear still leaves nothing behind.
     const add = await client.request('/cart/add.js', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ items: [{ id: variant.id, quantity: 1 }] }),
     });
+    result.rateLimited = isRateLimited(add);
     result.add = { status: add.status, error: add.ok ? null : responseError(add) };
     if (!add.ok) return result;
 
     const cart = await client.request('/cart.js');
     result.cart = cart.ok ? summarizeCart(cart.json) : null;
-    if (!cart.ok) result.error = `cart.js ${responseError(cart)}`;
+    if (!cart.ok) {
+      result.rateLimited = result.rateLimited || isRateLimited(cart);
+      result.error = `cart.js ${responseError(cart)}`;
+    }
 
     const path = `/cart/shipping_rates.json?${shippingQuery(address)}`;
     let rates = await client.request(path);
@@ -207,6 +248,7 @@ export async function probeProduct(client, product, address, { pollAttempts = 6,
       rates = await client.request(path);
     }
     result.ratesStatus = rates.status;
+    result.rateLimited = result.rateLimited || isRateLimited(rates);
     if (rates.ok && Array.isArray(rates.json?.shipping_rates)) {
       result.rates = rates.json.shipping_rates.map((rate) => ({
         name: String(rate.name || rate.code || ''),
@@ -238,6 +280,7 @@ export function snapshotEntry(product, probe) {
     ratesStatus: probe?.ratesStatus ?? null,
     rates: probe?.rates || null,
     ratesError: probe?.ratesError || null,
+    rateLimited: Boolean(probe?.rateLimited),
     error: probe?.error || null,
   };
 }
@@ -257,6 +300,8 @@ const rateText = (rate) => `${rate.name} ${rate.price === 0 ? '免运' : `${rate
 export function diffProbe(previous, current) {
   const changes = [];
   if (!previous) return changes;
+  // A throttled run on either side proves nothing about cart or shipping.
+  const cartComparable = !previous.rateLimited && !current.rateLimited;
   if (previous.updatedAt && current.updatedAt && previous.updatedAt !== current.updatedAt) {
     changes.push(`商品在快照之后被修改过（Shopify updated_at ${previous.updatedAt} → ${current.updatedAt}）`);
   }
@@ -265,12 +310,13 @@ export function diffProbe(previous, current) {
   }
   if (previous.available && !current.available) changes.push('商品从可购买变成不可购买');
   if (!previous.available && current.available) changes.push('商品从不可购买变成可购买');
-  if (previous.cart && current.cart && previous.cart.itemCount !== current.cart.itemCount) {
+  if (cartComparable && previous.cart && current.cart && previous.cart.itemCount !== current.cart.itemCount) {
     changes.push(`加 1 件后购物车 ${previous.cart.itemCount} 件 → ${current.cart.itemCount} 件（自动加入的东西变了）`);
   }
-  if (previous.cart && current.cart && previous.cart.totalPrice !== current.cart.totalPrice) {
+  if (cartComparable && previous.cart && current.cart && previous.cart.totalPrice !== current.cart.totalPrice) {
     changes.push(`购物车金额 ${money(previous.cart.totalPrice, previous.cart.currency)} → ${money(current.cart.totalPrice, current.cart.currency)}`);
   }
+  if (!cartComparable) return changes;
   const hadRates = Array.isArray(previous.rates);
   const hasRates = Array.isArray(current.rates);
   if (hadRates && !hasRates) changes.push(`运费查询从正常变成失败：${current.ratesError || current.error || '未知错误'}`);
@@ -296,17 +342,21 @@ export function diffProbe(previous, current) {
    shows the evidence so the reader can disagree. */
 export function verdict(results) {
   if (!results.length) return '没能锁定商品：GA4 的页面标题对不上商品目录，探测没跑起来。请自己打开正在跑的广告落地页看一眼加购到结账。';
-  const failing = results.filter((entry) => entry.probe.add?.error || entry.probe.error);
-  if (failing.length) return `最可能：加购本身失败（${failing.map((entry) => `${entry.handle}: ${entry.probe.add?.error || entry.probe.error}`).join('；')}）。先查商品是否下架/售罄。`;
-  const noRates = results.filter((entry) => !Array.isArray(entry.probe.rates) || entry.probe.rates.length === 0);
-  if (noRates.length) return `最可能：结账拿不到运费方案（${noRates.map((entry) => `${entry.handle}: ${entry.probe.ratesError || '没有任何选项'}`).join('；')}）。先查 Shopify 后台 Settings → Shipping and delivery 的方案与商品所属 profile。`;
-  const freeGone = results.filter((entry) => entry.changes.some((change) => change.includes('免运费选项消失')));
-  if (freeGone.length) return `最可能：免运费方案被关掉或改了条件（${freeGone.map((entry) => entry.handle).join('、')}）。这正是 2026-09-15 那次的模式。`;
-  const edited = results.filter((entry) => entry.changes.some((change) => change.includes('被修改过')));
-  if (edited.length) return `商品在快照之后被后台修改过（${edited.map((entry) => entry.handle).join('、')}），先看那次修改改了什么（价格、库存、运费 profile、赠品规则）。`;
-  const changed = results.filter((entry) => entry.changes.length);
-  if (changed.length) return `探测到变化（${changed.map((entry) => entry.handle).join('、')}），见上面各条；加购和运费本身仍可用。`;
-  return '探测没发现异常：加购、购物车、运费方案都正常。原因可能在结账页本身（付款方式、折扣码、地址校验）或流量端（广告落地页、GA4 采集），本探测覆盖不到这些。';
+  const usable = results.filter((entry) => !entry.probe.rateLimited);
+  const throttled = results.filter((entry) => entry.probe.rateLimited);
+  if (!usable.length) return `探测被 Shopify 限流（HTTP 429），${throttled.map((entry) => entry.handle).join('、')} 都没测到。被限流的是监控自己，不代表店铺有问题；请自己打开广告落地页走一次加购到结账。`;
+  const throttledNote = throttled.length ? `（${throttled.map((entry) => entry.handle).join('、')} 被限流没测到）` : '';
+  const failing = usable.filter((entry) => entry.probe.add?.error || entry.probe.error);
+  if (failing.length) return `最可能：加购本身失败（${failing.map((entry) => `${entry.handle}: ${entry.probe.add?.error || entry.probe.error}`).join('；')}）。先查商品是否下架/售罄。${throttledNote}`;
+  const noRates = usable.filter((entry) => !Array.isArray(entry.probe.rates) || entry.probe.rates.length === 0);
+  if (noRates.length) return `最可能：结账拿不到运费方案（${noRates.map((entry) => `${entry.handle}: ${entry.probe.ratesError || '没有任何选项'}`).join('；')}）。先查 Shopify 后台 Settings → Shipping and delivery 的方案与商品所属 profile。${throttledNote}`;
+  const freeGone = usable.filter((entry) => entry.changes.some((change) => change.includes('免运费选项消失')));
+  if (freeGone.length) return `最可能：免运费方案被关掉或改了条件（${freeGone.map((entry) => entry.handle).join('、')}）。这正是 2026-09-15 那次的模式。${throttledNote}`;
+  const edited = usable.filter((entry) => entry.changes.some((change) => change.includes('被修改过')));
+  if (edited.length) return `商品在快照之后被后台修改过（${edited.map((entry) => entry.handle).join('、')}），先看那次修改改了什么（价格、库存、运费 profile、赠品规则）。${throttledNote}`;
+  const changed = usable.filter((entry) => entry.changes.length);
+  if (changed.length) return `探测到变化（${changed.map((entry) => entry.handle).join('、')}），见上面各条；加购和运费本身仍可用。${throttledNote}`;
+  return `探测没发现异常：加购、购物车、运费方案都正常。原因可能在结账页本身（付款方式、折扣码、地址校验）或流量端（广告落地页、GA4 采集），本探测覆盖不到这些。${throttledNote}`;
 }
 
 export function renderInvestigation({ ruleLabel, address, results, unmatched = [], snapshotTakenAt = null, siteLabel = '' }) {
@@ -318,7 +368,8 @@ export function renderInvestigation({ ruleLabel, address, results, unmatched = [
   results.forEach((entry, index) => {
     const { probe, changes } = entry;
     lines.push(`${index + 1}. ${entry.title || entry.handle}  /products/${entry.handle}${entry.count ? `（加购 ${entry.count}）` : ''}`);
-    if (probe.add?.error) lines.push(`   ❌ 加购失败：${probe.add.error}`);
+    if (probe.rateLimited) lines.push('   🚫 被 Shopify 限流（429），这个商品没测到；限流的是监控自己，不是店铺');
+    else if (probe.add?.error) lines.push(`   ❌ 加购失败：${probe.add.error}`);
     else if (probe.error && !probe.cart) lines.push(`   ❌ 探测失败：${probe.error}`);
     if (probe.cart) {
       const extra = probe.cart.itemCount - 1;
