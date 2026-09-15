@@ -107,6 +107,19 @@ Content-Type: application/json
 - 推送源自身的健康单独看：从未收到推送记 `orders_push_missing`；超过 24 小时没有任何推送记 `orders_push_stale` 并提示先检查 Flow，而不是把它读成零销售。
 - 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE`：observe 只写 `would_alert` / `would_recover`；**2026-09-11 起 armed**——桶成熟前用 6 小时保底阈值，对约 60 单/天的店任何时段 6 小时没单都值得知道，桶成熟后阈值自动收紧。
 
+### 调查员（告警后的自动排查，阶段 1a）
+
+`scripts/investigator.mjs`（纯逻辑在 `scripts/checkout-probe-lib.mjs`）。armed 规则**首次**响铃后，紧接着发一条静默的 🔎：
+
+1. 取 GA4 realtime 最近 30 分钟 `add_to_cart` 最多的页面标题，用公开 `/products.json` 的商品标题对回 handle（标题不跟 handle 走，只能按标题对）。
+2. 前 3 个商品各自：`POST /cart/clear.js` → `POST /cart/add.js` 加 1 件 → `GET /cart.js` → `GET /cart/shipping_rates.json`（邮编 86900 / MY / Johor，Shopify 要求马来西亚必须带州）→ `POST /cart/clear.js`。只走公开购物车接口，不进结账页、不填付款、不产生订单；服务端 fetch 不会触发 GA4 事件或 Layer 3 beacon。
+3. 与每日快照比：商品 `updated_at` 变了、价格/可购买状态变了、加 1 件后购物车件数变了（自动赠品规则变了）、运费选项消失/变价/免运消失、运费查询失败。
+4. 结论按经验规则排：加购失败 → 拿不到运费方案 → 免运消失 → 商品被修改过 → 其他变化 → 没发现异常（并说明覆盖不到结账页本身）；连商品都对不上时也照发，讲明没跑起来。修复仍由人做。
+
+🔎 会响铃，和它跟随的业务告警一样：这条才是告诉你「去哪里看」的讯息，查不到原因时更要讲出来，否则你无法分辨是没查还是查了没事。每次事故最多一条（只在首次告警后触发，重报时不再发）。探测自身失败（超时、店铺连不上）只写 `alert_log` 的 `investigation_failed`，不进群。
+
+每日快照：`monitor-alerts.yml` 的 `daily-primary`（Dispatcher 04:25 UTC 后派发）跑 `node scripts/investigator.mjs snapshot`，对象是 GA4 付费流量落地的商品 + `fixtures` 里的促销/赠品/bundle/普通商品，存 D1 `state` 的 `<site>:probe:snapshot:latest`（上一份滚到 `:previous`）。设定在 `config/alerts-config.json` 的 `investigator`（`mode: off` 关闭）。探测失败只写 `alert_log` 的 `investigation_failed`，不进群。
+
 ## 讯息静默策略
 
 所有讯息都进同一个 Telegram 群，但只有需要有人**现在**处理的才响铃（`disable_notification=false`），其余静默送达（进群不响）：
@@ -119,6 +132,7 @@ Content-Type: application/json
 | Layer 4 业务规则（armed）首报与重报 | Layer 4 恢复 🟢、日报数据质量 |
 | 订单心跳 warning / critical | 订单心跳 recovery、推送缺失/停滞提示 |
 | Layer 4 日报 armed 告警 | Workflow 失败通知、Dispatcher 失败通知 |
+| 调查员 🔎（跟在业务告警后面） | — |
 
 原因：只要杂讯和真事在手机上长得一样，剩下的杂讯就会持续消耗对这个群的信任；让「响」稀有而且只对应真事。
 
