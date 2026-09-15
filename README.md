@@ -80,6 +80,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 排程由 Dispatcher Worker 的 Cloudflare Cron（`*/5`）负责：读取 `/health`，Layer 4 心跳 ≥28 分钟就 `workflow_dispatch` 一次 `realtime`；UTC 04:25 / 06:55 之后各派发一次 `daily-primary` / `daily-confirm`；Layer 3 心跳 >90 分钟派发 self-health。GitHub 自己的 `19,49 * * * *` 与 daily cron 保留作冗余——GitHub 对高频 cron 只送达约 18%，对每日 cron 会晚 4–6 小时，不能单独依赖。KV 锁、最近 15 分钟已有 run、以及失败后 60 分钟退避都会阻止重复派发。
 
+- 告警送达：首次触发后状况持续，按 `realert_schedule_hours: [1, 2, 3]` 在 +1h、+2h、+3h 各提醒一次，之后每 3 小时，每条注明「第 N 次提醒，已持续 X」；恢复时发 🟢（静默）。文案带「先查什么」（运费 / 折扣 / 库存 / 结账设置 / 主题或 app 更新）和当时正在产生加购的商品页（GA4 realtime 按 `unifiedScreenName` 拆）。2026-09-15 的 free-shipping 事故在旧的 6 小时平铺重报下 00:46 响过一次后 07:16 才再响，中间被淹没在杂讯里。
 - Collection：Layer 1 正常、同期中位数 ≥10、连续两个窗口 page_view=0。
 - ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。 2026-09-15 00:46 / 07:16 MYT 两次触发（ATC 5 / 7）经店主确认是真实事件：广告商品的 free shipping 被误关，顾客加购后不结账——**不要用「Shopify 最近有别的订单」压掉这条**，别的商品有人下单不能证明广告商品的结账没坏（#58 曾这么做，已回退）。
@@ -103,6 +104,21 @@ Content-Type: application/json
 - 每 10 分钟评估「距上一单多久」：按同一小时（工作日/周末分开）28 天的历史，每 30 分钟采样「当时距上一单多久」，取 p90 × 1.5，限制在 90–720 分钟。样本不足 8 个的桶用 6 小时保底阈值，所以刚接入的前几周夜间不会误报。超过阈值 warning、超过两倍 critical、恢复时通知；6 小时内不重复。
 - 推送源自身的健康单独看：从未收到推送记 `orders_push_missing`；超过 24 小时没有任何推送记 `orders_push_stale` 并提示先检查 Flow，而不是把它读成零销售。
 - 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE`：observe 只写 `would_alert` / `would_recover`；**2026-09-11 起 armed**——桶成熟前用 6 小时保底阈值，对约 60 单/天的店任何时段 6 小时没单都值得知道，桶成熟后阈值自动收紧。
+
+## 讯息静默策略
+
+所有讯息都进同一个 Telegram 群，但只有需要有人**现在**处理的才响铃（`disable_notification=false`），其余静默送达（进群不响）：
+
+| 响铃 | 静默 |
+|---|---|
+| Layer 1 连续失败（down） | Layer 1 recovery / throttled / slow |
+| Layer 3 Critical Cart Error（Shopify 5xx） | Layer 3 Browser Error Digest |
+| 心跳 critical（stale） | 心跳 delayed / recovery |
+| Layer 4 业务规则（armed）首报与重报 | Layer 4 恢复 🟢、日报数据质量 |
+| 订单心跳 warning / critical | 订单心跳 recovery、推送缺失/停滞提示 |
+| Layer 4 日报 armed 告警 | Workflow 失败通知、Dispatcher 失败通知 |
+
+原因：只要杂讯和真事在手机上长得一样，剩下的杂讯就会持续消耗对这个群的信任；让「响」稀有而且只对应真事。
 
 ## Heartbeat 与自监控
 

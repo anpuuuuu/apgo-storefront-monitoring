@@ -33,6 +33,7 @@ try {
       chat_id: chatId,
       text: lines.join('\n'),
       disable_web_page_preview: true,
+      disable_notification: true,
     }),
   });
   if (!response.ok) console.error(`Telegram API error ${response.status}: ${await response.text()}`);

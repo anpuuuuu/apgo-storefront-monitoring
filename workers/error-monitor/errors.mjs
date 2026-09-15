@@ -360,7 +360,7 @@ export async function digestBrowserErrors(env) {
   if (!pending.length) return { alerted: 0, eligible: 0 };
 
   const selected = pending.slice(0, LIMITS.errorDigestMaxItems);
-  await sendTelegram(env, buildBrowserDigest(selected, pending.length));
+  await sendTelegram(env, buildBrowserDigest(selected, pending.length), { silent: true });
   await logAlert(env.DB, 'multi-site:layer3', 'browser-digest', {
     signatures: selected.map((row) => row.signature),
     omitted: Math.max(0, pending.length - selected.length),

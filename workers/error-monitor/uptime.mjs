@@ -108,16 +108,16 @@ async function updateTargetState(env, sample) {
 
   for (const event of events) {
     if (event === 'recovery') {
-      await sendTelegram(env, `🟢 [${label}][Layer 1 Recovery] ${sample.id} has recovered\nHTTP ${sample.status} · ${sample.latencyMs} ms\n${sample.url}`);
+      await sendTelegram(env, `🟢 [${label}][Layer 1 Recovery] ${sample.id} has recovered\nHTTP ${sample.status} · ${sample.latencyMs} ms\n${sample.url}`, { silent: true });
       await logAlert(env.DB, layer, 'recovery', sample);
     } else if (event === 'down') {
       await sendTelegram(env, `🔴 [${label}][Layer 1] ${sample.id} failed ${state.failures} consecutive probes\n${sample.error}\n${sample.url}`);
       await logAlert(env.DB, layer, 'down', { ...sample, failures: state.failures });
     } else if (event === 'throttled') {
-      await sendTelegram(env, `🟠 [${label}][Layer 1 Throttled] ${sample.id} rate-limited (HTTP 429) for ${state.throttled} consecutive probes\nShopify is limiting the monitor, not necessarily customers — compare with /cart.js and Layer 2\n${sample.url}`);
+      await sendTelegram(env, `🟠 [${label}][Layer 1 Throttled] ${sample.id} rate-limited (HTTP 429) for ${state.throttled} consecutive probes\nShopify is limiting the monitor, not necessarily customers — compare with /cart.js and Layer 2\n${sample.url}`, { silent: true });
       await logAlert(env.DB, layer, 'throttled', { ...sample, throttled: state.throttled });
     } else if (event === 'slow') {
-      await sendTelegram(env, `🟠 [${label}][Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`);
+      await sendTelegram(env, `🟠 [${label}][Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`, { silent: true });
       await logAlert(env.DB, layer, 'slow', { ...sample, slowSamples: state.slowSamples });
     }
   }
@@ -174,7 +174,7 @@ async function checkStaleHeartbeats(env) {
     const shouldAlert = shouldAlertHeartbeat(severity, state, now, LIMITS.heartbeatRealertMs);
     if (shouldAlert) {
       const critical = severity === 'critical';
-      await sendTelegram(env, `${critical ? `🔴 [${site.label}][Monitoring Health]` : `🟠 [${site.label}][Monitoring Delayed]`} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\n${critical ? 'Critical' : 'Warning'} limit: ${Math.round((critical ? criticalAge : maxAge) / 60_000)} minutes`);
+      await sendTelegram(env, `${critical ? `🔴 [${site.label}][Monitoring Health]` : `🟠 [${site.label}][Monitoring Delayed]`} ${layer} heartbeat is ${critical ? 'stale' : 'delayed'}\nLast: ${row?.observed_at || 'never'}\n${critical ? 'Critical' : 'Warning'} limit: ${Math.round((critical ? criticalAge : maxAge) / 60_000)} minutes`, { silent: !critical });
       await logAlert(env.DB, siteKey(site.id, 'self-health'), critical ? 'stale' : 'delayed', {
         siteId: site.id,
         layer,
@@ -186,7 +186,7 @@ async function checkStaleHeartbeats(env) {
       });
       await setState(env.DB, stateKey, { ...state, open: true, severity, lastAlertMs: now });
     } else if (!severity && state.open) {
-      await sendTelegram(env, `🟢 [${site.label}][Monitoring Recovery] ${layer} heartbeat resumed\n${row.observed_at}`);
+      await sendTelegram(env, `🟢 [${site.label}][Monitoring Recovery] ${layer} heartbeat resumed\n${row.observed_at}`, { silent: true });
       await logAlert(env.DB, siteKey(site.id, 'self-health'), 'recovery', { siteId: site.id, layer, observedAt: row.observed_at });
       await setState(env.DB, stateKey, { ...state, open: false, severity: null, lastAlertMs: state.lastAlertMs });
     } else {
