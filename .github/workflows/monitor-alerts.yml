@@ -92,7 +92,11 @@ jobs:
           case '${{ needs.plan.outputs.mode }}' in
             diagnose-revenue) node scripts/ga4-revenue-diagnostic.mjs ;;
             validate) VALIDATE_GA4=true node scripts/ga4-anomaly.mjs ;;
-            daily-primary) DAILY_STAGE=primary node scripts/ga4-daily-funnel.mjs ;;
+            daily-primary)
+              DAILY_STAGE=primary node scripts/ga4-daily-funnel.mjs; status=$?
+              # Investigator baseline: probe the advertised products once a day (non-fatal).
+              node scripts/investigator.mjs snapshot || echo 'investigator snapshot failed (non-fatal)'
+              exit $status ;;
             daily-confirm) DAILY_STAGE=confirm node scripts/ga4-daily-funnel.mjs ;;
             *) node scripts/ga4-anomaly.mjs ;;
           esac

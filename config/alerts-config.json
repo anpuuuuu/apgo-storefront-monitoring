@@ -64,6 +64,15 @@
       "rerun_after_hours": 12
     }
   },
+  "investigator": {
+    "_readme": "Alert investigator (scripts/investigator.mjs). On the first page of an armed GA4 rule it adds each of the top add-to-cart products to an anonymous storefront cart, asks /cart/shipping_rates.json for this address, diffs against the daily snapshot and posts a silent 🔎 message. Public cart endpoints only: never the checkout page, never payment, never an order. Address supplied by Wade on 2026-09-15; Shopify requires the state for Malaysia.",
+    "mode": "armed",
+    "address": { "zip": "86900", "country": "MY", "province": "Johor" },
+    "max_products": 3,
+    "max_snapshot_products": 8,
+    "pause_ms": 1500,
+    "timeout_ms": 90000
+  },
   "orders": {
     "_readme": "Push-based order heartbeat in workers/error-monitor/orders.mjs (POST /orders/event from Shopify Flow, a WooCommerce webhook, or any backend); values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",
     "mode": "armed",

@@ -11,6 +11,7 @@ import {
   workerHealthy,
 } from './monitor-lib.mjs';
 import { appendCoverage, durationText, evaluateDropRules, nextRuleState, shouldRecordAlert, topScreensForEvent } from './ga4-anomaly-lib.mjs';
+import { investigate } from './investigator.mjs';
 
 const validateOnly = process.env.VALIDATE_GA4 === 'true';
 requireEnv({ needsD1: !validateOnly });
@@ -153,6 +154,13 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
       if (RULE_ADVICE[rule]) lines.push(RULE_ADVICE[rule]);
       lines.push(process.env.RUN_URL || '');
       await telegram(lines.join('\n'));
+      // First page only: walk the products shoppers are adding right now
+      // through cart + shipping rates and post the evidence (silent 🔎).
+      // Never throws; a slow store cannot delay the alert itself.
+      if (next.alertCount === 1) {
+        const report = await screensPromise;
+        await investigate({ rule, ruleLabel: ruleText.split('（')[0], screens: report?.error ? [] : topScreensForEvent(report, evidenceEvent, 10) });
+      }
     }
   }
 
