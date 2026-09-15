@@ -8,7 +8,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [mute-signature, unmute-signature, list-muted, list-alerts, list-orders, list-recent-orders]
+        options: [mute-signature, unmute-signature, list-muted, list-signatures, list-alerts, list-orders, list-recent-orders]
         default: list-muted
       signature:
         description: 32-hex Layer 3 signature (mute/unmute only)

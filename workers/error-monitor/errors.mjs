@@ -132,10 +132,11 @@ export function isLeavingCartNoise(row) {
     && states.every((state) => state === 'hidden' || state === 'unloaded');
 }
 
+/* Every digest category shares the daily window (theme errors used to
+   repeat every 2 h, platform 6 h, fonts 12 h). The row stays a parameter so
+   a category can get its own cadence again without touching callers. */
 export function browserRealertMs(row) {
-  const category = row.category || classifyBrowserSignal(row);
-  if (category === 'shopify-platform') return 6 * 60 * 60_000;
-  if (category === 'font-resource') return 12 * 60 * 60_000;
+  void row;
   return LIMITS.errorRealertMs;
 }
 
@@ -274,7 +275,7 @@ export async function receiveError(request, env) {
 async function alertCriticalCartError(env, detail) {
   const key = siteKey(detail.siteId, `critical-cart:${detail.signature}`);
   const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
-  if (Date.now() - state.lastAlertMs < LIMITS.errorRealertMs) return;
+  if (Date.now() - state.lastAlertMs < LIMITS.criticalCartRealertMs) return;
   await sendTelegram(env, `🔴 [${detail.siteLabel}][Layer 3 Critical Cart Error]\n${detail.action || detail.stage}: ${detail.message}\nHTTP ${detail.status}\nPage: ${detail.page_url}\nSignature: ${detail.signature}`);
   await logAlert(env.DB, siteKey(detail.siteId, 'layer3'), 'critical-cart', detail);
   await setState(env.DB, key, { lastAlertMs: Date.now() });
