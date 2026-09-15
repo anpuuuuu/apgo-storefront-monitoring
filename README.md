@@ -82,7 +82,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 - Collection：Layer 1 正常、同期中位数 ≥10、连续两个窗口 page_view=0。
 - ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
-- Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。
+- Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。 2026-09-15 00:46 / 07:16 MYT 两次触发（ATC 5 / 7）经店主确认是真实事件：广告商品的 free shipping 被误关，顾客加购后不结账——**不要用「Shopify 最近有别的订单」压掉这条**，别的商品有人下单不能证明广告商品的结账没坏（#58 曾这么做，已回退）。
 - 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
 - 偏离带规则（`ga4.realtime.drop`，独立 `mode`；2026-09-08 起 observe，**2026-09-11 起 armed**）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥；确认窗口为 `consecutive_windows: 3`（相邻三窗，90 分钟）——三天全覆盖 observe 里两次 `begin_checkout_drop` 都在下一窗自愈，三窗确认可以过滤这类抖动。
 - 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由平台推送的订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻三窗 → 追踪断了，不是生意问题（`ga4.realtime.drop.purchase_tracking_mode`，单独开关，仍为 observe：POS / 草稿订单等未追踪渠道会让 GA4 合理地没有 purchase）。
