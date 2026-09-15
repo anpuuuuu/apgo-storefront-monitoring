@@ -70,8 +70,9 @@
     "address": { "zip": "86900", "country": "MY", "province": "Johor" },
     "max_products": 3,
     "max_snapshot_products": 8,
-    "pause_ms": 1500,
-    "timeout_ms": 90000
+    "pause_ms": 4000,
+    "snapshot_pause_ms": 20000,
+    "timeout_ms": 150000
   },
   "orders": {
     "_readme": "Push-based order heartbeat in workers/error-monitor/orders.mjs (POST /orders/event from Shopify Flow, a WooCommerce webhook, or any backend); values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",

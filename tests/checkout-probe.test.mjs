@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildSnapshot,
+  isRateLimited,
   createStorefrontClient,
   diffProbe,
   fetchCatalog,
@@ -35,19 +36,24 @@ const mold = {
 };
 
 /* A fake apgo.my: cookie-keyed cart, 202-then-200 shipping rates, province required. */
-function fakeStore({ ratesPending = 1, rates = [{ name: 'West Malaysia Shipping 3-5 Days', price: '2.90', currency: 'MYR' }], addStatus = 200, autoGift = 0 } = {}) {
+function fakeStore({ ratesPending = 1, rates = [{ name: 'West Malaysia Shipping 3-5 Days', price: '2.90', currency: 'MYR' }], addStatus = 200, autoGift = 0, throttleFirst = 0, retryAfter = null } = {}) {
   const carts = new Map();
   const calls = [];
   let pending = ratesPending;
+  let throttle = throttleFirst;
   const fetchImpl = async (url, init = {}) => {
     const { pathname, searchParams } = new URL(url);
     const cookie = init.headers?.cookie || '';
     calls.push({ pathname, method: init.method || 'GET', cookie, ua: init.headers?.['user-agent'] });
-    const respond = (status, body, setCookie) => ({
+    const respond = (status, body, setCookie, headers = {}) => ({
       status, ok: status >= 200 && status < 300,
-      headers: { getSetCookie: () => (setCookie ? [setCookie] : []), get: () => null },
+      headers: { getSetCookie: () => (setCookie ? [setCookie] : []), get: (name) => headers[String(name).toLowerCase()] ?? null },
       text: async () => JSON.stringify(body),
     });
+    if (pathname !== '/products.json' && throttle > 0) {
+      throttle -= 1;
+      return respond(429, {}, null, retryAfter ? { 'retry-after': String(retryAfter) } : {});
+    }
     if (pathname === '/products.json') {
       const page = Number(searchParams.get('page'));
       return respond(200, { products: page === 1 ? [promo, mold] : [] });
@@ -122,11 +128,11 @@ test('fetchCatalog paginates /products.json and probeProduct walks add → cart 
 
   const paths = store.calls.map((call) => `${call.method} ${call.pathname}`);
   assert.deepEqual(paths.slice(1), [
-    'POST /cart/clear.js', 'POST /cart/add.js', 'GET /cart.js',
+    'POST /cart/add.js', 'GET /cart.js',
     'GET /cart/shipping_rates.json', 'GET /cart/shipping_rates.json',
     'POST /cart/clear.js',
-  ], 'polls the 202 once, always clears at the end, never touches /checkout');
-  assert.ok(store.calls.slice(3).every((call) => call.cookie.includes('cart=')), 'cart cookie carried after the add');
+  ], 'no opening clear (fresh client = empty cart), polls the 202 once, always clears at the end, never touches /checkout');
+  assert.ok(store.calls.slice(2).every((call) => call.cookie.includes('cart=')), 'cart cookie carried after the add');
   assert.ok(store.calls.every((call) => call.ua.startsWith('APGO-Investigator/')));
   assert.equal([...store.carts.values()].at(-1).length, 0, 'cart left empty');
 });
@@ -158,9 +164,63 @@ test('probeProduct reports sold-out adds, province rejections and rate failures 
   assert.equal(await probeProduct(client, { handle: 'x', title: 'x', variants: [] }, ADDRESS).then((entry) => entry.error), 'product has no variants');
 });
 
+test('a 429 is the probe being throttled, never a broken store', async () => {
+  assert.equal(isRateLimited({ status: 429 }), true);
+  assert.equal(isRateLimited({ status: 422 }), false);
+  assert.equal(isRateLimited(null), false);
+
+  // A short burst clears after a backoff: the probe retries and succeeds.
+  const burst = fakeStore({ throttleFirst: 2, ratesPending: 0 });
+  const waits = [];
+  const recovering = createStorefrontClient({ baseUrl: 'https://apgo.my', fetchImpl: burst.fetchImpl, sleep: async (ms) => { waits.push(ms); } });
+  const catalog = await fetchCatalog(recovering);
+  const passed = await probeProduct(recovering, catalog[0], ADDRESS, { sleep: async () => {} });
+  assert.equal(passed.rateLimited, false, 'a burst that cleared is not reported as throttled');
+  assert.equal(passed.add.status, 200);
+  assert.deepEqual(waits, [5_000, 10_000], 'exponential backoff between retries');
+
+  // Retry-After wins over the exponential default, capped.
+  const polite = fakeStore({ throttleFirst: 1, retryAfter: 7 });
+  const politeWaits = [];
+  const client = createStorefrontClient({ baseUrl: 'https://apgo.my', fetchImpl: polite.fetchImpl, sleep: async (ms) => { politeWaits.push(ms); } });
+  await client.request('/cart.js');
+  assert.deepEqual(politeWaits, [7_000]);
+
+  // A hot IP stays throttled: report it, do not blame the store.
+  const hot = fakeStore({ throttleFirst: 99 });
+  const hotClient = createStorefrontClient({ baseUrl: 'https://apgo.my', fetchImpl: hot.fetchImpl, sleep: async () => {} });
+  const throttled = await probeProduct(hotClient, catalog[0], ADDRESS, { sleep: async () => {} });
+  assert.equal(throttled.rateLimited, true);
+  assert.equal(throttled.add.error, 'Shopify 限流（HTTP 429），这次没测到');
+  assert.equal(throttled.cart, null);
+
+  // 2026-09-15 14:04 UTC: the first snapshot from a GitHub runner was throttled
+  // on 7 of 8 products. The verdict must not read as a storefront failure.
+  const entry = { handle: promo.handle, title: promo.title, count: 5, probe: throttled, hadSnapshot: true, changes: [] };
+  const only = verdict([entry]);
+  assert.match(only, /被 Shopify 限流/);
+  assert.match(only, /不代表店铺有问题/);
+  assert.doesNotMatch(only, /加购本身失败/);
+
+  const ok = { rateLimited: false, add: { status: 200, error: null }, cart: { itemCount: 1, totalPrice: 3900, currency: 'MYR' }, ratesStatus: 200, rates: [{ name: 'West Malaysia', price: 2.9, currency: 'MYR' }] };
+  const mixed = verdict([entry, { handle: 'other', title: 'Other', count: 2, probe: ok, hadSnapshot: true, changes: [] }]);
+  assert.match(mixed, /没发现异常/, 'the product that did get through still decides the verdict');
+  assert.match(mixed, /被限流没测到/);
+
+  const text = renderInvestigation({ ruleLabel: 'x', address: ADDRESS, results: [entry], unmatched: [], snapshotTakenAt: '2026-09-15T04:25:00.000Z' });
+  assert.ok(text.includes('🚫 被 Shopify 限流（429），这个商品没测到；限流的是监控自己，不是店铺'));
+  assert.ok(!text.includes('❌ 加购失败'));
+
+  // A throttled run on either side makes cart and shipping incomparable.
+  const before = snapshotEntry({ ...promo, updatedAt: promo.updated_at, variants: [{ id: 1, price: 39, available: true }] }, ok);
+  const after = snapshotEntry({ ...promo, updatedAt: promo.updated_at, variants: [{ id: 1, price: 39, available: true }] }, throttled);
+  assert.deepEqual(diffProbe(before, after), [], 'no invented change from a throttled probe');
+  assert.deepEqual(diffProbe(after, before), []);
+});
+
 test('snapshot entries diff into the changes a human would look for first', () => {
   const product = { ...promo, tags: ['promo'], updatedAt: '2026-09-14T10:00:00+08:00', variants: [{ id: 1, price: 39, available: true }] };
-  const good = { add: { status: 200, error: null }, cart: { itemCount: 10, totalPrice: 23400, currency: 'MYR' }, ratesStatus: 200, rates: [{ name: 'West Malaysia', price: 0, currency: 'MYR' }, { name: 'Express', price: 8, currency: 'MYR' }] };
+  const good = { rateLimited: false, add: { status: 200, error: null }, cart: { itemCount: 10, totalPrice: 23400, currency: 'MYR' }, ratesStatus: 200, rates: [{ name: 'West Malaysia', price: 0, currency: 'MYR' }, { name: 'Express', price: 8, currency: 'MYR' }] };
   const before = snapshotEntry(product, good);
   assert.equal(before.minPrice, 39);
   assert.equal(before.available, true);
@@ -186,7 +246,7 @@ test('snapshot entries diff into the changes a human would look for first', () =
 });
 
 test('verdict and the 🔎 message lead with the most likely cause and never claim a fix', () => {
-  const ok = { add: { status: 200, error: null }, cart: { itemCount: 10, totalPrice: 23400, currency: 'MYR' }, ratesStatus: 200, rates: [{ name: 'West Malaysia Shipping 3-5 Days', price: 2.9, currency: 'MYR' }] };
+  const ok = { rateLimited: false, add: { status: 200, error: null }, cart: { itemCount: 10, totalPrice: 23400, currency: 'MYR' }, ratesStatus: 200, rates: [{ name: 'West Malaysia Shipping 3-5 Days', price: 2.9, currency: 'MYR' }] };
   const base = { handle: promo.handle, title: promo.title, count: 7, probe: ok, hadSnapshot: true, changes: [] };
   assert.match(verdict([]), /没能锁定商品/);
   assert.match(verdict([base]), /没发现异常/);
