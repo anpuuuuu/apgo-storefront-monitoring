@@ -188,6 +188,7 @@ test('snapshot entries diff into the changes a human would look for first', () =
 test('verdict and the 🔎 message lead with the most likely cause and never claim a fix', () => {
   const ok = { add: { status: 200, error: null }, cart: { itemCount: 10, totalPrice: 23400, currency: 'MYR' }, ratesStatus: 200, rates: [{ name: 'West Malaysia Shipping 3-5 Days', price: 2.9, currency: 'MYR' }] };
   const base = { handle: promo.handle, title: promo.title, count: 7, probe: ok, hadSnapshot: true, changes: [] };
+  assert.match(verdict([]), /没能锁定商品/);
   assert.match(verdict([base]), /没发现异常/);
   assert.match(verdict([{ ...base, changes: ['免运费选项消失了'] }]), /免运费方案被关掉/);
   assert.match(verdict([{ ...base, changes: ['商品在快照之后被修改过（…）'] }]), /被后台修改过/);
@@ -214,8 +215,12 @@ test('verdict and the 🔎 message lead with the most likely cause and never cla
   assert.ok(text.endsWith('修复由人来做；这条只是线索。'));
   assert.ok(!/checkout|结账页已/.test(text.replace('不进结账', '').replace('结账页本身', '')));
 
+  // Wade asked for the 🔎 even when it finds nothing, so an empty run must still say what to do next.
   const empty = renderInvestigation({ ruleLabel: 'x', address: ADDRESS, results: [], unmatched: ['Home'], snapshotTakenAt: null });
   assert.ok(empty.includes('GA4 的页面标题对不上任何商品：Home'));
+  assert.ok(empty.includes('结论：没能锁定商品'));
+  assert.ok(empty.endsWith('修复由人来做；这条只是线索。'));
+  assert.ok(renderInvestigation({ ruleLabel: 'x', address: ADDRESS, results: [], unmatched: [], snapshotTakenAt: null }).includes('GA4 最近 30 分钟没有回报任何加购页面'));
 });
 
 test('snapshotHandles takes the advertised landing products first, then the fixtures, without duplicates', () => {

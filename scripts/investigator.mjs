@@ -2,7 +2,8 @@
 /* Alert investigator, phase 1a: when an armed GA4 rule pages for the first
    time, walk the advertised products through the storefront cart and ask for
    shipping rates, compare with the nightly snapshot, and post the evidence as
-   a silent 🔎 message right after the alert. Fixing stays with a human.
+   a 🔎 message right after the alert — it rings, because it is the message
+   that says where to look. Fixing stays with a human.
 
    Usage:
      node scripts/investigator.mjs snapshot     # nightly, from monitor-alerts.yml daily-primary
@@ -114,7 +115,10 @@ async function runInvestigation({ rule, ruleLabel, screens }) {
     snapshotTakenAt: latest?.takenAt || null,
     siteLabel: site.alertLabel || site.name,
   });
-  await telegram(text, { silent: true });
+  // Rings, like the business alert it follows. Wade, 2026-09-15: the 🔎 is
+  // what says where to look, so it must reach the phone even when it found
+  // nothing — at most one per incident (first page only), never a stream.
+  await telegram(text);
   const summary = {
     rule,
     matched: matched.map((entry) => entry.handle),

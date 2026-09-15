@@ -295,6 +295,7 @@ export function diffProbe(previous, current) {
 /* The verdict is deliberately a short list of rules of thumb; the message
    shows the evidence so the reader can disagree. */
 export function verdict(results) {
+  if (!results.length) return '没能锁定商品：GA4 的页面标题对不上商品目录，探测没跑起来。请自己打开正在跑的广告落地页看一眼加购到结账。';
   const failing = results.filter((entry) => entry.probe.add?.error || entry.probe.error);
   if (failing.length) return `最可能：加购本身失败（${failing.map((entry) => `${entry.handle}: ${entry.probe.add?.error || entry.probe.error}`).join('；')}）。先查商品是否下架/售罄。`;
   const noRates = results.filter((entry) => !Array.isArray(entry.probe.rates) || entry.probe.rates.length === 0);
@@ -312,7 +313,7 @@ export function renderInvestigation({ ruleLabel, address, results, unmatched = [
   const lines = [`🔎 [第4层·调查员] ${ruleLabel || ''} 自动排查`.trim()];
   lines.push(`对象：GA4 最近 30 分钟加购最多的商品页，各加 1 件试走到运费（邮编 ${address?.zip || '?'}，不进结账）`);
   if (!results.length) {
-    lines.push(unmatched.length ? `GA4 的页面标题对不上任何商品：${unmatched.slice(0, 3).join(' | ')}` : '没有可探测的商品页');
+    lines.push(unmatched.length ? `GA4 的页面标题对不上任何商品：${unmatched.slice(0, 3).join(' | ')}` : 'GA4 最近 30 分钟没有回报任何加购页面');
   }
   results.forEach((entry, index) => {
     const { probe, changes } = entry;
@@ -334,7 +335,7 @@ export function renderInvestigation({ ruleLabel, address, results, unmatched = [
     else changes.forEach((change) => lines.push(`   ⚠ ${change}`));
   });
   if (results.length && unmatched.length) lines.push(`对不上商品的页面：${unmatched.slice(0, 3).join(' | ')}`);
-  if (results.length) lines.push(`结论：${verdict(results)}`);
+  lines.push(`结论：${verdict(results)}`);
   lines.push('修复由人来做；这条只是线索。');
   return lines.join('\n');
 }
