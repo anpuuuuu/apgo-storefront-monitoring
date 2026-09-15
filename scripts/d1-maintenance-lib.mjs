@@ -11,10 +11,14 @@ export function buildMaintenanceSql({ action, signature = '', note = '' }) {
   }
   if (action === 'list-signatures') {
     // Read-only: every signature that ever made a digest, with the message
-    // text that alert_log truncates, so a mute decision can be made from the
-    // Actions log instead of the Cloudflare dashboard.
+    // text that alert_log truncates plus the latest source URL and page from
+    // js_errors (30-day retention, so old rows show null), so a mute decision
+    // can be made from the Actions log instead of the Cloudflare dashboard.
     return {
-      sql: 'SELECT signature, muted, first_seen_at, last_alerted_at, substr(sample_message, 1, 120) AS sample, note FROM known_signatures ORDER BY last_alerted_at DESC LIMIT 100',
+      sql: 'SELECT k.signature, k.muted, k.first_seen_at, k.last_alerted_at, substr(k.sample_message, 1, 120) AS sample, '
+        + '(SELECT substr(e.source, 1, 120) FROM js_errors e WHERE e.signature = k.signature ORDER BY e.created_at DESC LIMIT 1) AS source, '
+        + '(SELECT substr(e.page_url, 1, 80) FROM js_errors e WHERE e.signature = k.signature ORDER BY e.created_at DESC LIMIT 1) AS page, '
+        + 'k.note FROM known_signatures k ORDER BY k.last_alerted_at DESC LIMIT 100',
       verify: null,
     };
   }
