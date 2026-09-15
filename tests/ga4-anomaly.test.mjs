@@ -4,6 +4,7 @@ import {
   appendCoverage,
   coverageForDate,
   evaluateDropRules,
+  hasRecentOrder,
   isDailyStageFresh,
   nextRuleState,
   shouldRecordAlert,
@@ -118,4 +119,15 @@ test('evaluateDropRules fires only on partial collapses with normal upstream vol
   assert.equal(zeroCheckout.begin_checkout_drop, false, 'zero stays with begin_checkout_zero');
   const thinBaseline = evaluateDropRules({ page_view: 220, add_to_cart: 30, begin_checkout: 1 }, { page_view: 235, add_to_cart: 25, begin_checkout: 1 }, settings);
   assert.equal(thinBaseline.begin_checkout_drop, false, 'baseline checkout median below the minimum');
+});
+
+test('hasRecentOrder needs a fresh Worker check and an order inside the window', () => {
+  const now = T0;
+  const fresh = { checkedAt: at(-5), createdAt: at(-20) };
+  assert.equal(hasRecentOrder(fresh, now), true);
+  assert.equal(hasRecentOrder({ checkedAt: at(-5), createdAt: at(-90) }, now), false, 'order older than the window');
+  assert.equal(hasRecentOrder({ checkedAt: at(-45), createdAt: at(-20) }, now), false, 'stale Worker check cannot vouch');
+  assert.equal(hasRecentOrder({ checkedAt: at(-5), createdAt: null }, now), false);
+  assert.equal(hasRecentOrder(null, now), false);
+  assert.equal(hasRecentOrder(fresh, now, { orderWindowMinutes: 10 }), false);
 });

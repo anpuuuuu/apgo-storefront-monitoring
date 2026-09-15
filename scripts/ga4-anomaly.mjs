@@ -10,7 +10,7 @@ import {
   telegram,
   workerHealthy,
 } from './monitor-lib.mjs';
-import { appendCoverage, evaluateDropRules, nextRuleState, shouldRecordAlert } from './ga4-anomaly-lib.mjs';
+import { appendCoverage, evaluateDropRules, hasRecentOrder, nextRuleState, shouldRecordAlert } from './ga4-anomaly-lib.mjs';
 
 const validateOnly = process.env.VALIDATE_GA4 === 'true';
 requireEnv({ needsD1: !validateOnly });
@@ -148,6 +148,19 @@ if (validateOnly) {
   process.exit(0);
 }
 
+// The Worker's order heartbeat is the first-party truth for "checkout works".
+const lastOrder = await getState('orders:last');
+const orderCheckAgeMin = lastOrder?.checkedAt ? (Date.now() - Date.parse(lastOrder.checkedAt)) / 60_000 : null;
+const lastOrderAgeMin = lastOrder?.createdAt ? (Date.now() - Date.parse(lastOrder.createdAt)) / 60_000 : null;
+const orderCheckFresh = orderCheckAgeMin !== null && orderCheckAgeMin <= Number(dropSettings.purchase_tracking_check_max_age_minutes || 20);
+// Orders placed inside the window prove the checkout is working; the GA4
+// checkout rules must not page over what GA4 alone failed to see.
+const ordersRecently = hasRecentOrder(lastOrder, Date.now(), {
+  checkMaxAgeMinutes: Number(dropSettings.purchase_tracking_check_max_age_minutes || 20),
+  orderWindowMinutes: Number(settings.checkout_orders_window_minutes || 60),
+});
+const orderEvidence = { last_shopify_order_minutes: lastOrderAgeMin === null ? null : Math.round(lastOrderAgeMin), ordersRecently };
+
 const results = [];
 results.push(await updateRule(
   'ga4_collection_zero',
@@ -163,8 +176,9 @@ results.push(await updateRule(
   'begin_checkout_zero',
   current.add_to_cart >= settings.begin_checkout_current_atc_min
     && baseline.begin_checkout >= settings.begin_checkout_min_median
-    && current.begin_checkout === 0,
-  { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout } }
+    && current.begin_checkout === 0
+    && !ordersRecently,
+  { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout }, ...orderEvidence }
 ));
 
 // Partial failures the zero rules cannot see: traffic is normal but ATC
@@ -181,7 +195,7 @@ results.push(await updateRule(
 ));
 results.push(await updateRule(
   'begin_checkout_drop',
-  drop.begin_checkout_drop,
+  drop.begin_checkout_drop && !ordersRecently,
   {
     current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout, checkout_ratio: drop.currentRatio },
     baseline: { add_to_cart: baseline.add_to_cart, begin_checkout: baseline.begin_checkout, checkout_ratio: drop.baselineRatio },
@@ -194,10 +208,6 @@ results.push(await updateRule(
 // inside this window that GA4 did not see as a purchase is a tracking gap,
 // not a business problem. Only evaluated when the Worker checked recently,
 // so a stale orders:last cannot fabricate a gap.
-const lastOrder = await getState('orders:last');
-const orderCheckAgeMin = lastOrder?.checkedAt ? (Date.now() - Date.parse(lastOrder.checkedAt)) / 60_000 : null;
-const lastOrderAgeMin = lastOrder?.createdAt ? (Date.now() - Date.parse(lastOrder.createdAt)) / 60_000 : null;
-const orderCheckFresh = orderCheckAgeMin !== null && orderCheckAgeMin <= Number(dropSettings.purchase_tracking_check_max_age_minutes || 20);
 results.push(await updateRule(
   'purchase_tracking_gap',
   orderCheckFresh
