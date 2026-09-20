@@ -9,7 +9,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [realtime, daily-primary, daily-confirm, validate, diagnose-revenue]
+        options: [realtime, daily-primary, daily-confirm, validate, diagnose-revenue, diagnose-ga4]
         default: realtime
       simulate_zero:
         type: boolean
@@ -91,6 +91,8 @@ jobs:
         run: |
           case '${{ needs.plan.outputs.mode }}' in
             diagnose-revenue) node scripts/ga4-revenue-diagnostic.mjs ;;
+            # Read-only: no D1 write, no heartbeat, no Telegram.
+            diagnose-ga4) node scripts/ga4-diagnose.mjs ;;
             validate) VALIDATE_GA4=true node scripts/ga4-anomaly.mjs ;;
             daily-primary)
               DAILY_STAGE=primary node scripts/ga4-daily-funnel.mjs; status=$?

@@ -8,7 +8,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [mute-signature, unmute-signature, list-muted, list-signatures, list-alerts, list-orders, list-recent-orders]
+        options: [mute-signature, unmute-signature, list-muted, list-signatures, list-alerts, list-orders, list-recent-orders, list-daily-report, list-order-history]
         default: list-muted
       signature:
         description: 32-hex Layer 3 signature (mute/unmute only)
@@ -16,6 +16,10 @@ on:
         default: ''
       note:
         description: Why it is muted (stored in known_signatures.note)
+        type: string
+        default: ''
+      from_date:
+        description: YYYYMMDD, earliest day to include (list-daily-report only)
         type: string
         default: ''
 
@@ -41,6 +45,7 @@ jobs:
           ACTION: ${{ inputs.action }}
           SIGNATURE: ${{ inputs.signature }}
           NOTE: ${{ inputs.note }}
+          FROM_DATE: ${{ inputs.from_date }}
         run: node scripts/d1-maintenance-sql.mjs >> "$GITHUB_OUTPUT"
       - name: Execute on production D1
         env:

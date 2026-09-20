@@ -214,6 +214,23 @@ test('D1 maintenance only ever interpolates a validated signature and a sanitise
   assert.ok(signatures.sql.includes('AS page, k.note FROM known_signatures k ORDER BY k.last_alerted_at DESC LIMIT 100'));
   assert.equal(signatures.verify, null);
   assert.ok(buildMaintenanceSql({ action: 'list-recent-orders' }).sql.includes("json_each(json_extract(state.value, '$.entries'))"));
+  // The daily funnel keeps its numbers out of stdout on purpose, so reading
+  // which segment was flagged means querying the state row the primary wrote.
+  const daily = buildMaintenanceSql({ action: 'list-daily-report', fromDate: '20260913' });
+  assert.equal(daily.verify, null);
+  assert.match(daily.sql, /FROM state WHERE key LIKE '%:ga4:daily:candidate:%'/);
+  assert.match(daily.sql, /json_extract\(value, '\$\.anomalies'\) AS anomalies/);
+  assert.match(daily.sql, /json_extract\(value, '\$\.targetDate'\) >= '20260913'/);
+  for (const bad of ['', '2026-09-13', "20260913' OR 1=1 --", '202609131', '2026091']) {
+    assert.throws(() => buildMaintenanceSql({ action: 'list-daily-report', fromDate: bad }), /8 digits/, JSON.stringify(bad));
+  }
+
+  // Whole order history, one row per UTC day, for replaying a new order rule.
+  const history = buildMaintenanceSql({ action: 'list-order-history' });
+  assert.equal(history.verify, null);
+  assert.match(history.sql, /group_concat\(strftime\('%H%M'/);
+  assert.match(history.sql, /WHERE state\.key LIKE '%:orders:log' GROUP BY 1 ORDER BY 1$/);
+
   assert.throws(() => buildMaintenanceSql({ action: 'mute-signature', signature: "x' OR 1=1 --" }), /32 lowercase hex/);
   assert.throws(() => buildMaintenanceSql({ action: 'drop', signature: 'e7d6635f60b0e3f51f825166f6735c6f' }), /unknown action/);
 });
