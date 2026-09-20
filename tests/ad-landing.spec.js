@@ -166,28 +166,37 @@ async function exercisePersistedOptions(page) {
     && await inlineGroups.count() > 0
     && await confirmModal.count() > 0;
   if (useMobileConfirm) {
-    const opener = inlineGroups.first().locator('label:visible, [role="button"]:visible, button:visible').first();
-    await expect(opener, 'mobile option chip must be available to open the confirmation modal').toBeVisible();
     await expect.poll(() => page.evaluate(() => typeof window.apgoOpenConfirmModal), {
       message: 'mobile product picker must finish initializing before customer interaction',
       timeout: 5_000,
     }).toBe('function');
-    await centerAndAssertTappable(page, opener, 'mobile option chip');
-    await opener.click();
-    await expect(confirmModal, 'mobile option interaction must open the real confirmation modal').toHaveClass(/is-open/);
-    const confirmGroups = confirmModal.locator('[data-apgo-cc-confirm-option-group]');
-    for (let index = 0; index < Math.min(await confirmGroups.count(), 3); index += 1) {
-      const chips = confirmGroups.nth(index).locator('[data-apgo-cc-confirm-chip]:not([disabled])');
-      if (await chips.count() < 2) continue;
-      const chip = chips.nth(1);
-      const chosen = await chip.getAttribute('data-option-value');
+
+    /* Tapping an option chip is how a shopper asks what a variant costs, not
+       how they commit to buying it. apgo-theme 8088317 stopped the chip forcing
+       the purchase-confirm modal open: "phones now behave like desktop: the chip
+       selects, the gallery moves to that variant's image, and the modal opens
+       only from Add to cart / Buy now". So the contract to hold the storefront
+       to is that the tap selects and the modal stays shut. The modal's own
+       behaviour is covered where it now opens, in the add-to-cart flow. */
+    for (let index = 0; index < Math.min(await inlineGroups.count(), 3); index += 1) {
+      const group = inlineGroups.nth(index);
+      const radios = group.locator('input[data-apgo-cc-option-input]:not([disabled])');
+      if (!await radios.count()) continue;
+      /* Prefer a value that is not already selected, so the tap also proves the
+         selection lands. Options with a single value (the nano-coating PDP has
+         one) still get tapped: there is nothing to change, but the modal must
+         stay shut, which is the regression this guards. */
+      const unselected = await radios.evaluateAll((nodes) => nodes.findIndex((node) => !node.checked));
+      const radio = radios.nth(unselected >= 0 ? unselected : 0);
+      const chosen = await radio.getAttribute('value');
+      const chip = radio.locator('xpath=ancestor::label[1]');
+      await expect(chip, `mobile option chip for ${chosen} must be reachable`).toBeVisible();
+      await centerAndAssertTappable(page, chip, `mobile option chip ${chosen}`);
       await chip.click();
-      await expect(chip, 'modal option selection must remain active').toHaveClass(/is-active/);
-      await expect(confirmGroups.nth(index).locator('[data-apgo-cc-confirm-option-current]'), 'modal option label must retain the selected value').toHaveText(chosen);
-      await expect(inlineGroups.nth(index).locator('input[type="radio"]:checked'), 'modal selection must persist into the product form').toHaveValue(chosen);
+      await expect(radio, `tapping the ${chosen} chip must select it`).toBeChecked();
+      await expect(chip, `the ${chosen} chip must show as selected`).toHaveClass(/is-active/);
+      await expect(confirmModal, 'tapping an option chip must not open the purchase-confirm modal').not.toHaveClass(/is-open/);
     }
-    await confirmModal.locator('button[data-apgo-cc-confirm-close]:visible').click();
-    await expect(confirmModal).not.toHaveClass(/is-open/);
     return;
   }
 
