@@ -8,6 +8,7 @@ const { sql, verify } = buildMaintenanceSql({
   action: process.env.ACTION || '',
   signature: process.env.SIGNATURE || '',
   note: process.env.NOTE || '',
+  fromDate: process.env.FROM_DATE || '',
 });
 process.stdout.write(`sql=${sql}\n`);
 if (verify) process.stdout.write(`verify=${verify}\n`);

@@ -1,8 +1,9 @@
 const SIGNATURE = /^[0-9a-f]{32}$/;
+const DATE = /^[0-9]{8}$/;
 
 /* Only the hex signature and a quote-free, length-capped note ever reach the
    statement. Anything else fails before the workflow touches D1. */
-export function buildMaintenanceSql({ action, signature = '', note = '' }) {
+export function buildMaintenanceSql({ action, signature = '', note = '', fromDate = '' }) {
   if (action === 'list-muted') {
     return {
       sql: 'SELECT signature, muted, first_seen_at, last_alerted_at, substr(sample_message, 1, 80) AS sample, note FROM known_signatures WHERE muted = 1 ORDER BY last_alerted_at DESC',
@@ -19,6 +20,39 @@ export function buildMaintenanceSql({ action, signature = '', note = '' }) {
         + '(SELECT substr(e.source, 1, 120) FROM js_errors e WHERE e.signature = k.signature ORDER BY e.created_at DESC LIMIT 1) AS source, '
         + '(SELECT substr(e.page_url, 1, 80) FROM js_errors e WHERE e.signature = k.signature ORDER BY e.created_at DESC LIMIT 1) AS page, '
         + 'k.note FROM known_signatures k ORDER BY k.last_alerted_at DESC LIMIT 100',
+      verify: null,
+    };
+  }
+  if (action === 'list-daily-report') {
+    /* Read-only: the Layer 4 daily funnel deliberately keeps its numbers out of
+       stdout (scripts/ga4-public-status.mjs: "GitHub Actions is public. Full
+       financial reports belong in private D1 state, never in stdout"), so the
+       run logs only carry counts. The full summary, including which segment was
+       flagged and why, is in the state row the primary run writes. Every day
+       from 2026-09-13 flagged at least one target and every one survived the
+       confirm stage, so the daily report cannot be armed until this is read. */
+    if (!DATE.test(fromDate)) throw new Error('date must be 8 digits, YYYYMMDD');
+    return {
+      sql: 'SELECT json_extract(value, \'$.targetDate\') AS target_date, '
+        + 'json_extract(value, \'$.anomalies\') AS anomalies, '
+        + 'json_extract(value, \'$.realtimeCoverage\') AS realtime_coverage '
+        + "FROM state WHERE key LIKE '%:ga4:daily:candidate:%' "
+        + `AND json_extract(value, '$.targetDate') >= '${fromDate}' ORDER BY 1`,
+      verify: null,
+    };
+  }
+  if (action === 'list-order-history') {
+    /* Read-only: every order timestamp the push log still holds, one row per UTC
+       day with the times of that day. Compact enough to read in a run log and
+       exact to the minute, which is what an offline replay of a new order-gap
+       rule needs. The log keeps ORDER_LIMITS.retentionDays, so this is the whole
+       history without a date filter. */
+    return {
+      sql: "SELECT date(json_extract(e.value, '$.at') / 1000, 'unixepoch') AS day_utc, "
+        + 'COUNT(*) AS orders, '
+        + "group_concat(strftime('%H%M', json_extract(e.value, '$.at') / 1000, 'unixepoch')) AS times_utc "
+        + "FROM state, json_each(json_extract(state.value, '$.entries')) AS e "
+        + "WHERE state.key LIKE '%:orders:log' GROUP BY 1 ORDER BY 1",
       verify: null,
     };
   }
