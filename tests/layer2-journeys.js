@@ -12,6 +12,22 @@ const {
   ensureAvailable,
 } = require('./monitor-fixture');
 
+/* Shopify's checkout prints both the list total and the payable total. This
+   reads the amount next to "Pay now", which is what the shopper is charged.
+   Returns null when the checkout has no such label, so a wording change
+   degrades to the looser whole-page check rather than inventing a failure. */
+function payableFromCheckout(checkoutText, compactMarker) {
+  const markerPattern = String(compactMarker).replace(/[.*+?^${}()|[\]\\]/g, (match) => `\\${match}`);
+  return String(checkoutText).match(new RegExp(`Paynow${markerPattern}([0-9.]+)`, 'i'))?.[1] ?? null;
+}
+
+/* Lines the cart itself calls a gift: priced at nothing, or carrying one of the
+   gift properties the promotion apps attach. */
+function giftLinesOf(items, freeGiftPropertyNames = []) {
+  return items.filter((item) => item.final_line_price === 0
+    || Object.keys(item.properties || {}).some((key) => freeGiftPropertyNames.includes(key)));
+}
+
 function moneyMinor(text) {
   const matches = String(text || '').replace(/,/g, '').match(/-?\d+(?:\.\d{1,2})?/g);
   if (!matches?.length) return NaN;
@@ -296,10 +312,35 @@ async function enterCheckout(page, site, market, expectedCart) {
   const amount = (Number(expectedCart.total_price) / 100).toFixed(2);
   const compactMarker = String(market.priceMarker || '').replace(/\s/g, '');
   expect(checkoutText, `checkout must show exact cart total ${compactMarker}${amount}`).toContain(`${compactMarker}${amount}`);
-  const expectedGiftQuantity = expectedItems
-    .filter((item) => item.final_line_price === 0 || Object.keys(item.properties || {}).some((key) => site.expected.freeGiftPropertyNames.includes(key)))
-    .reduce((sum, item) => sum + item.quantity, 0);
-  if (expectedGiftQuantity > 0) expect(checkoutText).toMatch(/FREE|0\.00|赠品|贈品/i);
+
+  /* The free gift is an automatic discount, not a zero-priced variant. The cart
+     page renders the line as RM0.00 with the list price struck through, but
+     Shopify's checkout prints the list total and the payable total side by side
+     and never writes the word FREE:
+
+       Order summary  Total price RM395.00  Discounted price RM257.00
+       Total 11 items RM395.00 MYR RM257.00   Pay now RM257.00
+
+     Hunting for FREE/0.00 text therefore failed every day from 2026-09-15, when
+     the header-bubble fix first let the journey reach checkout, while the store
+     was charging correctly all along. Assert on the amounts instead: whether the
+     gift really costs nothing and what the shopper is actually charged. */
+  const giftLines = giftLinesOf(expectedItems, site.expected.freeGiftPropertyNames);
+  for (const item of giftLines) {
+    expect(item.final_line_price, `gift line "${item.product_title}" must cost nothing`).toBe(0);
+  }
+  if (giftLines.length) {
+    const listValue = expectedItems.reduce((sum, item) => sum + Number(item.original_line_price ?? item.final_line_price), 0);
+    expect(listValue, 'a cart holding a gift must be discounted below its list value')
+      .toBeGreaterThan(Number(expectedCart.total_price));
+  }
+  // "Pay now <total>" is the amount actually charged. The whole-page check above
+  // can be satisfied by a list total the shopper never pays, so when checkout
+  // exposes the payable line, require it to equal the cart total exactly.
+  const payable = payableFromCheckout(checkoutText, compactMarker);
+  if (payable) {
+    expect(payable, `checkout must charge exactly ${compactMarker}${amount}, not ${compactMarker}${payable}`).toBe(amount);
+  }
   // Stop at the summary. Never fill contact, shipping or payment fields.
 }
 
@@ -329,6 +370,8 @@ async function clearAfterCheckout(page, site) {
 
 module.exports = {
   moneyMinor,
+  payableFromCheckout,
+  giftLinesOf,
   prepareMarket,
   assertHomepage,
   assertHeaderCartCount,
