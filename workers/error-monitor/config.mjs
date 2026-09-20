@@ -92,17 +92,26 @@ export const HEARTBEAT_CRITICAL_LIMITS = {
 // limits above.
 export const ORDER_LIMITS = {
   checkMinutes: 10,
-  baselineDays: 28,
-  sampleMinutes: 30,
-  percentile: 0.9,
-  multiplier: 1.5,
-  floorMinutes: 90,
-  capMinutes: 720,
-  // A bucket with fewer samples than this uses the bootstrap threshold, so a
-  // site that only started pushing cannot page on its first quiet night.
-  minSamples: 8,
-  bootstrapMinutes: 360,
+  /* One flat gap, measured rather than modelled. 455 orders over 2026-09-09 to
+     09-20 gave a median gap of 19 minutes, a 90th percentile of 1h19m, and a
+     longest normal gap of 5h51m; the only longer one, 8h01m, was the 09-15
+     free-shipping incident. Replayed over those days a 7-hour threshold fires
+     exactly once, on the incident, while 4 hours fires nine times and every
+     one of those days was confirmed healthy.
+
+     The per-hour percentile baseline this replaces could not work: a 4-hour
+     window holds zero orders in 3.6% of all normal windows, and within one
+     hour-of-week bucket the count ranges 4 to 17. The spread swamps the
+     signal, which is why the old rule rang 11 times in three healthy days.
+
+     This is deliberately the slow backstop for "sales have actually stopped".
+     Catching a broken checkout quickly is the funnel's job: on 09-15 the GA4
+     rule paged at 00:46, five hours before a 7-hour gap rule would have. */
+  gapMinutes: 420,
   criticalMultiplier: 2,
+  /* Reported in the heartbeat so the margin above real traffic stays visible
+     and gapMinutes can be retuned from evidence instead of taste. */
+  observedGapDays: 28,
   realertMs: 6 * 60 * 60_000,
   failureNotifyMs: 6 * 60 * 60_000,
   pushStaleMs: 24 * 60 * 60_000,

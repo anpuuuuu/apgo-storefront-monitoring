@@ -3,13 +3,15 @@ import test from 'node:test';
 import {
   appendOrderLog,
   bucketFor,
-  computeOrderBaseline,
   evaluateOrderGap,
   formatMinutes,
   orderAlertText,
   parseOrderEvent,
   percentile,
+  summarizeOrderGaps,
+  trafficNote,
 } from '../workers/error-monitor/orders.mjs';
+import { ORDER_LIMITS } from '../workers/error-monitor/config.mjs';
 
 const TZ = 'Asia/Kuala_Lumpur';
 const NOW = Date.parse('2026-09-08T06:00:00Z'); // Tuesday 14:00 MYT
@@ -42,62 +44,80 @@ test('percentile uses nearest rank', () => {
   assert.equal(percentile([], 0.9), null);
 });
 
-test('mature baseline thresholds follow the hour: tight by day, loose at night, never below the floor', () => {
-  const baseline = computeOrderBaseline(syntheticOrders(), { nowMs: NOW, timeZone: TZ });
-  assert.equal(baseline.computedAt, new Date(NOW).toISOString());
-  const day = baseline.buckets['wd:14'];
-  const night = baseline.buckets['wd:04']; // 04:00-04:59, last order at 02:00
-  assert.ok(day.n >= 30 && night.n >= 30, `samples per bucket ${day.n}/${night.n}`);
-  assert.equal(day.immature, false);
-  assert.ok(day.p90Minutes <= 30, `day p90 ${day.p90Minutes}`);
-  assert.equal(day.thresholdMinutes, 90, 'daytime stays on the 90-minute floor');
-  assert.equal(night.p90Minutes, 150);
-  assert.equal(night.thresholdMinutes, 225);
-  assert.ok(baseline.buckets['we:14'], 'weekend buckets exist');
+test('the gap threshold is one flat number, chosen from 455 real orders', () => {
+  /* 2026-09-09 to 09-20: median gap 19 min, p90 1h19m, longest healthy gap
+     5h51m, and the only longer one (8h01m) was the 09-15 free-shipping
+     incident. Replaying the rule over those days fires once, on the
+     incident; a 4-hour threshold fires nine times on days the owner
+     confirmed were healthy. Anything tighter than the observed spread is
+     noise, so the number is locked here with the evidence beside it. */
+  assert.equal(ORDER_LIMITS.gapMinutes, 420);
+  assert.ok(ORDER_LIMITS.gapMinutes > 5 * 60 + 51, "must clear the longest healthy gap");
+  assert.ok(ORDER_LIMITS.gapMinutes < 8 * 60 + 1, "must still catch the 09-15 incident");
 });
 
-test('a young baseline uses the bootstrap threshold until buckets have enough samples', () => {
-  const young = computeOrderBaseline(syntheticOrders(2), { nowMs: NOW, timeZone: TZ });
-  const day = young.buckets['wd:14'];
-  assert.equal(day.immature, true);
-  assert.equal(day.thresholdMinutes, 360, 'bootstrap beats the 90-minute floor while immature');
-  const evaluation = evaluateOrderGap({ baseline: young, lastOrderAtMs: NOW - 4 * 60 * 60_000, nowMs: NOW, timeZone: TZ });
-  assert.equal(evaluation.severity, null, '4 quiet hours do not page on a two-day-old baseline');
-  assert.equal(evaluation.immature, true);
-  const missing = evaluateOrderGap({ baseline: { buckets: {} }, lastOrderAtMs: NOW - 7 * 60 * 60_000, nowMs: NOW, timeZone: TZ });
-  assert.equal(missing.thresholdMinutes, 360);
-  assert.equal(missing.severity, 'warning');
+test('evaluateOrderGap warns past the threshold and escalates at twice it', () => {
+  const at = (minutes) => evaluateOrderGap({ lastOrderAtMs: NOW - minutes * 60_000, nowMs: NOW });
+  assert.equal(at(19).severity, null, "the median gap");
+  assert.equal(at(5 * 60 + 51).severity, null, "the longest gap seen on a healthy day");
+  assert.equal(at(420).severity, null, "exactly at the threshold is not yet late");
+  assert.equal(at(421).severity, "warning");
+  assert.equal(at(8 * 60 + 1).severity, "warning", "the 09-15 incident gap");
+  assert.equal(at(841).severity, "critical", "past twice the threshold");
+  assert.equal(at(421).ageMinutes, 421);
+  assert.equal(at(421).thresholdMinutes, 420);
+  // No order on record at all is the most serious reading there is.
+  assert.equal(evaluateOrderGap({ lastOrderAtMs: null, nowMs: NOW }).severity, "critical");
+  assert.equal(evaluateOrderGap({ lastOrderAtMs: NaN, nowMs: NOW }).severity, "critical");
+  // The time of day no longer changes the verdict; that is the point.
+  const night = Date.parse("2026-09-07T20:00:00Z");
+  assert.equal(evaluateOrderGap({ lastOrderAtMs: night - 421 * 60_000, nowMs: night }).severity, "warning");
+  assert.equal(evaluateOrderGap({ lastOrderAtMs: NOW - 421 * 60_000, nowMs: NOW, gapMinutes: 600 }).severity, null, "threshold is overridable");
 });
 
-test('threshold is capped and empty history yields no buckets', () => {
-  const sparse = [NOW - 27 * DAY, NOW - 2 * DAY];
-  const baseline = computeOrderBaseline(sparse, { nowMs: NOW, timeZone: TZ });
-  assert.equal(baseline.buckets['wd:14'].thresholdMinutes, 720);
-  assert.deepEqual(computeOrderBaseline([], { nowMs: NOW, timeZone: TZ }).buckets, {});
+test('summarizeOrderGaps reports the margin instead of setting the threshold', () => {
+  const orders = [0, 20, 40, 100, 400].map((minutes) => NOW - (500 - minutes) * 60_000);
+  const summary = summarizeOrderGaps(orders, { nowMs: NOW });
+  assert.equal(summary.orderCount, 5);
+  assert.equal(summary.gapSamples, 4);
+  assert.equal(summary.maxGapMinutes, 300, "the 100 to 400 minute jump");
+  // Gaps are 20, 20, 60, 300; percentile uses nearest rank, so the median is 20.
+  assert.equal(summary.medianGapMinutes, 20);
+  assert.equal(summary.firstOrderAt, new Date(orders[0]).toISOString());
+  // Empty and single-order histories must not throw or invent a gap.
+  assert.equal(summarizeOrderGaps([], { nowMs: NOW }).maxGapMinutes, null);
+  assert.equal(summarizeOrderGaps([NOW], { nowMs: NOW }).gapSamples, 0);
+  // Orders older than the window are excluded from the gap statistics.
+  const old = summarizeOrderGaps([NOW - 40 * DAY, NOW - 39 * DAY, NOW - 60_000], { nowMs: NOW, observedGapDays: 28 });
+  assert.equal(old.gapSamples, 1, "only the gap that ends inside the window");
+  assert.equal(old.orderCount, 3, "but every order is still counted");
 });
 
-test('evaluateOrderGap warns and escalates against the current bucket only', () => {
-  const baseline = computeOrderBaseline(syntheticOrders(), { nowMs: NOW, timeZone: TZ });
-  assert.equal(evaluateOrderGap({ baseline, lastOrderAtMs: NOW - 40 * 60_000, nowMs: NOW, timeZone: TZ }).severity, null);
-  const warning = evaluateOrderGap({ baseline, lastOrderAtMs: NOW - 120 * 60_000, nowMs: NOW, timeZone: TZ });
-  assert.equal(warning.severity, 'warning');
-  assert.equal(warning.bucket, 'wd:14');
-  assert.equal(warning.ageMinutes, 120);
-  assert.equal(evaluateOrderGap({ baseline, lastOrderAtMs: NOW - 4 * 60 * 60_000, nowMs: NOW, timeZone: TZ }).severity, 'critical');
-
-  const night = Date.parse('2026-09-07T20:00:00Z'); // Tuesday 04:00 MYT
-  assert.equal(evaluateOrderGap({ baseline, lastOrderAtMs: night - 120 * 60_000, nowMs: night, timeZone: TZ }).severity, null, 'two quiet night hours are normal');
-  assert.equal(evaluateOrderGap({ baseline, lastOrderAtMs: null, nowMs: NOW, timeZone: TZ }).severity, 'critical', 'no order at all is critical');
+test('traffic changes what the alert points at, and never silences it', () => {
+  /* Wade, 2026-09-20: still alert when traffic is down too, but say so, so
+     the message separates "checkout is broken" from "the ads stopped". */
+  const fresh = (current, baseline) => ({ checkedAt: new Date(NOW - 5 * 60_000).toISOString(), current: { view_item: current }, baseline: { view_item: baseline } });
+  assert.match(trafficNote(fresh(120, 130), NOW), /流量正常.*重点查结账/);
+  assert.match(trafficNote(fresh(30, 130), NOW), /只有平时的 23%.*广告停了/);
+  assert.match(trafficNote(fresh(0, 130), NOW), /只有平时的 0%/);
+  // Stale or unusable GA4 data says so rather than guessing either way.
+  assert.match(trafficNote({ checkedAt: new Date(NOW - 60 * 60_000).toISOString(), current: { view_item: 5 }, baseline: { view_item: 130 } }, NOW), /读不到/);
+  assert.match(trafficNote(null, NOW), /读不到/);
+  assert.match(trafficNote(fresh(10, 0), NOW), /读不到/, "a zero baseline is not a 100% drop");
+  assert.match(trafficNote({ checkedAt: "not a date" }, NOW), /读不到/);
 });
 
-test('alert text is human-readable and names the bucket or the bootstrap state', () => {
+test('the alert says how long, against what, and where to look', () => {
   assert.equal(formatMinutes(192), '3h12m');
   assert.equal(formatMinutes(45), '45m');
-  const text = orderAlertText({ label: 'APGO MY' }, { severity: 'warning', ageMinutes: 192, thresholdMinutes: 100, bucket: 'wd:14', immature: false }, NOW - 192 * 60_000, TZ);
-  assert.match(text, /^🟡 \[APGO MY\]\[Layer 4 · Orders\] No orders for 3h12m \(expected ≤ 1h40m; weekday 14:00 Asia\/Kuala_Lumpur\)/);
-  assert.match(text, /Last order: Tue 10:48/);
-  const young = orderAlertText({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 800, thresholdMinutes: 360, bucket: 'wd:14', immature: true }, NOW - 800 * 60_000, TZ);
-  assert.match(young, /^🔴 .*bootstrap threshold, baseline still maturing/);
+  const traffic = { checkedAt: new Date(NOW - 5 * 60_000).toISOString(), current: { view_item: 120 }, baseline: { view_item: 130 } };
+  const text = orderAlertText({ label: 'APGO MY' }, { severity: 'warning', ageMinutes: 430, thresholdMinutes: 420 }, NOW - 430 * 60_000, TZ, traffic, NOW);
+  assert.match(text, /^🟡 \[APGO MY\]\[Layer 4 · Orders\] 已经 7h10m 没有订单（超过 7h00m 就提醒）/);
+  assert.match(text, /上一单：Tue 06:50/);
+  assert.match(text, /流量正常/);
+  const critical = orderAlertText({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 900, thresholdMinutes: 420 }, NOW - 900 * 60_000, TZ, null, NOW);
+  assert.match(critical, /^🔴 /);
+  assert.match(critical, /同时段流量：读不到/);
 });
 
 test('parseOrderEvent validates the platform-agnostic payload', () => {

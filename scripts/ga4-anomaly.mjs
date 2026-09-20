@@ -278,5 +278,11 @@ results.push(await updateRule(
 const coverageState = await getState('ga4:realtime:coverage');
 await setState('ga4:realtime:coverage', { checkedAt: appendCoverage(coverageState?.checkedAt, new Date().toISOString()) });
 
+/* The order heartbeat runs in the Worker and has no view of traffic, so it
+   cannot tell "nobody could check out" from "nobody came". Leave the latest
+   window here for it to read. The reverse direction already exists:
+   purchase_tracking_gap above reads orders:last, which the Worker writes. */
+await setState('ga4:realtime:last', { checkedAt: new Date().toISOString(), current, baseline });
+
 await heartbeat('layer4', { kind: 'realtime', mode, current, baseline, results });
 console.log(JSON.stringify({ ok: true, kind: 'realtime', mode, current, baseline, storefrontHealthy, results }, null, 2));

@@ -103,9 +103,13 @@ Content-Type: application/json
 
 - Shopify：Flow「Order created → Send HTTP request」，body 用 Liquid 模板填上面四个字段（`{{ order.id }}`、`{{ order.createdAt }}`、`{{ order.test }}`）。WooCommerce / 自建站 / Make 同样格式。
 - Worker 以 `orderId` 去重（平台重试不会重复计数），`test: true` 直接丢弃，订单时间保存在 D1 `state` 的 `<site>:orders:log`（保留 35 天），最新一笔在 `<site>:orders:last` 供 GA4 交叉检查读取。
-- 每 10 分钟评估「距上一单多久」：按同一小时（工作日/周末分开）28 天的历史，每 30 分钟采样「当时距上一单多久」，取 p90 × 1.5，限制在 90–720 分钟。样本不足 8 个的桶用 6 小时保底阈值，所以刚接入的前几周夜间不会误报。超过阈值 warning、超过两倍 critical、恢复时通知；6 小时内不重复。
+- 每 10 分钟评估「距上一单多久」，对比**一个固定阈值 7 小时**；超过两倍算 critical，6 小时内不重复。**恢复必须由新订单触发**，阈值变化永远不会产生「订单恢复了」。
+- 为什么是一个固定值而不是分时段的模型：455 笔真实订单（2026-09-09 至 09-20）显示间隔中位数 19 分钟、p90 1h19m，正常日最长间隔 5h51m，唯一更长的 8h01m 是 09-15 免运费事故。拿这批数据回放，7 小时只触发一次（就是那次事故），4 小时触发 9 次且全部落在老板确认正常的日子。旧的分桶 p90 模型做不到：4 小时窗口在正常情况下有 3.6% 的时间是零订单，同一个小时桶的订单数从 4 到 17 不等，分布宽度盖过了信号——这就是它在三个健康日里响了 11 次的原因。
+- 这条规则**刻意是慢的兜底**，回答「生意是不是真的停了」。快速发现结账坏掉是漏斗规则的事：09-15 那次 GA4 在 00:46 就响了，比 7 小时的间隔规则早五个小时。
+- 告警文案里带同时段流量（读 GA4 侧写的 `<site>:ga4:realtime:last`）：流量正常 → 「重点查结账」；流量也低 → 「可能是广告停了或淡时段」。**流量从不用来压制告警**，只用来指方向；GA4 数据太旧就明说读不到。
+- 心跳 detail 里带 `observedMaxGapMinutes` 与 `observedP90GapMinutes`（最近 28 天实测），阈值要调时看这两个数字，不要凭感觉。
 - 推送源自身的健康单独看：从未收到推送记 `orders_push_missing`；超过 24 小时没有任何推送记 `orders_push_stale` 并提示先检查 Flow，而不是把它读成零销售。
-- 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE`：observe 只写 `would_alert` / `would_recover`；**2026-09-11 起 armed**——桶成熟前用 6 小时保底阈值，对约 60 单/天的店任何时段 6 小时没单都值得知道，桶成熟后阈值自动收紧。
+- 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE`：observe 只写 `would_alert` / `would_recover`；**2026-09-11 起 armed，2026-09-21 换成固定阈值**。要回退成静默把它改成 `observe` 再部署即可，阈值本身在 `ORDER_LIMITS.gapMinutes`。
 
 ### 调查员（告警后的自动排查，阶段 1a）
 

@@ -10,14 +10,22 @@
      Authorization: Bearer <that site's ORDER_EVENT_TOKEN>
      { "siteId": "apgo-my", "orderId": "…", "createdAt": "<ISO 8601>", "test": false }
 
-   Purchases are sparse (about one per 30 minutes at the afternoon peak, one
-   per several hours at night), so a fixed-window count would swing between
-   0 and 100%. Instead we measure "minutes since the last order" and compare
-   it with what that hour of the week normally tolerates: the 90th percentile
-   of the same measurement taken every 30 minutes over the last 28 days,
-   times 1.5, clamped to [floor, cap]. Buckets with too little history fall
-   back to a conservative bootstrap threshold, so the first weeks after a
-   site starts pushing cannot page on a normal quiet night. */
+   The measure is "minutes since the last order" against one flat threshold.
+   That is blunt on purpose. An earlier version compared the gap with a
+   per-hour-of-week percentile, which rang 11 times in three days the owner
+   confirmed were healthy: the threshold moved every run, and "recovered"
+   fired whenever it rose past a gap that had not actually ended.
+
+   455 real orders say why nothing cleverer fits. Zero orders in a 4-hour
+   window happens in 3.6% of all normal windows, and one hour-of-week bucket
+   holds anywhere from 4 to 17 orders, so no count-based band separates a
+   quiet evening from a broken checkout. What does separate them is length:
+   the longest normal gap was 5h51m, and the only longer one, 8h01m, was the
+   2026-09-15 free-shipping incident.
+
+   So this is the slow, quiet backstop for "sales have actually stopped", and
+   the funnel rules are the fast detector. On 09-15 GA4 paged at 00:46, five
+   hours before this would have. */
 import { ORDER_LIMITS, siteById, siteKey } from './config.mjs';
 import { getState, logAlert, setState } from './db.mjs';
 import { readLimitedText } from './errors.mjs';
@@ -52,52 +60,36 @@ export function percentile(values, fraction) {
   return sorted[rank];
 }
 
-export function computeOrderBaseline(orderTimesMs, options) {
-  const {
-    nowMs, baselineDays, sampleMinutes, percentile: fraction, multiplier, floorMinutes, capMinutes, timeZone, minSamples, bootstrapMinutes,
-  } = { ...ORDER_LIMITS, ...options };
+/* No model, just what the order stream has actually done lately, so the
+   margin between the configured threshold and real traffic stays visible in
+   every heartbeat. */
+export function summarizeOrderGaps(orderTimesMs, options = {}) {
+  const { nowMs = Date.now(), observedGapDays } = { ...ORDER_LIMITS, ...options };
   const orders = [...orderTimesMs].filter(Number.isFinite).sort((a, b) => a - b);
-  const samples = new Map();
-  let index = 0;
-  for (let t = nowMs - baselineDays * 86_400_000; t <= nowMs; t += sampleMinutes * 60_000) {
-    while (index < orders.length && orders[index] <= t) index += 1;
-    if (index === 0) continue; // no order on record before this sample
-    const ageMinutes = (t - orders[index - 1]) / 60_000;
-    const { key } = bucketFor(t, timeZone);
-    if (!samples.has(key)) samples.set(key, []);
-    samples.get(key).push(ageMinutes);
+  const since = nowMs - observedGapDays * 86_400_000;
+  const gaps = [];
+  for (let index = 1; index < orders.length; index += 1) {
+    if (orders[index] < since) continue;
+    gaps.push((orders[index] - orders[index - 1]) / 60_000);
   }
-  const buckets = {};
-  for (const [key, ages] of samples) {
-    const p = percentile(ages, fraction);
-    const computed = Math.min(capMinutes, Math.max(floorMinutes, multiplier * p));
-    const immature = ages.length < minSamples;
-    buckets[key] = {
-      n: ages.length,
-      p90Minutes: round(p),
-      immature,
-      thresholdMinutes: round(immature ? Math.max(bootstrapMinutes, computed) : computed),
-    };
-  }
-  const firstOrderAt = orders.length ? new Date(orders[0]).toISOString() : null;
-  return { computedAt: new Date(nowMs).toISOString(), baselineDays, orderCount: orders.length, firstOrderAt, buckets };
+  return {
+    computedAt: new Date(nowMs).toISOString(),
+    observedGapDays,
+    orderCount: orders.length,
+    firstOrderAt: orders.length ? new Date(orders[0]).toISOString() : null,
+    gapSamples: gaps.length,
+    medianGapMinutes: gaps.length ? round(percentile(gaps, 0.5)) : null,
+    p90GapMinutes: gaps.length ? round(percentile(gaps, 0.9)) : null,
+    maxGapMinutes: gaps.length ? round(Math.max(...gaps)) : null,
+  };
 }
 
-export function evaluateOrderGap({ baseline, lastOrderAtMs, nowMs, timeZone, criticalMultiplier = ORDER_LIMITS.criticalMultiplier, bootstrapMinutes = ORDER_LIMITS.bootstrapMinutes }) {
-  const { key } = bucketFor(nowMs, timeZone);
+export function evaluateOrderGap({ lastOrderAtMs, nowMs, gapMinutes = ORDER_LIMITS.gapMinutes, criticalMultiplier = ORDER_LIMITS.criticalMultiplier }) {
   const ageMinutes = Number.isFinite(lastOrderAtMs) ? (nowMs - lastOrderAtMs) / 60_000 : Number.POSITIVE_INFINITY;
-  const bucket = baseline?.buckets?.[key];
-  const thresholdMinutes = bucket ? bucket.thresholdMinutes : bootstrapMinutes;
   let severity = null;
-  if (ageMinutes > thresholdMinutes * criticalMultiplier) severity = 'critical';
-  else if (ageMinutes > thresholdMinutes) severity = 'warning';
-  return {
-    severity,
-    ageMinutes: round(ageMinutes),
-    thresholdMinutes,
-    bucket: key,
-    immature: !bucket || Boolean(bucket.immature),
-  };
+  if (ageMinutes > gapMinutes * criticalMultiplier) severity = 'critical';
+  else if (ageMinutes > gapMinutes) severity = 'warning';
+  return { severity, ageMinutes: round(ageMinutes), thresholdMinutes: gapMinutes };
 }
 
 export function formatMinutes(minutes) {
@@ -113,11 +105,31 @@ function localClock(ms, timeZone) {
   return new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
 }
 
-export function orderAlertText(site, evaluation, lastOrderAtMs, timeZone) {
+/* Traffic never suppresses the alert; it changes what the alert tells the
+   owner to look at. Orders stopped while people are still shopping points at
+   checkout. Orders stopped while traffic stopped too points at the ads. */
+export function trafficNote(traffic, nowMs, { maxAgeMinutes = 20 } = {}) {
+  const checkedAtMs = Date.parse(traffic?.checkedAt || '');
+  if (!Number.isFinite(checkedAtMs) || (nowMs - checkedAtMs) / 60_000 > maxAgeMinutes) {
+    return '同时段流量：读不到（GA4 检查太旧或没跑）';
+  }
+  const current = Number(traffic?.current?.view_item);
+  const baseline = Number(traffic?.baseline?.view_item);
+  if (!Number.isFinite(current) || !Number.isFinite(baseline) || baseline <= 0) {
+    return '同时段流量：读不到（GA4 没给出可比的基线）';
+  }
+  const ratio = current / baseline;
+  if (ratio >= 0.6) return `同时段流量正常（看商品 ${current}，平时 ${baseline}）→ 重点查结账`;
+  return `同时段流量也只有平时的 ${Math.round(ratio * 100)}%（看商品 ${current}，平时 ${baseline}）→ 可能是广告停了或淡时段`;
+}
+
+export function orderAlertText(site, evaluation, lastOrderAtMs, timeZone, traffic = null, nowMs = Date.now()) {
   const icon = evaluation.severity === 'critical' ? '🔴' : '🟡';
-  const bucketLabel = `${evaluation.bucket.startsWith('we') ? 'weekend' : 'weekday'} ${evaluation.bucket.slice(3)}:00`;
-  const basis = evaluation.immature ? 'bootstrap threshold, baseline still maturing' : `${bucketLabel} ${timeZone}`;
-  return `${icon} [${site.label}][Layer 4 · Orders] No orders for ${formatMinutes(evaluation.ageMinutes)} (expected ≤ ${formatMinutes(evaluation.thresholdMinutes)}; ${basis})\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`;
+  return [
+    `${icon} [${site.label}][Layer 4 · Orders] 已经 ${formatMinutes(evaluation.ageMinutes)} 没有订单（超过 ${formatMinutes(evaluation.thresholdMinutes)} 就提醒）`,
+    `上一单：${localClock(lastOrderAtMs, timeZone)} ${timeZone}`,
+    trafficNote(traffic, nowMs),
+  ].join('\n');
 }
 
 /* ---- push endpoint --------------------------------------------------- */
@@ -215,21 +227,32 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
   }
 
   const times = entries.map((entry) => Number(entry.at));
-  const baseline = computeOrderBaseline(times, { nowMs, timeZone });
+  const observed = summarizeOrderGaps(times, { nowMs });
   const lastOrderAtMs = Math.max(...times);
   await setState(env.DB, lastKey, { createdAt: new Date(lastOrderAtMs).toISOString(), receivedAt: push.lastReceivedAt || null, checkedAt: new Date(nowMs).toISOString() });
 
-  const evaluation = evaluateOrderGap({ baseline, lastOrderAtMs, nowMs, timeZone });
-  const state = (await getState(env.DB, alertKey)) || { open: false, severity: null, lastAlertMs: 0 };
-  const detail = { siteId: site.id, mode, ...evaluation, lastOrderAt: new Date(lastOrderAtMs).toISOString(), orderCount: baseline.orderCount, firstOrderAt: baseline.firstOrderAt };
+  const evaluation = evaluateOrderGap({ lastOrderAtMs, nowMs });
+  const traffic = await getState(env.DB, siteKey(site.id, 'ga4:realtime:last'));
+  const state = (await getState(env.DB, alertKey)) || { open: false, severity: null, lastAlertMs: 0, lastOrderAtMs: null };
+  const detail = {
+    siteId: site.id, mode, ...evaluation,
+    lastOrderAt: new Date(lastOrderAtMs).toISOString(),
+    orderCount: observed.orderCount, firstOrderAt: observed.firstOrderAt,
+    observedMaxGapMinutes: observed.maxGapMinutes, observedP90GapMinutes: observed.p90GapMinutes,
+  };
+  /* Recovery means an order arrived, never that the threshold moved. The old
+     rule declared "Orders resumed" three times on 2026-09-16 while the last
+     order stayed at Wed 17:55, because it only asked whether the gap was under
+     a threshold that had itself grown. */
+  const resumed = state.open && Number.isFinite(Number(state.lastOrderAtMs)) && lastOrderAtMs > Number(state.lastOrderAtMs);
   if (shouldAlertHeartbeat(evaluation.severity, state, nowMs, ORDER_LIMITS.realertMs)) {
     await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_gap' : 'would_alert', { rule: 'orders_gap', ...detail });
-    if (mode === 'armed') await sendTelegram(env, orderAlertText(site, evaluation, lastOrderAtMs, timeZone));
-    await setState(env.DB, alertKey, { open: true, severity: evaluation.severity, lastAlertMs: nowMs });
-  } else if (!evaluation.severity && state.open) {
+    if (mode === 'armed') await sendTelegram(env, orderAlertText(site, evaluation, lastOrderAtMs, timeZone, traffic, nowMs));
+    await setState(env.DB, alertKey, { open: true, severity: evaluation.severity, lastAlertMs: nowMs, lastOrderAtMs });
+  } else if (resumed) {
     await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_recovery' : 'would_recover', { rule: 'orders_gap', ...detail });
-    if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] Orders resumed\nLast order: ${localClock(lastOrderAtMs, timeZone)} ${timeZone}`, { silent: true });
-    await setState(env.DB, alertKey, { open: false, severity: null, lastAlertMs: state.lastAlertMs });
+    if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] 订单恢复了\n这一单：${localClock(lastOrderAtMs, timeZone)} ${timeZone}`, { silent: true });
+    await setState(env.DB, alertKey, { open: false, severity: null, lastAlertMs: state.lastAlertMs, lastOrderAtMs });
   }
 
   // A long silence from the push source is ambiguous: no orders, or a broken
@@ -239,5 +262,5 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
     await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_push_stale', { siteId: site.id, lastReceivedAt: push.lastReceivedAt, ageMinutes: round((nowMs - receivedMs) / 60_000) });
     await notifyThrottled(env, site, 'push-stale', `🟠 [${site.label}][Layer 4 · Orders] No order events received for ${formatMinutes((nowMs - receivedMs) / 60_000)} — check the platform push (Shopify Flow) before reading this as zero sales`, nowMs, mode);
   }
-  return { ok: true, mode, ...evaluation, orderCount: baseline.orderCount };
+  return { ok: true, mode, ...evaluation, orderCount: observed.orderCount, observedMaxGapMinutes: observed.maxGapMinutes };
 }
