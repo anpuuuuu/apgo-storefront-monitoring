@@ -6,7 +6,14 @@ const root = path.resolve(process.env.MONITOR_RESULTS_ROOT || 'layer2-results');
 const outputPath = path.resolve(process.env.MONITOR_AGGREGATE_FILE || 'layer2-aggregate.json');
 const heartbeatPath = path.resolve(process.env.MONITOR_HEARTBEAT_DETAIL_FILE || 'layer2-heartbeat-detail.json');
 const planResult = process.env.MONITOR_PLAN_RESULT || 'success';
+const batchResult = process.env.MONITOR_BATCH_RESULT || 'success';
 const planError = process.env.MONITOR_PLAN_ERROR || '';
+/* A post-deploy run is cancelled by this workflow's own concurrency group the
+   moment the next theme push arrives (cancel-in-progress). The journeys it
+   never reached are not missing evidence about the storefront, they are work we
+   deliberately stopped, so a cancelled run must never page. 2026-09-20: six
+   theme pushes in two hours produced four such alerts. */
+const cancelled = planResult === 'cancelled' || batchResult === 'cancelled';
 let expected = [];
 let matrixError = '';
 try {
@@ -14,7 +21,7 @@ try {
 } catch (error) {
   matrixError = String(error?.message || error);
 }
-const planningFailed = planResult !== 'success' || Boolean(matrixError) || expected.length === 0;
+const planningFailed = !cancelled && (planResult !== 'success' || Boolean(matrixError) || expected.length === 0);
 
 function walk(directory) {
   if (!fs.existsSync(directory)) return [];
@@ -31,7 +38,9 @@ const byId = new Map(results.map((result) => [result.id, result]));
 const missing = expected.map((entry) => entry.id).filter((id) => !byId.has(id));
 const failed = results.filter((result) => result.finalStatus === 'failed');
 const transient = results.filter((result) => result.finalStatus === 'transient');
-const status = planningFailed || failed.length || missing.length ? 'failed' : 'ok';
+const status = cancelled
+  ? 'cancelled'
+  : planningFailed || failed.length || missing.length ? 'failed' : 'ok';
 // Soft findings a journey noted but did not fail on (e.g. header_cart_bubble_lag).
 const noteCounts = {};
 for (const result of results) for (const note of result.notes || []) noteCounts[note.type] = (noteCounts[note.type] || 0) + 1;
@@ -43,7 +52,9 @@ const attemptSummary = (result) => (result.attempts || [])
 const failedSummary = failed.slice(0, 2)
   .map((result) => `${result.id}${result.landingPath ? ` ${result.channel || 'Paid'} ${result.landingPath}` : ''} [${result.classification}]: ${attemptSummary(result)}`)
   .join(' || ');
-const detail = planningFailed
+const detail = cancelled
+  ? `Layer 2 run superseded by a newer theme push (plan=${planResult}, batch=${batchResult}); ${results.length}/${expected.length} journeys had finished`
+  : planningFailed
   ? `Layer 2 planning failed (plan=${planResult}, expected=${expected.length}${planError ? `, error=${planError}` : ''}${matrixError ? `, matrix=${matrixError}` : ''})`
   : failed.length || missing.length
     ? `journeys failed=${failed.length}, missing=${missing.length}; ${failedSummary || `missing: ${missing.slice(0, 3).join(', ')}`}`
@@ -59,7 +70,9 @@ const challengeOnly = !planningFailed
 // shoppers are down. Keep the workflow/heartbeat red, but page at most on the
 // daily full run. Mixed or real storefront failures still notify immediately.
 const notify = status === 'failed' && (!challengeOnly || cadence === 'daily');
-const alertTitle = planningFailed
+const alertTitle = cancelled
+  ? 'APGO Layer 2 run was superseded'
+  : planningFailed
   ? planError.includes('AD_DISCOVERY_FAILED')
     ? 'APGO Layer 2 GA4 advertising discovery failed'
     : 'APGO Layer 2 test planning failed'
@@ -76,9 +89,11 @@ const aggregate = {
   generatedAt: new Date().toISOString(),
   status,
   cadence,
+  cancelled,
   challengeOnly,
   notify,
   planResult,
+  batchResult,
   planningFailed,
   expectedCount: expected.length,
   receivedCount: results.length,
