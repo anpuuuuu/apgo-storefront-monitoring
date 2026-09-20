@@ -16,7 +16,7 @@ const expectedJob = {
   journey: 'mobile-main',
 };
 
-function runAggregate(result, { planResult = 'success', planError = '', expected = [expectedJob], cadence = 'post-deploy' } = {}) {
+function runAggregate(result, { planResult = 'success', batchResult = 'success', planError = '', expected = [expectedJob], cadence = 'post-deploy' } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'apgo-layer2-aggregate-'));
   const root = path.join(temp, 'results');
   fs.mkdirSync(root, { recursive: true });
@@ -33,6 +33,7 @@ function runAggregate(result, { planResult = 'success', planError = '', expected
       ...process.env,
       MONITOR_RESULTS_ROOT: root,
       MONITOR_PLAN_RESULT: planResult,
+      MONITOR_BATCH_RESULT: batchResult,
       MONITOR_PLAN_ERROR: planError,
       MONITOR_CADENCE: cadence,
       MONITOR_EXPECTED_MATRIX: JSON.stringify({ include: expected }),
@@ -122,6 +123,42 @@ test('missing journey result fails the aggregate heartbeat', () => {
   assert.equal(aggregate.status, 'failed');
   assert.deepEqual(aggregate.missing, [expectedJob.id]);
   assert.match(output, /alert_title=APGO Layer 2 monitoring result missing/);
+});
+
+test('a run our own concurrency group cancelled must never page', () => {
+  /* 2026-09-20: six theme pushes in two hours. cancel-in-progress killed four
+     post-deploy runs, and each reported the journeys it never reached as
+     missing evidence and rang the phone. Superseded work is not a storefront
+     fault. */
+  const supersededMidBatch = runAggregate(null, { batchResult: 'cancelled' });
+  assert.equal(supersededMidBatch.aggregate.status, 'cancelled');
+  assert.equal(supersededMidBatch.aggregate.cancelled, true);
+  assert.equal(supersededMidBatch.aggregate.notify, false);
+  assert.equal(supersededMidBatch.aggregate.planningFailed, false, 'planning did not fail, the run was stopped');
+  assert.match(supersededMidBatch.output, /status=cancelled/);
+  assert.match(supersededMidBatch.output, /notify=false/);
+  assert.match(supersededMidBatch.output, /detail=Layer 2 run superseded by a newer theme push/);
+  assert.match(supersededMidBatch.output, /alert_title=APGO Layer 2 run was superseded/);
+
+  // Cancelled before the matrix even existed: still silent, not "planning failed".
+  const supersededInPlan = runAggregate(null, { planResult: 'cancelled', batchResult: 'cancelled', expected: [] });
+  assert.equal(supersededInPlan.aggregate.status, 'cancelled');
+  assert.equal(supersededInPlan.aggregate.notify, false);
+  assert.equal(supersededInPlan.aggregate.planningFailed, false);
+
+  // Journeys that did finish before the cancellation are still recorded.
+  const partial = runAggregate({ ...expectedJob, finalStatus: 'passed', classification: 'ok', attempts: [{ attempt: 1, status: 'passed' }] },
+    { batchResult: 'cancelled', expected: [expectedJob, { ...expectedJob, id: 'apgo-my-MY-iphone-webkit-second' }] });
+  assert.equal(partial.aggregate.status, 'cancelled');
+  assert.equal(partial.aggregate.receivedCount, 1);
+  assert.match(partial.output, /1\/2 journeys had finished/);
+
+  // A genuine failure inside the batch still pages.
+  const real = runAggregate({ ...expectedJob, finalStatus: 'failed', classification: 'storefront_failure', attempts: [{ attempt: 1, status: 'failed', error: 'boom' }, { attempt: 2, status: 'failed', error: 'boom' }] },
+    { batchResult: 'failure' });
+  assert.equal(real.aggregate.status, 'failed');
+  assert.equal(real.aggregate.cancelled, false);
+  assert.match(real.output, /notify=true/);
 });
 
 test('failed or empty planning can never create a healthy heartbeat', () => {
