@@ -219,14 +219,14 @@ if (dist.ok) {
   console.log('  连续窗口   会触发几次   平均多久一次');
   for (const need of [2, 3, 4, 5, 6]) {
     let run = 0;
-    let fired = 0;
-    for (const value of abnormal) {
-      if (value === null) { run = 0; continue; }
+    const hits = [];
+    abnormal.forEach((value, index) => {
+      if (value === null) { run = 0; return; }
       run = value ? run + 1 : 0;
-      if (run === need) fired += 1;
-    }
-    const perDay = fired / (days.length || 1);
-    console.log(`      ${need}      ${String(fired).padStart(5)}      ${perDay > 0 ? `每 ${(1 / perDay).toFixed(1)} 天一次` : '从未'}`);
+      if (run === need) hits.push(ordered[index].key);
+    });
+    const perDay = hits.length / (days.length || 1);
+    console.log(`      ${need}      ${String(hits.length).padStart(5)}      ${perDay > 0 ? `每 ${(1 / perDay).toFixed(1)} 天一次` : '从未'}   ${hits.join(' ')}`);
   }
   console.log('\n  这些天里店铺都是正常的，所以上面每一次触发都是误报。');
   console.log('  挑一个「平均多久一次」远长于你能容忍的频率的连续窗口数。');
