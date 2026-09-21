@@ -29,6 +29,7 @@
    Usage: mode `diagnose-ga4` in monitor-alerts.yml, or run directly with the
    same GA4 environment the other Layer 4 scripts use. */
 import { config, ga } from './monitor-lib.mjs';
+import { evaluateDropRules } from './ga4-anomaly-lib.mjs';
 import { EVENT_NAMES, WINDOWS, bucketByWindow, minutesAgo, propertyMinuteNow } from './ga4-diagnose-lib.mjs';
 
 const timeZone = config.ga4.timezone;
@@ -150,7 +151,7 @@ const dist = await attempt('runReport(funnel by minute)', 'runReport', {
   dateRanges: [{ startDate: `${DIST_DAYS}daysAgo`, endDate: 'yesterday' }],
   dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
   metrics: [{ name: 'eventCount' }],
-  dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['add_to_cart', 'begin_checkout'] } } },
+  dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['page_view', 'add_to_cart', 'begin_checkout'] } } },
   limit: '200000',
 });
 
@@ -163,7 +164,7 @@ if (dist.ok) {
     if (stamp.length !== 12) continue;
     const half = Number(stamp.slice(10, 12)) < 30 ? '00' : '30';
     const key = `${stamp.slice(0, 8)}-${stamp.slice(8, 10)}${half}`;
-    if (!slots.has(key)) slots.set(key, { add_to_cart: 0, begin_checkout: 0 });
+    if (!slots.has(key)) slots.set(key, { page_view: 0, add_to_cart: 0, begin_checkout: 0 });
     const event = row.dimensionValues?.[1]?.value;
     if (event in slots.get(key)) slots.get(key)[event] += Number(row.metricValues?.[0]?.value || 0);
   }
@@ -174,7 +175,7 @@ if (dist.ok) {
     for (let hour = 0; hour < 24; hour += 1) {
       for (const half of ['00', '30']) {
         const key = `${day}-${String(hour).padStart(2, '0')}${half}`;
-        ordered.push({ key, clock: `${String(hour).padStart(2, '0')}${half}`, ...(slots.get(key) || { add_to_cart: 0, begin_checkout: 0 }) });
+        ordered.push({ key, clock: `${String(hour).padStart(2, '0')}${half}`, ...(slots.get(key) || { page_view: 0, add_to_cart: 0, begin_checkout: 0 }) });
       }
     }
   }
@@ -230,6 +231,63 @@ if (dist.ok) {
   }
   console.log('\n  这些天里店铺都是正常的，所以上面每一次触发都是误报。');
   console.log('  挑一个「平均多久一次」远长于你能容忍的频率的连续窗口数。');
+
+  /* ---------------------------------------------------------------- *
+     The deviation-band rules run off the same pipeline, so moving the
+     source to settled data moves them too. They were never replayed.
+     Realtime under-reports the current window while the baseline is
+     settled, which inflates every measured drop -- so the expectation
+     is that settled data fires less. Expectations are not measurements.
+   * ---------------------------------------------------------------- */
+  const dropCfg = { ...settings, ...(settings.drop || {}) };
+  const dropNeed = Number(settings.drop?.consecutive_windows) || 3;
+  const dropVerdicts = ordered.map((slot) => {
+    const history = (byClock.get(slot.clock) || []).filter((other) => other.key < slot.key).slice(-28);
+    if (history.length < 4) return null;
+    const base = {
+      page_view: medianOf(history.map((other) => other.page_view)),
+      add_to_cart: medianOf(history.map((other) => other.add_to_cart)),
+      begin_checkout: medianOf(history.map((other) => other.begin_checkout)),
+    };
+    return { slot, base, verdict: evaluateDropRules(slot, base, dropCfg) };
+  });
+
+  console.log(`\n=== 降幅规则在已结算数据上会响几次（${days.length} 天）===`);
+  console.log(`  门槛：流量 ≥ 基线 ${dropCfg.traffic_floor_ratio}、当前 ≤ 基线 ${dropCfg.drop_ratio}；连续 ${dropNeed} 个窗口`);
+  for (const rule of ['add_to_cart_drop', 'begin_checkout_drop']) {
+    let run = 0;
+    const fired = [];
+    let anyWindow = 0;
+    for (const entry of dropVerdicts) {
+      if (entry === null) { run = 0; continue; }
+      const hit = entry.verdict[rule];
+      if (hit) anyWindow += 1;
+      run = hit ? run + 1 : 0;
+      if (run === dropNeed) fired.push(entry);
+    }
+    const perDay = fired.length / (days.length || 1);
+    console.log(`\n  ${rule}: 单窗口命中 ${anyWindow} 次，连续 ${dropNeed} 窗触发 ${fired.length} 次` +
+      `（${perDay > 0 ? `每 ${(1 / perDay).toFixed(1)} 天一次` : '从未'}）`);
+    for (const entry of fired.slice(0, 12)) {
+      const { slot, base } = entry;
+      console.log(`    ${slot.key}  浏览 ${slot.page_view}/${base.page_view}  加购 ${slot.add_to_cart}/${base.add_to_cart}  进结账 ${slot.begin_checkout}/${base.begin_checkout}`);
+    }
+  }
+  console.log('\n  9/15 是真事故（免运费），其余日期老板确认正常，所以别的每一次都是误报。');
+
+  /* How close is a quiet-but-healthy window to the line? A rule that
+     only just fails to fire is a rule that will fire next week. */
+  const margins = dropVerdicts
+    .filter((entry) => entry && entry.verdict.trafficOk && entry.base.add_to_cart >= dropCfg.add_to_cart_min_median && entry.slot.add_to_cart > 0)
+    .map((entry) => entry.slot.add_to_cart / (dropCfg.drop_ratio * entry.base.add_to_cart));
+  margins.sort((a, b) => a - b);
+  if (margins.length) {
+    const at = (q) => margins[Math.min(margins.length - 1, Math.floor(q * margins.length))];
+    console.log(`\n  add_to_cart 离触发线有多近（1.0 = 正好触发，越小越危险，${margins.length} 个窗口）：`);
+    console.log(`    最小 ${at(0).toFixed(2)}  p5 ${at(0.05).toFixed(2)}  p25 ${at(0.25).toFixed(2)}  中位 ${at(0.5).toFixed(2)}`);
+    console.log(`    贴着线（1.0–1.3）的窗口有 ${margins.filter((m) => m >= 1 && m <= 1.3).length} 个。`);
+  }
+
 }
 
 console.log('\n（只读：未写 D1、未发 Telegram、未更新心跳）');

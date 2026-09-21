@@ -31,13 +31,9 @@ export function minuteToMs(stamp, timeZone) {
   return asUtc - offsetAt(first) * 60_000;
 }
 
-export function propertyMinuteNow(nowMs, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(new Date(nowMs));
-  const get = (type) => parts.find((part) => part.type === type)?.value || '00';
-  return `${get('year')}${get('month')}${get('day')}${get('hour')}${get('minute')}`;
-}
+/* One implementation, shared with the rules. The diagnostic exists to tell
+   the rules what to do, so the two must agree on what a window even is. */
+export { propertyMinuteNow } from './ga4-anomaly-lib.mjs';
 
 export function minutesAgo(stamp, nowMs, timeZone) {
   const ms = minuteToMs(stamp, timeZone);
