@@ -345,6 +345,59 @@ if (dist.ok) {
     console.log('        成交塌了 → 不管老板记不记得，那天确实丢过钱。');
   }
 
+  /* ---------------------------------------------------------------- *
+     The gap nobody is watching: add_to_cart going to zero.
+
+     add_to_cart_drop requires cur.add_to_cart > 0, so the one failure
+     that matters most -- the add-to-cart button not working at all --
+     is the one case it cannot report. There is no add_to_cart_zero
+     rule either, so right now a completely broken cart button is
+     invisible to Layer 4 until begin_checkout follows it down.
+
+     begin_checkout_zero is the shape that caught 9/15, so mirror it
+     and price it the same way: how often would it fire on days the
+     store was selling?
+   * ---------------------------------------------------------------- */
+  console.log('\n=== 如果补一条 add_to_cart_zero，要付多少误报 ===');
+  console.log('  形状照抄 begin_checkout_zero：流量还在、平时有加购、这个窗口加购为 0。');
+  console.log('  商品页下限  基线加购下限  连续窗口   会触发几次   平均多久一次   触发时成交');
+  for (const viewMin of [20, 40]) {
+    for (const baseMin of [8, 12]) {
+      const hits = ordered.map((slot) => {
+        const history = (byClock.get(slot.clock) || []).filter((other) => other.key < slot.key).slice(-28);
+        if (history.length < 4) return null;
+        return slot.view_item >= viewMin
+          && medianOf(history.map((o) => o.add_to_cart)) >= baseMin
+          && slot.add_to_cart === 0;
+      });
+      for (const need of [2, 3]) {
+        let run = 0;
+        const fired = [];
+        hits.forEach((hit, i) => {
+          if (hit === null) { run = 0; return; }
+          run = hit ? run + 1 : 0;
+          if (run === need) fired.push(i);
+        });
+        const perDay = fired.length / (days.length || 1);
+        // Purchases across the firing window and the two after it: if money
+        // kept arriving, the rule was wrong however confident it looked.
+        const sold = fired.map((i) => ordered.slice(i, i + 3).reduce((sum, s) => sum + s.purchase, 0));
+        console.log(`      ${String(viewMin).padStart(3)}         ${String(baseMin).padStart(3)}         ${need}      ${String(fired.length).padStart(5)}      ` +
+          `${perDay > 0 ? `每 ${(1 / perDay).toFixed(1)} 天一次` : '从未'.padEnd(12)}   ${sold.length ? sold.join(',') : '-'}`);
+      }
+    }
+  }
+  console.log('  「触发时成交」是触发窗口加后面两格的成交数。不是 0 就说明店在卖，那一次是误报。');
+
+  /* And what would it have done on the day that mattered? */
+  const incident = ordered.filter((slot) => slot.key.startsWith('20260915') && slot.clock >= '0000' && slot.clock <= '0800');
+  const worst = incident.filter((slot) => slot.add_to_cart === 0);
+  console.log(`\n  9/15 凌晨到早上 8 点：${incident.length} 个窗口里加购为 0 的有 ${worst.length} 个` +
+    `${worst.length ? `（${worst.map((s) => s.clock).join(' ')}）` : ''}。`);
+  console.log('  加购为 0 的窗口少，说明那次事故里加购是好的——这也正是 begin_checkout_zero 抓到它、');
+  console.log('  而加购类规则抓不到的原因。两条规则管的是两种故障，不能互相替代。');
+
+
 
   /* How close is a quiet-but-healthy window to the line? A rule that
      only just fails to fire is a rule that will fire next week. */
