@@ -273,7 +273,11 @@ if (dist.ok) {
       console.log(`    ${slot.key}  浏览 ${slot.page_view}/${base.page_view}  加购 ${slot.add_to_cart}/${base.add_to_cart}  进结账 ${slot.begin_checkout}/${base.begin_checkout}`);
     }
   }
-  console.log('\n  9/15 是真事故（免运费），其余日期老板确认正常，所以别的每一次都是误报。');
+  /* Deliberately not "everything else is a false positive": the owner
+     confirmed 9/16-9/18, nothing more. Silence is not confirmation, and
+     assuming it is, is how a real incident gets filed as noise. */
+  console.log('\n  9/15 是免运费真事故。老板只确认过 9/16–9/18 正常；别的日期要问过他才算误报，');
+  console.log('  没人报修不等于当时没事。');
 
   /* How close is a quiet-but-healthy window to the line? A rule that
      only just fails to fire is a rule that will fire next week. */
