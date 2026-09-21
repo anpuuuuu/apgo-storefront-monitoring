@@ -59,7 +59,11 @@ async function watchHandles() {
   const cached = dryRun ? null : await getState(HANDLES_KEY);
   const refreshMs = (Number(settings.handles_refresh_hours) || 6) * 3_600_000;
   const cachedAge = cached?.refreshedAt ? Date.now() - Date.parse(cached.refreshedAt) : Number.POSITIVE_INFINITY;
-  const cachedHandles = Array.isArray(cached?.handles) ? cached.handles : [];
+  /* Only a list that discovery actually produced counts as a cache. An entry
+     with no adTargets count came from the version that cached the
+     fixtures-only fallback, and trusting it would keep the watch on that
+     fallback for refresh_hours while looking perfectly healthy in the log. */
+  const cachedHandles = Array.isArray(cached?.handles) && Number(cached?.adTargets) > 0 ? cached.handles : [];
   if (cachedHandles.length && cachedAge < refreshMs) {
     return { handles: cachedHandles, source: 'cache', ageMinutes: Math.round(cachedAge / 60_000) };
   }
