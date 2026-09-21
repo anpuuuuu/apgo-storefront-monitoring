@@ -27,6 +27,12 @@ on:
 
 permissions:
   contents: read
+  # Ad-target discovery reads GA4 to learn which products ads are landing on,
+  # so the canary is the product actually taking spend rather than whichever
+  # Layer 2 fixture happens to be first. The list is cached for hours, so this
+  # token is used a handful of times a day, not every 20 minutes -- and if the
+  # OIDC exchange fails the run still probes the cached or fixture list.
+  id-token: write
 
 concurrency:
   group: storefront-watch
@@ -60,9 +66,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
+      # continue-on-error: a failed token exchange must not stop the probe. The
+      # script falls back to the cached handle list, then to fixtures.
+      - name: Authenticate with Google OIDC/WIF
+        id: google-auth
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: helical-canto-505209-j7
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: codex-ga4-reader@helical-canto-505209-j7.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
+          create_credentials_file: false
       - name: Probe cart and shipping rates
         env:
           MONITOR_SITE_ID: ${{ matrix.siteId }}
+          GA4_PROPERTY_ID: ${{ matrix.propertyId }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
           MONITOR_MODE: ${{ vars.MONITOR_MODE || 'shadow' }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -70,7 +91,6 @@ jobs:
           MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
           WATCH_DRY_RUN: ${{ inputs.dry_run || 'false' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/storefront-watch.mjs
