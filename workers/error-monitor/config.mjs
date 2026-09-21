@@ -81,6 +81,9 @@ export const HEARTBEAT_LIMITS = {
   layer2: 30 * 60 * 60_000,
   layer3: 26 * 60 * 60_000,
   layer4: 90 * 60_000,
+  // Synthetic checkout probe, dispatched every 20 minutes. Two missed runs is
+  // a schedule problem worth seeing; one is GitHub being GitHub.
+  watch: 45 * 60_000,
 };
 
 export const HEARTBEAT_CRITICAL_LIMITS = {

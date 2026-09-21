@@ -15,7 +15,8 @@ export const MONITOR_SITES = [
       "layer1",
       "layer2",
       "layer3",
-      "layer4"
+      "layer4",
+      "watch"
     ],
     "orders": {
       "source": "push",

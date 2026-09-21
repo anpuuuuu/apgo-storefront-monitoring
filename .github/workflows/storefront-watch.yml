@@ -1,0 +1,76 @@
+name: Synthetic checkout watch
+
+# The fast line under Layer 4. Layer 4 reads a settled GA4 window and confirms
+# over two adjacent slots, so it answers in about two and a half hours; this
+# acts like a shopper every 20 minutes instead of inferring from shopper
+# behaviour, and a cart that returns no shipping method is a fact rather than
+# a statistic.
+#
+# GitHub delivers only about 18% of high-frequency crons, so the Dispatcher
+# Worker's Cloudflare Cron is the real schedule: it dispatches this workflow
+# when the `watch` heartbeat goes stale. The cron below is redundancy, not the
+# plan.
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+    inputs:
+      trigger:
+        description: Who requested the run. The Dispatcher Cron passes scheduler so the Layer 4 pause still applies.
+        type: choice
+        options: [manual, scheduler]
+        default: manual
+      dry_run:
+        description: Probe and print the verdict without writing D1 or sending Telegram.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: storefront-watch
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # The watch honours the same Layer 4 pause switch: pausing Layer 4 and then
+    # being paged by its fast line would be a surprise.
+    if: (github.event_name != 'schedule' || (vars.MONITOR_SCHEDULE_ENABLED == 'true' && vars.MONITOR_LAYER4_PAUSED != 'true')) && !(inputs.trigger == 'scheduler' && vars.MONITOR_LAYER4_PAUSED == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: matrix
+        run: echo "matrix=$(node scripts/site-matrix.mjs 4)" >> "$GITHUB_OUTPUT"
+
+  watch:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    # Two products, a few seconds of shipping-rate polling each, plus the pause
+    # between them. Anything past this is a hung request, not a slow store.
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Probe cart and shipping rates
+        env:
+          MONITOR_SITE_ID: ${{ matrix.siteId }}
+          MONITOR_MODE: ${{ vars.MONITOR_MODE || 'shadow' }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          MONITOR_WORKER_URL: ${{ vars.MONITOR_WORKER_URL }}
+          MONITOR_HEARTBEAT_TOKEN: ${{ secrets.MONITOR_HEARTBEAT_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          WATCH_DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/storefront-watch.mjs

@@ -68,6 +68,18 @@
       "rerun_after_hours": 12
     }
   },
+  "storefront_watch": {
+    "_readme": "Synthetic checkout watch (scripts/storefront-watch.mjs). Every 20 minutes it adds a real product to an anonymous cart and asks /cart/shipping_rates.json for the investigator address. Public cart endpoints only: never the checkout page, never payment, never an order. It exists because Layer 4 now judges a settled GA4 window and takes about 2.5 hours; a cart that returns no shipping method is a fact and does not need settling.",
+    "_why_observe": "Starts in observe so its first days are measured, not trusted. Arm it once the log shows it reporting ok on a store that was selling. The failure it watches for is deterministic, so once armed two consecutive failures 20 minutes apart is enough confirmation.",
+    "mode": "observe",
+    "observe_since": "2026-09-21",
+    "canaries": 1,
+    "rotating": 1,
+    "consecutive_failures": 2,
+    "alert_on_degraded": false,
+    "realert_hours": 2,
+    "pause_ms": 4000
+  },
   "investigator": {
     "_readme": "Alert investigator (scripts/investigator.mjs). On the first page of an armed GA4 rule it adds each of the top add-to-cart products to an anonymous storefront cart, asks /cart/shipping_rates.json for this address, diffs against the daily snapshot and posts a silent 🔎 message. Public cart endpoints only: never the checkout page, never payment, never an order. Address supplied by Wade on 2026-09-15; Shopify requires the state for Malaysia.",
     "mode": "armed",

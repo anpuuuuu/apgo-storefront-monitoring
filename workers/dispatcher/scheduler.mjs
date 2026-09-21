@@ -45,6 +45,20 @@ export const SCHEDULER_DEFAULTS = {
     failureBackoffMinutes: 120,
     inputs: { cadence: 'daily', retry_delay_seconds: '60' },
   },
+  /* The synthetic checkout watch. 18 minutes rather than 20 so a run that
+     starts a little late does not push the next one past its slot, the same
+     reason realtime uses 28 against a 30-minute cadence. */
+  watch: {
+    enabled: true,
+    workflow: 'storefront-watch.yml',
+    layer: 'watch',
+    minAgeMinutes: 18,
+    lockKey: 'dispatch-lock:storefront-watch',
+    lockTtlSeconds: 10 * 60,
+    recentRunMinutes: 10,
+    failureBackoffMinutes: 60,
+    inputs: { trigger: 'scheduler', dry_run: 'false' },
+  },
   layer3: {
     enabled: true,
     workflow: 'monitor-self-health.yml',
@@ -171,7 +185,8 @@ export function planDispatches({ health, now, locks = new Set(), markers = new S
     }
   }
 
-  for (const rule of [config.realtime, config.layer3]) {
+  for (const rule of [config.realtime, config.layer3, config.watch]) {
+    if (!rule) continue;
     if (rule.enabled === false) continue;
     const ages = layerAges(health, sites, rule.layer);
     if (!ages.length) continue;
@@ -196,6 +211,7 @@ function candidateKeys(nowMs, config, sites = []) {
   return [
     config.realtime.lockKey,
     config.layer3.lockKey,
+    ...(config.watch?.lockKey ? [config.watch.lockKey] : []),
     dailyMarkerKey(nowMs, 'primary'),
     dailyMarkerKey(nowMs, 'confirm'),
     ...sites.filter((site) => (site.enabledLayers || []).includes('layer2')).map((site) => layer2MarkerKey(nowMs, site.id)),

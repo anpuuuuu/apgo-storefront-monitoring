@@ -96,6 +96,7 @@
       "type": "shopify",
       "enabled": true,
       "layers": [1, 2, 3, 4],
+      "storefrontWatch": true,
       "repository": "anpuuuuu/apgo-theme",
       "repositoryId": "1154313539",
       "defaultBranch": "main",
