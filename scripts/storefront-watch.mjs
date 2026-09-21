@@ -43,12 +43,27 @@ if (settings.mode === 'off' || !address.zip) {
   process.exit(0);
 }
 
-/* The handle list is the advertised products plus the Layer 2 fixtures — the
-   same list the nightly snapshot walks. Ad discovery needs the Meta API and
-   can fail, so the last good list is cached: a watch that stops watching
-   because an unrelated API had a bad minute is worse than a slightly stale
-   list. */
+/* The handle list is the advertised products first, then the Layer 2 fixtures.
+   The order matters: the canary is whatever comes first, and the product
+   currently taking ad spend is the one worth watching every 20 minutes.
+
+   Discovery reads GA4, so it is cached rather than run every time. Ad targets
+   change on the scale of days, not minutes, and 72 GA4 queries a day to learn
+   the same answer would be waste. A cache older than refresh_hours is
+   refreshed; if that refresh fails the previous list is used anyway, because a
+   watch that stops watching over an unrelated API's bad minute is worse than
+   a slightly stale list. Fixtures alone are the last resort — on 2026-09-21
+   two of the five pointed at products that had been deleted, so a fixture-only
+   list is a watch with most of its slots aimed at 404s. */
 async function watchHandles() {
+  const cached = dryRun ? null : await getState(HANDLES_KEY);
+  const refreshMs = (Number(settings.handles_refresh_hours) || 6) * 3_600_000;
+  const cachedAge = cached?.refreshedAt ? Date.now() - Date.parse(cached.refreshedAt) : Number.POSITIVE_INFINITY;
+  const cachedHandles = Array.isArray(cached?.handles) ? cached.handles : [];
+  if (cachedHandles.length && cachedAge < refreshMs) {
+    return { handles: cachedHandles, source: 'cache', ageMinutes: Math.round(cachedAge / 60_000) };
+  }
+
   let discovered = [];
   try {
     const sitesConfig = JSON.parse(fs.readFileSync(new URL('../config/sites.json', import.meta.url), 'utf8'));
@@ -56,13 +71,16 @@ async function watchHandles() {
   } catch (error) {
     console.log(JSON.stringify({ event: 'watch_ad_targets_unavailable', reason: String(error?.message || error).slice(0, 200) }));
   }
+
   const fresh = snapshotHandles(site, discovered);
-  if (fresh.length) {
-    if (!dryRun) await setState(HANDLES_KEY, { handles: fresh, refreshedAt: new Date().toISOString() });
-    return { handles: fresh, stale: false };
+  // Only a list that actually learned something new is worth caching. Caching
+  // a fixtures-only fallback would pin the watch to the fallback for hours.
+  if (discovered.length && fresh.length) {
+    if (!dryRun) await setState(HANDLES_KEY, { handles: fresh, refreshedAt: new Date().toISOString(), adTargets: discovered.length });
+    return { handles: fresh, source: 'discovery', adTargets: discovered.length };
   }
-  const cached = dryRun ? null : await getState(HANDLES_KEY);
-  return { handles: cached?.handles || [], stale: true };
+  if (cachedHandles.length) return { handles: cachedHandles, source: 'stale-cache', ageMinutes: Math.round(cachedAge / 60_000) };
+  return { handles: fresh, source: 'fixtures-only' };
 }
 
 /* One request per product instead of paging the whole catalogue: at a 20
@@ -85,7 +103,7 @@ async function fetchProduct(client, handle) {
 
 const previous = dryRun ? null : await getState(STATE_KEY);
 const runIndex = Number(previous?.runIndex) || 0;
-const { handles: allHandles, stale } = await watchHandles();
+const { handles: allHandles, ...handleSource } = await watchHandles();
 const handles = pickHandles(allHandles, {
   canaries: Number(settings.canaries) || 1,
   rotating: Number(settings.rotating) || 1,
@@ -93,7 +111,7 @@ const handles = pickHandles(allHandles, {
 });
 
 if (!handles.length) {
-  console.log(JSON.stringify({ event: 'storefront_watch_no_handles', stale }));
+  console.log(JSON.stringify({ event: 'storefront_watch_no_handles', ...handleSource }));
   if (!dryRun) await heartbeat('watch', { status: 'error', note: 'no handles to probe' });
   process.exit(0);
 }
@@ -122,7 +140,7 @@ const summary = {
   status: verdict.status,
   measured: verdict.measured,
   broken: verdict.broken,
-  handlesStale: stale,
+  handles: handleSource,
   results: results.map((entry) => ({
     handle: entry.handle,
     status: entry.judgement.status,

@@ -73,6 +73,7 @@
     "_why_observe": "Starts in observe so its first days are measured, not trusted. Arm it once the log shows it reporting ok on a store that was selling. The failure it watches for is deterministic, so once armed two consecutive failures 20 minutes apart is enough confirmation.",
     "mode": "observe",
     "observe_since": "2026-09-21",
+    "handles_refresh_hours": 6,
     "canaries": 1,
     "rotating": 1,
     "consecutive_failures": 2,
