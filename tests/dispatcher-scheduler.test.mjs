@@ -185,3 +185,61 @@ test('Layer 2 daily is dispatched once per site after 02:10 UTC when the heartbe
   const running = planDispatches({ health: health(stale), now: day('02:10'), sites: SITES, runs: { 'site-health-v2.yml': [{ id: 1, status: 'in_progress', conclusion: null, created_at: new Date(day('01:40')).toISOString() }] } });
   assert.ok(running.skipped.some((entry) => entry.target === 'layer2:apgo-my' && entry.reason === 'recent_run:in_progress'), 'an on-time GitHub daily still running blocks the dispatch');
 });
+
+/* The synthetic checkout watch. It rides the same generic rule loop as
+   realtime and layer3, so these pin the parts that are specific to it: that a
+   site which has not opted in is left alone, and that 18 minutes against a
+   20-minute cadence means a slightly late run does not skip the next slot. */
+const WATCH_SITES = [{ id: 'apgo-my', label: 'APGO MY', enabledLayers: ['layer1', 'layer2', 'layer3', 'layer4', 'watch'] }];
+
+function watchHealth(watchMinutes) {
+  return {
+    ok: true,
+    sites: [{
+      siteId: 'apgo-my',
+      layers: [
+        { layer: 'layer4', ageSeconds: 60 },
+        { layer: 'layer3', ageSeconds: 60 },
+        { layer: 'layer2', ageSeconds: 60 },
+        ...(watchMinutes === null ? [] : [{ layer: 'watch', ageSeconds: watchMinutes * 60 }]),
+      ],
+    }],
+  };
+}
+
+test('the watch is dispatched once its heartbeat passes 18 minutes', () => {
+  const fresh = planDispatches({ health: watchHealth(10), now: NOON, sites: WATCH_SITES });
+  assert.equal(fresh.decisions.find((entry) => entry.workflow === 'storefront-watch.yml'), undefined);
+  assert.ok(fresh.skipped.some((entry) => entry.target === 'watch' && entry.reason === 'fresh'));
+
+  const stale = planDispatches({ health: watchHealth(19), now: NOON, sites: WATCH_SITES });
+  const decision = stale.decisions.find((entry) => entry.workflow === 'storefront-watch.yml');
+  assert.ok(decision, 'a watch heartbeat older than 18 minutes must be re-dispatched');
+  assert.deepEqual(decision.inputs, { trigger: 'scheduler', dry_run: 'false' });
+  assert.equal(decision.lockKey, 'dispatch-lock:storefront-watch');
+});
+
+test('a site that has not opted into the watch is never dispatched one', () => {
+  // SITES has no 'watch' in enabledLayers, which is what an unmigrated site
+  // looks like. It must not start receiving probe runs.
+  const plan = planDispatches({ health: watchHealth(60), now: NOON, sites: SITES });
+  assert.equal(plan.decisions.find((entry) => entry.workflow === 'storefront-watch.yml'), undefined);
+});
+
+test('a watch heartbeat that never arrived counts as stale, not as absent', () => {
+  // The first run after deploy has no heartbeat at all. If that read as
+  // "nothing to do", the watch would never start.
+  const plan = planDispatches({ health: watchHealth(null), now: NOON, sites: WATCH_SITES });
+  assert.ok(plan.decisions.some((entry) => entry.workflow === 'storefront-watch.yml'));
+});
+
+test('a recent watch run blocks a second dispatch', () => {
+  const plan = planDispatches({
+    health: watchHealth(60),
+    now: NOON,
+    sites: WATCH_SITES,
+    runs: { 'storefront-watch.yml': [run(3)] },
+  });
+  assert.equal(plan.decisions.find((entry) => entry.workflow === 'storefront-watch.yml'), undefined);
+  assert.ok(plan.skipped.some((entry) => entry.target === 'watch' && String(entry.reason).startsWith('recent_run')));
+});

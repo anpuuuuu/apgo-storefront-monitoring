@@ -48,7 +48,10 @@ async function heartbeat(request, env) {
   if (!authenticated) return json({ ok: false, error: 'unauthorized' }, 401);
   let body;
   try { body = await request.json(); } catch { return json({ ok: false, error: 'invalid JSON' }, 400); }
-  if (!['layer1', 'layer2', 'layer3', 'layer4'].includes(body.layer)) return json({ ok: false, error: 'invalid layer' }, 400);
+  // 'watch' is the synthetic checkout probe. It is not a fifth layer of the
+  // site model -- it is Layer 4's fast line -- but it needs its own heartbeat
+  // so its schedule is independent of the GA4 run's.
+  if (!['layer1', 'layer2', 'layer3', 'layer4', 'watch'].includes(body.layer)) return json({ ok: false, error: 'invalid layer' }, 400);
   const site = siteById(String(body.siteId || ''));
   if (!site || !site.enabledLayers.includes(body.layer)) return json({ ok: false, error: 'invalid siteId or disabled layer' }, 400);
   const normalizedStatus = normalizeHeartbeatStatus(body.status);

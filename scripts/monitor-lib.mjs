@@ -18,10 +18,14 @@ export function stateKey(key) {
   return `${siteId}:${monitorMode === 'live' ? '' : 'shadow:'}${key}`;
 }
 
-export function missingRequiredEnv({ needsD1 = true, needsHeartbeat = monitorMode === 'live' } = {}) {
+/* needsGa4 defaults to true because every caller until the synthetic checkout
+   watch read GA4. The watch talks only to the storefront, and demanding a
+   Google token it never uses would make its workflow do the whole OIDC dance
+   for nothing — and fail closed if that dance ever broke. */
+export function missingRequiredEnv({ needsD1 = true, needsGa4 = true, needsHeartbeat = monitorMode === 'live' } = {}) {
   const missing = [];
-  if (!propertyId) missing.push('GA4_PROPERTY_ID');
-  if (!accessToken) missing.push('GOOGLE_OAUTH_ACCESS_TOKEN');
+  if (needsGa4 && !propertyId) missing.push('GA4_PROPERTY_ID');
+  if (needsGa4 && !accessToken) missing.push('GOOGLE_OAUTH_ACCESS_TOKEN');
   if (!workerUrl) missing.push('MONITOR_WORKER_URL');
   if (needsD1 && !accountId) missing.push('CF_ACCOUNT_ID');
   if (needsD1 && !cfToken) missing.push('CF_API_TOKEN');

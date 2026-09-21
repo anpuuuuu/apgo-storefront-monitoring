@@ -13,7 +13,13 @@ const sites = (config.sites || []).filter((site) => site.enabled).map((site) => 
   repository: site.repository,
   repositoryId: String(site.repositoryId),
   branchRef: `refs/heads/${site.defaultBranch}`,
-  enabledLayers: (site.layers || []).map((layer) => `layer${layer}`),
+  /* 'watch' rides alongside the numbered layers rather than inside them: the
+     synthetic checkout probe is Layer 4's fast line, not a layer of its own,
+     but the heartbeat gate and the Dispatcher both key off this list. */
+  enabledLayers: [
+    ...(site.layers || []).map((layer) => `layer${layer}`),
+    ...(site.storefrontWatch ? ['watch'] : []),
+  ],
   // Push-based order heartbeat (workers/error-monitor/orders.mjs): the shared
   // token stays a Worker secret; only its env name is catalogued.
   ...(site.orders ? { orders: { source: site.orders.source || 'push', tokenEnv: site.orders.tokenEnv, timeZone: site.orders.timeZone } } : {}),
