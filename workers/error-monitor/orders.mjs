@@ -108,7 +108,7 @@ function localClock(ms, timeZone) {
 /* Traffic never suppresses the alert; it changes what the alert tells the
    owner to look at. Orders stopped while people are still shopping points at
    checkout. Orders stopped while traffic stopped too points at the ads. */
-export function trafficNote(traffic, nowMs, { maxAgeMinutes = 20 } = {}) {
+export function trafficNote(traffic, nowMs, { maxAgeMinutes = 40 } = {}) {
   const checkedAtMs = Date.parse(traffic?.checkedAt || '');
   if (!Number.isFinite(checkedAtMs) || (nowMs - checkedAtMs) / 60_000 > maxAgeMinutes) {
     return '同时段流量：读不到（GA4 检查太旧或没跑）';

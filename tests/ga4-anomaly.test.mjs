@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   appendCoverage,
+  baselineForSlot,
+  countsForWindow,
   coverageForDate,
   durationText,
   evaluateDropRules,
   isDailyStageFresh,
+  minuteToMs,
   nextRuleState,
+  propertyMinuteNow,
   realertDelayHours,
+  settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
 } from '../scripts/ga4-anomaly-lib.mjs';
@@ -138,6 +144,11 @@ test('isDailyStageFresh only skips a repeat of the same stage and date inside th
   assert.equal(isDailyStageFresh(null, 'confirm', '20260907', T0, twelveHours), false);
 });
 
+/* evaluateDropRules no longer drives an alert -- add_to_cart_drop and
+   begin_checkout_drop were retired on 2026-09-21. The function survives
+   because scripts/ga4-diagnose.mjs replays it, so the idea can be re-priced
+   against fresh data rather than re-argued, and these tests keep that replay
+   honest. */
 test('evaluateDropRules fires only on partial collapses with normal upstream volume', () => {
   const baseline = { page_view: 235, add_to_cart: 25, begin_checkout: 6 };
   const settings = { traffic_floor_ratio: 0.6, drop_ratio: 0.35, add_to_cart_min_median: 8, begin_checkout_min_median: 2, current_atc_min: 8 };
@@ -166,4 +177,176 @@ test('evaluateDropRules fires only on partial collapses with normal upstream vol
   assert.equal(zeroCheckout.begin_checkout_drop, false, 'zero stays with begin_checkout_zero');
   const thinBaseline = evaluateDropRules({ page_view: 220, add_to_cart: 30, begin_checkout: 1 }, { page_view: 235, add_to_cart: 25, begin_checkout: 1 }, settings);
   assert.equal(thinBaseline.begin_checkout_drop, false, 'baseline checkout median below the minimum');
+});
+
+/* ---------------------------------------------------------------- *
+   The settled window: the rules read a 30-minute slot that has
+   finished arriving, instead of runRealtimeReport's trailing half
+   hour. Everything below pins the parts that used to be implicit.
+ * ---------------------------------------------------------------- */
+
+const TZ = 'Asia/Kuala_Lumpur';
+const row = (stamp, event, count) => ({
+  dimensionValues: [{ value: stamp }, { value: event }],
+  metricValues: [{ value: String(count) }],
+});
+const medianOf = (values) => {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+test('minuteToMs reads the wall clock in the property timezone', () => {
+  // Malaysia is UTC+8 with no DST, so 13:00 local is 05:00 UTC.
+  assert.equal(minuteToMs('202609211300', TZ), Date.parse('2026-09-21T05:00:00Z'));
+  assert.ok(Number.isNaN(minuteToMs('2026092113', TZ)));
+});
+
+test('minuteToMs survives a DST boundary', () => {
+  // London moves off BST at 02:00 on 2026-10-25. Both sides must land on
+  // the instant they name, which a fixed offset would get an hour wrong.
+  assert.equal(minuteToMs('202610250030', 'Europe/London'), Date.parse('2026-10-24T23:30:00Z'));
+  assert.equal(minuteToMs('202610250330', 'Europe/London'), Date.parse('2026-10-25T03:30:00Z'));
+});
+
+test('propertyMinuteNow and minuteToMs are inverses', () => {
+  const ms = Date.parse('2026-09-21T05:17:00Z');
+  assert.equal(propertyMinuteNow(ms, TZ), '202609211317');
+  assert.equal(minuteToMs(propertyMinuteNow(ms, TZ), TZ), ms);
+});
+
+test('settledWindow floors to a slot fully inside the settled zone', () => {
+  const now = Date.parse('2026-09-21T06:47:00Z');
+  const w = settledWindow(now, { timeZone: TZ });
+  assert.equal(w.key, '202609211230');
+  assert.equal(w.clock, '1230');
+  assert.equal(w.endStamp, '202609211300');
+  // Flooring to a slot boundary means the window END lands 90 to 119
+  // minutes back and the START 120 to 149. That is the point of the 120:
+  // the freshness probe found the 120-90 minute band complete and the
+  // 90-60 band half filled, so 90 is the youngest edge worth judging.
+  assert.ok((now - w.endMs) / 60_000 >= 90, 'nothing younger than the settled boundary');
+  assert.ok((now - w.startMs) / 60_000 >= 120, 'the slot starts past the full lag');
+});
+
+test('the 19/49 cron reads each slot exactly once', () => {
+  // The workflow runs at :19 and :49. With a 120-minute lag those land on
+  // the :00 and :30 slots, so consecutive runs never re-read a slot and
+  // never skip one -- which is what "two consecutive windows" depends on.
+  const seen = [];
+  for (let i = 0; i < 6; i += 1) {
+    const at = Date.parse('2026-09-21T06:19:00Z') + i * 30 * 60_000;
+    seen.push(settledWindow(at, { timeZone: TZ }).key);
+  }
+  assert.deepEqual(seen, [
+    '202609211200', '202609211230', '202609211300',
+    '202609211330', '202609211400', '202609211430',
+  ]);
+});
+
+test('settledWindow crosses midnight into the previous day', () => {
+  // 01:05 local minus two hours is 23:05 the previous day.
+  const w = settledWindow(Date.parse('2026-09-21T17:05:00Z'), { timeZone: TZ });
+  assert.equal(w.key, '202609212300');
+  assert.equal(w.endStamp, '202609212330');
+  // And the last slot of the day has to roll the date forward on its end.
+  const last = settledWindow(Date.parse('2026-09-21T17:35:00Z'), { timeZone: TZ });
+  assert.equal(last.key, '202609212330');
+  assert.equal(last.endStamp, '202609220000');
+});
+
+test('countsForWindow takes the slot and nothing either side of it', () => {
+  const w = settledWindow(Date.parse('2026-09-21T06:47:00Z'), { timeZone: TZ });
+  const report = { rows: [
+    row('202609211229', 'add_to_cart', 99),   // one minute early
+    row('202609211230', 'add_to_cart', 3),
+    row('202609211245', 'add_to_cart', 4),
+    row('202609211259', 'begin_checkout', 2),
+    row('202609211300', 'add_to_cart', 99),   // the next slot
+    row('202609201245', 'add_to_cart', 99),   // yesterday
+  ] };
+  assert.deepEqual(countsForWindow(report, w, ['add_to_cart', 'begin_checkout', 'purchase']), {
+    add_to_cart: 7, begin_checkout: 2, purchase: 0,
+  });
+});
+
+test('baselineForSlot takes the same clock slot on earlier days only', () => {
+  const w = settledWindow(Date.parse('2026-09-21T06:47:00Z'), { timeZone: TZ });
+  const report = { rows: [
+    row('202609181235', 'begin_checkout', 2),
+    row('202609191240', 'begin_checkout', 4),
+    row('202609201230', 'begin_checkout', 6),
+    row('202609201259', 'begin_checkout', 2),   // same day, same slot: sums to 8
+    row('202609201330', 'begin_checkout', 99),  // different slot
+    row('202609211245', 'begin_checkout', 99),  // the day under judgement
+  ] };
+  // Days are 2, 4, 8 -> median 4. Today is excluded, so a day can never be
+  // its own baseline.
+  assert.deepEqual(baselineForSlot(report, w, ['begin_checkout'], medianOf), { begin_checkout: 4 });
+});
+
+test('a slot with no rows counts as a real zero, not missing data', () => {
+  const w = settledWindow(Date.parse('2026-09-21T06:47:00Z'), { timeZone: TZ });
+  assert.deepEqual(countsForWindow({ rows: [] }, w, ['add_to_cart']), { add_to_cart: 0 });
+  assert.deepEqual(countsForWindow({}, w, ['add_to_cart']), { add_to_cart: 0 });
+});
+
+test('a streak advances per slot, not per run', () => {
+  const settings = { max_gap_minutes: 45, min_gap_minutes: 15, consecutive_zeros: 2 };
+  const first = settledWindow(Date.parse('2026-09-21T06:19:00Z'), { timeZone: TZ });
+  const second = settledWindow(Date.parse('2026-09-21T06:49:00Z'), { timeZone: TZ });
+  assert.notEqual(first.key, second.key);
+
+  const a = nextRuleState(null, true, Date.now(), settings, first);
+  assert.equal(a.next.consecutive, 1);
+  assert.equal(a.confirmed, false);
+
+  // A retry, a manual dispatch or a late runner can read the same slot
+  // twice. That is one observation, not two.
+  const b = nextRuleState(a.next, true, Date.now(), settings, first);
+  assert.equal(b.next.consecutive, 1);
+  assert.equal(b.next.duplicate, true);
+  assert.equal(b.confirmed, false);
+
+  const c = nextRuleState(b.next, true, Date.now(), settings, second);
+  assert.equal(c.next.consecutive, 2);
+  assert.equal(c.confirmed, true);
+});
+
+test('a skipped slot restarts the streak', () => {
+  const settings = { max_gap_minutes: 45, min_gap_minutes: 15, consecutive_zeros: 2 };
+  const first = settledWindow(Date.parse('2026-09-21T06:19:00Z'), { timeZone: TZ });
+  const third = settledWindow(Date.parse('2026-09-21T07:49:00Z'), { timeZone: TZ });
+  const a = nextRuleState(null, true, Date.now(), settings, first);
+  const b = nextRuleState(a.next, true, Date.now(), settings, third);
+  assert.equal(b.next.coverageGap, true);
+  assert.equal(b.next.consecutive, 1, 'an unobserved slot is not evidence of anything');
+  assert.equal(b.confirmed, false);
+});
+
+test('without a window the run clock still decides, as it did before', () => {
+  const settings = { max_gap_minutes: 45, min_gap_minutes: 15, consecutive_zeros: 2 };
+  const t0 = Date.parse('2026-09-21T06:19:00Z');
+  const a = nextRuleState(null, true, t0, settings);
+  const b = nextRuleState(a.next, true, t0 + 30 * 60_000, settings);
+  assert.equal(b.next.consecutive, 2);
+  assert.equal(b.confirmed, true);
+});
+
+test('the retired deviation-band rules stay retired', async () => {
+  /* The thresholds are still in the config so the diagnostic can re-price
+     the idea against fresh data. That makes re-arming them a one-word edit,
+     which is exactly why the mode is pinned here: turning them back on
+     should mean replacing this test and its evidence, not flipping a
+     string. Over 35 settled days add_to_cart_drop fired three times with
+     purchases at or above the slot median through every one, and
+     begin_checkout_drop fired zero times -- including on 2026-09-15. */
+  const config = JSON.parse(await readFile(new URL('../config/alerts-config.json', import.meta.url), 'utf8'));
+  const drop = config.ga4.realtime.drop;
+  assert.equal(drop.mode, 'retired');
+  assert.equal(drop.retired_since, '2026-09-21');
+  assert.match(drop._retired, /35 settled days/);
+  // purchase_tracking_gap still lives in this block and is not retired with them.
+  assert.equal(drop.purchase_tracking_mode, 'observe');
 });

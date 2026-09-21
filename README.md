@@ -78,16 +78,23 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 认证使用 GitHub OIDC/WIF，不使用或保存 JSON Service Account Key。
 
-实时每 30 分钟读取最近 30 分钟：`page_view`、`view_item`、`add_to_cart`、`begin_checkout`、`purchase`。
+每 30 分钟判断**一个已经补齐的 30 分钟时段**：`page_view`、`view_item`、`add_to_cart`、`begin_checkout`、`purchase`。
+
+- 判断的不是「刚刚这半小时」。`settled_lag_minutes: 120` 往回推两小时再对齐到半点，所以每次看的时段结束于 90–119 分钟前、开始于 120–149 分钟前。`19,49 * * * *` 的排程刚好让两次运行落在 `:00` 和 `:30` 两个时段，一个时段只读一次、也不会跳过。
+- 为什么不再用 `runRealtimeReport`：那是另一条管线，跟基线用的 `runReport` 对不上。2026-09-20 同一个时段两边相差 36%，而且实时接口最后一小时几乎是空的、90–60 分钟那段只补到一半——拿没补完的跟补完的比，进结账天生被砍得最狠。拿同一套规则回放 35 天已结算数据是**每 17.5 天误报一次**，线上跑实时数据是**每 3 天一次**。噪音在数据源，不在判断逻辑。
+- 代价：发现时间从约 1 小时变成约 2.5 小时（两个相邻时段确认）。这条规则因此定位成慢的兜底；要快就靠合成探测那条线。
+- 连续窗口按**时段身份**算，不按运行时刻算：重跑、手动派发、runner 迟到都可能把同一个时段读两次，那只算一次观测（`windowKey` 去重）。中间漏掉一个时段则重新计数。
+- 当前值与基线来自**同一次查询**（按 `hour` 过滤后 28 天只有几千行），所以两边是同一种测量、只是不同日子。GA4 报告若被行数上限截断，直接记 `baseline_truncated` 并跳过判断——半截基线跟「店里很安静」长得一模一样。
 
 排程由 Dispatcher Worker 的 Cloudflare Cron（`*/5`）负责：读取 `/health`，Layer 4 心跳 ≥28 分钟就 `workflow_dispatch` 一次 `realtime`；UTC 04:25 / 06:55 之后各派发一次 `daily-primary` / `daily-confirm`；Layer 3 心跳 >90 分钟派发 self-health。GitHub 自己的 `19,49 * * * *` 与 daily cron 保留作冗余——GitHub 对高频 cron 只送达约 18%，对每日 cron 会晚 4–6 小时，不能单独依赖。KV 锁、最近 15 分钟已有 run、以及失败后 60 分钟退避都会阻止重复派发。
 
-- 告警送达：首次触发后状况持续，按 `realert_schedule_hours: [1, 2, 3]` 在 +1h、+2h、+3h 各提醒一次，之后每 3 小时，每条注明「第 N 次提醒，已持续 X」；恢复时发 🟢（静默）。文案带「先查什么」（运费 / 折扣 / 库存 / 结账设置 / 主题或 app 更新）和当时正在产生加购的商品页（GA4 realtime 按 `unifiedScreenName` 拆）。2026-09-15 的 free-shipping 事故在旧的 6 小时平铺重报下 00:46 响过一次后 07:16 才再响，中间被淹没在杂讯里。
+- 告警送达：首次触发后状况持续，按 `realert_schedule_hours: [1, 2, 3]` 在 +1h、+2h、+3h 各提醒一次，之后每 3 小时，每条注明「第 N 次提醒，已持续 X」；恢复时发 🟢（静默）。文案带「先查什么」（运费 / 折扣 / 库存 / 结账设置 / 主题或 app 更新）和当时正在产生加购的商品页（按 `unifiedScreenName` 拆，**取的是被判断的那个时段**，不是发告警的那一刻）。2026-09-15 的 free-shipping 事故在旧的 6 小时平铺重报下 00:46 响过一次后 07:16 才再响，中间被淹没在杂讯里。
 - Collection：Layer 1 正常、同期中位数 ≥10、连续两个窗口 page_view=0。
 - ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。 2026-09-15 00:46 / 07:16 MYT 两次触发（ATC 5 / 7）经店主确认是真实事件：广告商品的 free shipping 被误关，顾客加购后不结账——**不要用「Shopify 最近有别的订单」压掉这条**，别的商品有人下单不能证明广告商品的结账没坏（#58 曾这么做，已回退）。
 - 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
-- 偏离带规则（`ga4.realtime.drop`，独立 `mode`；2026-09-08 起 observe，**2026-09-11 起 armed**）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥；确认窗口为 `consecutive_windows: 3`（相邻三窗，90 分钟）——三天全覆盖 observe 里两次 `begin_checkout_drop` 都在下一窗自愈，三窗确认可以过滤这类抖动。
+- 偏离带规则 `add_to_cart_drop` / `begin_checkout_drop` **2026-09-21 退役**（observe 09-08，armed 09-11）。拿 35 天已结算数据回放：`add_to_cart_drop` 触发 3 次（20260902-1800、20260905-2000、20260907-1930），**每一次成交都在同时段中位数之上**，其中两次的下一格分别是 500% 和 600%——一分钱没丢；它还要求当前值 >0，所以「加购完全归零」这个最该报的情况它反而不报，而那本来就归 `add_to_cart_zero` 管。`begin_checkout_drop` 35 天**零触发**，连 9/15 免运费事故的两个窗口都没抓到。
+- 9/15 真事故的签名是**加购正常甚至偏高、进结账归零、成交归零**——人一直在加购，就是没人结账。这正是零检测规则在看的东西；偏离带规则一直在它周围量，从没量到它。阈值留在 `ga4.realtime.drop` 里没删，是为了让诊断能拿新数据重新定价，不必从头吵一遍。
 - 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由平台推送的订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻三窗 → 追踪断了，不是生意问题（`ga4.realtime.drop.purchase_tracking_mode`，单独开关，仍为 observe：POS / 草稿订单等未追踪渠道会让 GA4 合理地没有 purchase）。
 
 ### 订单心跳（平台推送）

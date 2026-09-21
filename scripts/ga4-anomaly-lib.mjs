@@ -1,18 +1,126 @@
 /* Pure helpers for the Layer 4 realtime/daily scripts. No env or network
    access here so `node --test` can import them directly. */
 
+/* GA4 reports dateHourMinute as a wall clock in the property's reporting
+   timezone. Read that zone's offset from the zone itself rather than assuming
+   one, so the maths stays right if the property moves and so a zone with DST
+   lines up on both sides of a transition. */
+export function minuteToMs(stamp, timeZone) {
+  const text = String(stamp);
+  if (!/^\d{12}$/.test(text)) return NaN;
+  const iso = `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}T${text.slice(8, 10)}:${text.slice(10, 12)}:00Z`;
+  const asUtc = Date.parse(iso);
+  if (!Number.isFinite(asUtc)) return NaN;
+  const offsetAt = (ms) => {
+    const label = new Intl.DateTimeFormat('en-GB', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(new Date(ms)).find((part) => part.type === 'timeZoneName')?.value || 'GMT+00:00';
+    const match = label.match(/GMT([+-])(\d{2}):(\d{2})/);
+    return match ? (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3])) : 0;
+  };
+  // Two passes: the offset must be read at the instant being named, not at the
+  // UTC-shaped guess, or a DST boundary lands an hour out.
+  const first = asUtc - offsetAt(asUtc) * 60_000;
+  return asUtc - offsetAt(first) * 60_000;
+}
+
+export function propertyMinuteNow(nowMs, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(nowMs));
+  const get = (type) => parts.find((part) => part.type === type)?.value || '00';
+  return `${get('year')}${get('month')}${get('day')}${get('hour')}${get('minute')}`;
+}
+
+/* The most recent 30-minute slot that is old enough to have finished arriving.
+
+   The rules used to read runRealtimeReport's trailing 30 minutes and compare it
+   with a baseline built from settled runReport data — two different pipelines,
+   which need not agree even with no lag: one aligned comparison on 2026-09-20
+   put realtime 36% above the settled figure for the same window. Replaying the
+   rule over 35 settled days produces one false alarm every 17.5 days while
+   production on realtime produced one every three, so the noise is in the
+   source, not the logic.
+
+   The realtime API cannot look back past 29 minutes, so reading settled data
+   means runReport, which on 2026-09-20 held nothing at all for the last 60
+   minutes and only part of 90-60. Hence a lag of 90 minutes and a whole slot:
+   detection moves from about an hour to about two, in exchange for six times
+   fewer false alarms.
+
+   The lag is 120 rather than 90 so the whole slot sits inside the settled
+   zone. At 90 the slot would end 77 minutes back, and the 90-60 band was
+   measured half-filled (46 page views against a typical 120), which would
+   quietly reintroduce the very bias this replaces. */
+export function settledWindow(nowMs, { timeZone, lagMinutes = 120, slotMinutes = 30 }) {
+  const stamp = propertyMinuteNow(nowMs - lagMinutes * 60_000, timeZone);
+  const minute = Number(stamp.slice(10, 12));
+  const floored = `${stamp.slice(0, 10)}${String(Math.floor(minute / slotMinutes) * slotMinutes).padStart(2, '0')}`;
+  const startMs = minuteToMs(floored, timeZone);
+  return {
+    key: floored,
+    clock: floored.slice(8, 12),
+    startStamp: floored,
+    endStamp: propertyMinuteNow(startMs + slotMinutes * 60_000, timeZone),
+    startMs,
+    endMs: startMs + slotMinutes * 60_000,
+    slotMinutes,
+  };
+}
+
+/* Counts for one slot out of a dateHourMinute report. Half-open on the end so
+   a minute never lands in two slots. */
+export function countsForWindow(report, window, eventNames) {
+  const counts = Object.fromEntries(eventNames.map((name) => [name, 0]));
+  for (const row of report?.rows || []) {
+    const stamp = row.dimensionValues?.[0]?.value || '';
+    if (stamp.length !== 12 || stamp < window.startStamp || stamp >= window.endStamp) continue;
+    const name = row.dimensionValues?.[1]?.value;
+    if (name in counts) counts[name] += Number(row.metricValues?.[0]?.value || 0);
+  }
+  return counts;
+}
+
+/* Median of the same clock slot on earlier days, which is what the slot should
+   be compared against. Rows from the slot's own day are excluded so a day
+   cannot be its own baseline. */
+export function baselineForSlot(report, window, eventNames, medianFn) {
+  const byDate = new Map();
+  for (const row of report?.rows || []) {
+    const stamp = row.dimensionValues?.[0]?.value || '';
+    if (stamp.length !== 12) continue;
+    const date = stamp.slice(0, 8);
+    if (date >= window.startStamp.slice(0, 8)) continue;
+    const minute = Number(stamp.slice(10, 12));
+    const slotStart = Math.floor(minute / window.slotMinutes) * window.slotMinutes;
+    if (`${stamp.slice(8, 10)}${String(slotStart).padStart(2, '0')}` !== window.clock) continue;
+    if (!byDate.has(date)) byDate.set(date, Object.fromEntries(eventNames.map((name) => [name, 0])));
+    const name = row.dimensionValues?.[1]?.value;
+    if (name in byDate.get(date)) byDate.get(date)[name] += Number(row.metricValues?.[0]?.value || 0);
+  }
+  const days = [...byDate.values()];
+  return Object.fromEntries(eventNames.map((name) => [name, medianFn(days.map((day) => day[name] || 0))]));
+}
+
 /* "Two consecutive windows" only means something when the samples are
    adjacent. GitHub's scheduler used to deliver realtime runs hours apart,
    which made a 5-hour gap count as consecutive; the Dispatcher Cron and
    GitHub's own cron can now also land two runs a minute apart. A gap above
    max_gap_minutes restarts the count, a gap below min_gap_minutes is the
    same window sampled twice and does not advance it. */
-export function nextRuleState(previous, abnormal, nowMs, settings) {
+export function nextRuleState(previous, abnormal, nowMs, settings, window = null) {
   const prior = { consecutive: 0, active: false, lastAlertedAt: 0, ...(previous || {}) };
-  const priorMs = prior.checkedAt ? Date.parse(prior.checkedAt) : Number.NaN;
-  const gapMinutes = Number.isFinite(priorMs) ? (nowMs - priorMs) / 60_000 : null;
+  /* With a settled window the run clock no longer says anything useful: the
+     job runs every 28 minutes but reads a slot that only moves every 30, so
+     two runs often read the same slot. Identity of the data read is what
+     decides whether a streak advanced, so key on the slot when there is one
+     and fall back to the run clock when there is not. */
+  const priorMs = window ? Number(prior.windowStartMs) : (prior.checkedAt ? Date.parse(prior.checkedAt) : Number.NaN);
+  const currentMs = window ? window.startMs : nowMs;
+  const gapMinutes = Number.isFinite(priorMs) ? (currentMs - priorMs) / 60_000 : null;
   const coverageGap = gapMinutes !== null && gapMinutes > settings.max_gap_minutes;
-  const duplicate = gapMinutes !== null && gapMinutes < settings.min_gap_minutes;
+  const duplicate = window
+    ? prior.windowKey === window.key
+    : gapMinutes !== null && gapMinutes < settings.min_gap_minutes;
   let consecutive = 0;
   if (abnormal) {
     if (gapMinutes === null || coverageGap) consecutive = 1;
@@ -27,6 +135,8 @@ export function nextRuleState(previous, abnormal, nowMs, settings) {
     // When the abnormal streak began, for "已持续 X" in alerts and recovery.
     abnormalSince: abnormal ? (restarted ? new Date(nowMs).toISOString() : prior.abnormalSince) : null,
     checkedAt: new Date(nowMs).toISOString(),
+    windowKey: window ? window.key : prior.windowKey,
+    windowStartMs: window ? window.startMs : prior.windowStartMs,
     gapMinutes: gapMinutes === null ? null : Math.round(gapMinutes * 10) / 10,
     coverageGap,
     duplicate,
@@ -102,6 +212,12 @@ export function coverageForDate(timestamps, dateYYYYMMDD, timeZone, windowMinute
 
 /* Deviation-band rules for partial failures. Both require the current count
    to be above zero so they stay disjoint from the *_zero rules.
+   RETIRED as an alerting path on 2026-09-21 -- kept because the diagnostic
+   replays it, so the idea can be re-priced against fresh data instead of
+   re-argued. Over 35 settled days add_to_cart_drop fired three times with
+   purchases at or above the slot median every time, and begin_checkout_drop
+   fired zero times, including on the 2026-09-15 incident.
+
    - add_to_cart_drop: traffic at or above traffic_floor_ratio of baseline,
      ATC at or below drop_ratio of its baseline median.
    - begin_checkout_drop: enough current ATC, and the checkout/ATC ratio at

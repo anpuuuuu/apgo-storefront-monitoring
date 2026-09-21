@@ -10,7 +10,16 @@ import {
   telegram,
   workerHealthy,
 } from './monitor-lib.mjs';
-import { appendCoverage, durationText, evaluateDropRules, nextRuleState, shouldRecordAlert, topScreensForEvent } from './ga4-anomaly-lib.mjs';
+import {
+  appendCoverage,
+  baselineForSlot,
+  countsForWindow,
+  durationText,
+  nextRuleState,
+  settledWindow,
+  shouldRecordAlert,
+  topScreensForEvent,
+} from './ga4-anomaly-lib.mjs';
 import { investigate } from './investigator.mjs';
 
 const validateOnly = process.env.VALIDATE_GA4 === 'true';
@@ -35,48 +44,41 @@ function eventFilter() {
   };
 }
 
-function realtimeCounts(report) {
-  const counts = Object.fromEntries(EVENT_NAMES.map((name) => [name, 0]));
-  for (const row of report.rows || []) {
-    counts[row.dimensionValues?.[0]?.value] = Number(row.metricValues?.[0]?.value || 0);
-  }
-  return counts;
+/* The slot being judged, and the only clock this run cares about. Both sides
+   of every comparison now come from one runReport over one hour-of-day, so
+   current and baseline are the same measurement taken on different days. */
+const window = settledWindow(Date.now(), {
+  timeZone: config.ga4.timezone,
+  lagMinutes: Number(settings.settled_lag_minutes) || 120,
+  slotMinutes: Number(settings.window_minutes) || 30,
+});
+
+/* One query answers both sides, because the baseline only ever looks at the
+   same hour of day. Without the hour filter this is 28 days x 1440 minutes x 5
+   events and brushes the row cap, at which point GA4 truncates and the
+   baseline quietly loses its most recent days; with it the answer is a few
+   thousand rows. rowCount is checked below anyway. */
+function funnelQuery() {
+  return {
+    dateRanges: [{ startDate: `${config.ga4.baseline_days}daysAgo`, endDate: 'today' }],
+    dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
+    metrics: [{ name: 'eventCount' }],
+    dimensionFilter: {
+      andGroup: {
+        expressions: [
+          eventFilter(),
+          { filter: { fieldName: 'hour', stringFilter: { value: window.clock.slice(0, 2) } } },
+        ],
+      },
+    },
+    limit: '100000',
+  };
 }
 
-function baselineCounts(report) {
-  const nowParts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: config.ga4.timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date());
-  const hour = nowParts.find((part) => part.type === 'hour').value;
-  const minute = Number(nowParts.find((part) => part.type === 'minute').value);
-  const half = minute < 30 ? 0 : 30;
-  const byDate = new Map();
-
-  for (const row of report.rows || []) {
-    const timestamp = row.dimensionValues?.[0]?.value || '';
-    const eventName = row.dimensionValues?.[1]?.value || '';
-    if (timestamp.slice(8, 10) !== hour) continue;
-    const sampleMinute = Number(timestamp.slice(10, 12));
-    if (sampleMinute < half || sampleMinute >= half + 30) continue;
-    const date = timestamp.slice(0, 8);
-    if (!byDate.has(date)) byDate.set(date, Object.fromEntries(EVENT_NAMES.map((name) => [name, 0])));
-    byDate.get(date)[eventName] += Number(row.metricValues?.[0]?.value || 0);
-  }
-
-  return Object.fromEntries(EVENT_NAMES.map((eventName) => [
-    eventName,
-    median([...byDate.values()].map((sample) => sample[eventName] || 0)),
-  ]));
-}
-
-/* Deviation-band rules arm separately from the zero rules: they start in
-   observe (would_alert only) and are promoted after their own review, the
-   same path the zero rules took. */
+/* What is left of the old deviation-band block: the purchase tracking
+   cross-check, which arms on its own switch. The band rules it used to sit
+   beside were retired on 2026-09-21; see the note above the rule list. */
 const dropSettings = settings.drop || {};
-const dropMode = dropSettings.mode || 'observe';
 
 /* What to check first. Store-side changes (shipping, discounts, stock,
    checkout settings, app/theme updates) cause most real hits; the 2026-09-15
@@ -99,26 +101,34 @@ const RULE_TEXT = {
   purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
 };
 
-/* Deviation-band rules confirm over more windows than the zero rules: three
-   days of full-coverage observe showed two begin_checkout_drop windows that
-   healed on the very next sample; a third adjacent window would have caught
-   neither. */
+/* The tracking cross-check confirms over more windows than the zero rules:
+   a single window with an order but no GA4 purchase is ordinary timing. */
 const dropRuleSettings = { ...settings, consecutive_zeros: Number(dropSettings.consecutive_windows) || settings.consecutive_zeros };
 // Orders from POS, draft orders and other untracked channels can legitimately
 // have no GA4 purchase, so the tracking cross-check arms on its own switch.
-const purchaseTrackingMode = dropSettings.purchase_tracking_mode || dropMode;
+const purchaseTrackingMode = dropSettings.purchase_tracking_mode || 'observe';
 
 // Which pages were producing the events: one extra realtime query, only when
 // an armed rule is about to page, cached for the run.
 let screensPromise = null;
 async function screensEvidence(eventName) {
-  screensPromise ||= ga('runRealtimeReport', {
-    minuteRanges: [{ name: 'last30', startMinutesAgo: 29, endMinutesAgo: 0 }],
-    dimensions: [{ name: 'eventName' }, { name: 'unifiedScreenName' }],
+  screensPromise ||= ga('runReport', {
+    dateRanges: [{ startDate: window.startStamp.slice(0, 8), endDate: window.startStamp.slice(0, 8) }],
+    dimensions: [{ name: 'eventName' }, { name: 'unifiedScreenName' }, { name: 'dateHourMinute' }],
     metrics: [{ name: 'eventCount' }],
     dimensionFilter: eventFilter(),
-    limit: '200',
-  }).catch((error) => ({ error: String(error?.message || error) }));
+    limit: '5000',
+  }).then((report) => ({
+    ...report,
+    // Keep only the slot under judgement, then drop the minute column so the
+    // rows look the way topScreensForEvent expects.
+    rows: (report.rows || [])
+      .filter((row) => {
+        const stamp = row.dimensionValues?.[2]?.value || '';
+        return stamp.length === 12 && stamp >= window.startStamp && stamp < window.endStamp;
+      })
+      .map((row) => ({ ...row, dimensionValues: row.dimensionValues.slice(0, 2) })),
+  })).catch((error) => ({ error: String(error?.message || error) }));
   const report = await screensPromise;
   if (report?.error) return '';
   const top = topScreensForEvent(report, eventName);
@@ -129,7 +139,7 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
   const key = `ga4:realtime:${rule}`;
   const previous = await getState(key) || { consecutive: 0, active: false, lastAlertedAt: 0 };
   const now = Date.now();
-  const { next, confirmed } = nextRuleState(previous, abnormal, now, ruleSettings);
+  const { next, confirmed } = nextRuleState(previous, abnormal, now, ruleSettings, window);
   next.detail = detail;
   const schedule = settings.realert_schedule_hours || settings.realert_hours;
   const shouldRecord = shouldRecordAlert(previous, confirmed, now, schedule);
@@ -147,6 +157,7 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
       const header = next.alertCount > 1 ? `🟠 [第4层·业务指标] 仍在持续（第 ${next.alertCount} 次提醒，已持续 ${since}）` : `🟡 [第4层·业务指标] ${ruleText}`;
       const lines = [header];
       if (next.alertCount > 1) lines.push(ruleText);
+      lines.push(`时段 ${window.clock.slice(0, 2)}:${window.clock.slice(2)}–${window.endStamp.slice(8, 10)}:${window.endStamp.slice(10)}（已结算，约 ${Math.round((now - window.endMs) / 60_000)} 分钟前）`);
       lines.push(`当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}`);
       const evidenceEvent = rule.startsWith('begin_checkout') || rule === 'purchase_tracking_gap' ? 'add_to_cart' : 'view_item';
       const screens = await screensEvidence(evidenceEvent);
@@ -176,34 +187,31 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
   await setState(key, next);
   return {
     rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode: ruleMode,
-    gapMinutes: next.gapMinutes, coverageGap: next.coverageGap, duplicate: next.duplicate,
+    window: window.key, gapMinutes: next.gapMinutes, coverageGap: next.coverageGap, duplicate: next.duplicate,
   };
 }
 
-const [realtime, historical, storefrontHealthy] = await Promise.all([
-  ga('runRealtimeReport', {
-    minuteRanges: [{ name: 'last30', startMinutesAgo: 29, endMinutesAgo: 0 }],
-    dimensions: [{ name: 'eventName' }],
-    metrics: [{ name: 'eventCount' }],
-    dimensionFilter: eventFilter(),
-  }),
-  ga('runReport', {
-    dateRanges: [{ startDate: `${config.ga4.baseline_days}daysAgo`, endDate: 'yesterday' }],
-    dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
-    metrics: [{ name: 'eventCount' }],
-    dimensionFilter: eventFilter(),
-    limit: '100000',
-  }),
-  workerHealthy(),
-]);
+const [funnel, storefrontHealthy] = await Promise.all([ga('runReport', funnelQuery()), workerHealthy()]);
 
-const current = realtimeCounts(realtime);
+/* A truncated report looks exactly like a quiet store, which is the one
+   failure this rewrite exists to prevent. Say so loudly rather than judging
+   half a baseline. */
+const truncated = Number(funnel.rowCount || 0) > (funnel.rows || []).length;
+
+const current = countsForWindow(funnel, window, EVENT_NAMES);
 if (simulated) current.add_to_cart = 0;
-const baseline = baselineCounts(historical);
+const baseline = baselineForSlot(funnel, window, EVENT_NAMES, median);
 
 if (validateOnly) {
-  console.log(JSON.stringify({ mode: 'validate', current, baseline, storefrontHealthy }, null, 2));
-  await heartbeat('layer4', { mode: 'validate', current, baseline });
+  console.log(JSON.stringify({ mode: 'validate', window, rows: (funnel.rows || []).length, rowCount: funnel.rowCount, truncated, current, baseline, storefrontHealthy }, null, 2));
+  await heartbeat('layer4', { mode: 'validate', window: window.key, current, baseline });
+  process.exit(0);
+}
+
+if (truncated) {
+  await logAlert('layer4', 'data_quality', { rule: 'baseline_truncated', rowCount: funnel.rowCount, returned: (funnel.rows || []).length });
+  await heartbeat('layer4', { status: 'error', window: window.key, note: 'baseline truncated', rowCount: funnel.rowCount });
+  console.error(`基线被截断：GA4 报告有 ${funnel.rowCount} 行，只拿到 ${(funnel.rows || []).length} 行。不判断，直接退出。`);
   process.exit(0);
 }
 
@@ -226,28 +234,24 @@ results.push(await updateRule(
   { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout } }
 ));
 
-// Partial failures the zero rules cannot see: traffic is normal but ATC
-// collapsed, or ATC is normal but the checkout ratio collapsed. Disjoint
-// from the zero rules (current must be > 0) so an armed zero rule and an
-// armed drop rule never page twice for the same window.
-const drop = evaluateDropRules(current, baseline, dropSettings);
-results.push(await updateRule(
-  'add_to_cart_drop',
-  drop.add_to_cart_drop,
-  { current: { page_view: current.page_view, add_to_cart: current.add_to_cart }, baseline: { page_view: baseline.page_view, add_to_cart: baseline.add_to_cart }, trafficOk: drop.trafficOk },
-  dropMode,
-  dropRuleSettings,
-));
-results.push(await updateRule(
-  'begin_checkout_drop',
-  drop.begin_checkout_drop,
-  {
-    current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout, checkout_ratio: drop.currentRatio },
-    baseline: { add_to_cart: baseline.add_to_cart, begin_checkout: baseline.begin_checkout, checkout_ratio: drop.baselineRatio },
-  },
-  dropMode,
-  dropRuleSettings,
-));
+/* The deviation-band rules add_to_cart_drop and begin_checkout_drop were
+   retired on 2026-09-21. Replayed over 35 settled days:
+
+     add_to_cart_drop    3 firings, and in all three the till kept ringing
+                         (purchases at 100% of the slot median during the
+                         firing, 500% and 600% in the window right after).
+                         It also required current > 0, so the failure that
+                         matters most -- add_to_cart at zero -- was the one
+                         case it could not report. add_to_cart_zero already
+                         covers that, and covers it for free.
+     begin_checkout_drop 0 firings in 35 days, including both windows of the
+                         2026-09-15 free-shipping incident. Never worked.
+
+   The 9/15 signature was add_to_cart healthy or high with begin_checkout at
+   zero -- people adding to cart, nobody able to check out. That is what the
+   zero rules watch for, and what the band rules were measuring around
+   without ever catching. evaluateDropRules stays in the library for the
+   diagnostic, so the idea can be re-priced rather than re-argued. */
 
 // Cross-check against the Worker's Shopify order heartbeat: an order placed
 // inside this window that GA4 did not see as a purchase is a tracking gap,
@@ -282,7 +286,7 @@ await setState('ga4:realtime:coverage', { checkedAt: appendCoverage(coverageStat
    cannot tell "nobody could check out" from "nobody came". Leave the latest
    window here for it to read. The reverse direction already exists:
    purchase_tracking_gap above reads orders:last, which the Worker writes. */
-await setState('ga4:realtime:last', { checkedAt: new Date().toISOString(), current, baseline });
+await setState('ga4:realtime:last', { checkedAt: new Date().toISOString(), window: window.key, windowClock: window.clock, current, baseline });
 
 await heartbeat('layer4', { kind: 'realtime', mode, current, baseline, results });
 console.log(JSON.stringify({ ok: true, kind: 'realtime', mode, current, baseline, storefrontHealthy, results }, null, 2));
