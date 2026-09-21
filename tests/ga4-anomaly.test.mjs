@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   appendCoverage,
@@ -143,6 +144,11 @@ test('isDailyStageFresh only skips a repeat of the same stage and date inside th
   assert.equal(isDailyStageFresh(null, 'confirm', '20260907', T0, twelveHours), false);
 });
 
+/* evaluateDropRules no longer drives an alert -- add_to_cart_drop and
+   begin_checkout_drop were retired on 2026-09-21. The function survives
+   because scripts/ga4-diagnose.mjs replays it, so the idea can be re-priced
+   against fresh data rather than re-argued, and these tests keep that replay
+   honest. */
 test('evaluateDropRules fires only on partial collapses with normal upstream volume', () => {
   const baseline = { page_view: 235, add_to_cart: 25, begin_checkout: 6 };
   const settings = { traffic_floor_ratio: 0.6, drop_ratio: 0.35, add_to_cart_min_median: 8, begin_checkout_min_median: 2, current_atc_min: 8 };
@@ -326,4 +332,21 @@ test('without a window the run clock still decides, as it did before', () => {
   const b = nextRuleState(a.next, true, t0 + 30 * 60_000, settings);
   assert.equal(b.next.consecutive, 2);
   assert.equal(b.confirmed, true);
+});
+
+test('the retired deviation-band rules stay retired', async () => {
+  /* The thresholds are still in the config so the diagnostic can re-price
+     the idea against fresh data. That makes re-arming them a one-word edit,
+     which is exactly why the mode is pinned here: turning them back on
+     should mean replacing this test and its evidence, not flipping a
+     string. Over 35 settled days add_to_cart_drop fired three times with
+     purchases at or above the slot median through every one, and
+     begin_checkout_drop fired zero times -- including on 2026-09-15. */
+  const config = JSON.parse(await readFile(new URL('../config/alerts-config.json', import.meta.url), 'utf8'));
+  const drop = config.ga4.realtime.drop;
+  assert.equal(drop.mode, 'retired');
+  assert.equal(drop.retired_since, '2026-09-21');
+  assert.match(drop._retired, /35 settled days/);
+  // purchase_tracking_gap still lives in this block and is not retired with them.
+  assert.equal(drop.purchase_tracking_mode, 'observe');
 });

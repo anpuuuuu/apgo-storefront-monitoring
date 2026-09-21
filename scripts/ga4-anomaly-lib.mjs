@@ -212,6 +212,12 @@ export function coverageForDate(timestamps, dateYYYYMMDD, timeZone, windowMinute
 
 /* Deviation-band rules for partial failures. Both require the current count
    to be above zero so they stay disjoint from the *_zero rules.
+   RETIRED as an alerting path on 2026-09-21 -- kept because the diagnostic
+   replays it, so the idea can be re-priced against fresh data instead of
+   re-argued. Over 35 settled days add_to_cart_drop fired three times with
+   purchases at or above the slot median every time, and begin_checkout_drop
+   fired zero times, including on the 2026-09-15 incident.
+
    - add_to_cart_drop: traffic at or above traffic_floor_ratio of baseline,
      ATC at or below drop_ratio of its baseline median.
    - begin_checkout_drop: enough current ATC, and the checkout/ATC ratio at

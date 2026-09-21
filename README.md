@@ -93,7 +93,8 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - ATC：同期中位数 ≥8、连续两个窗口 add_to_cart=0。
 - Checkout：当前 ATC ≥5、同期 Checkout ≥2、连续两个窗口 Checkout=0。 2026-09-15 00:46 / 07:16 MYT 两次触发（ATC 5 / 7）经店主确认是真实事件：广告商品的 free shipping 被误关，顾客加购后不结账——**不要用「Shopify 最近有别的订单」压掉这条**，别的商品有人下单不能证明广告商品的结账没坏（#58 曾这么做，已回退）。
 - 「连续两个窗口」要求样本相邻：距上一次采样超过 45 分钟视为覆盖缺口，计数从 1 重来；不足 15 分钟视为同一窗口重复采样，不累加。每次采样记入 `ga4:realtime:coverage`，日报计算前一天的窗口覆盖率，低于 80% 记 `REALTIME_COVERAGE_LOW`。
-- 偏离带规则（`ga4.realtime.drop`，独立 `mode`；2026-09-08 起 observe，**2026-09-11 起 armed**）：ATC Drop = page_view ≥ 基准 60% 且 ATC ≤ 基准 35%；Checkout Drop = 当前 ATC ≥8、基准 Checkout ≥2、Checkout/ATC 比例 ≤ 基准比例的 35%。两条都要求当前值 >0，与零检测规则互斥；确认窗口为 `consecutive_windows: 3`（相邻三窗，90 分钟）——三天全覆盖 observe 里两次 `begin_checkout_drop` 都在下一窗自愈，三窗确认可以过滤这类抖动。
+- 偏离带规则 `add_to_cart_drop` / `begin_checkout_drop` **2026-09-21 退役**（observe 09-08，armed 09-11）。拿 35 天已结算数据回放：`add_to_cart_drop` 触发 3 次（20260902-1800、20260905-2000、20260907-1930），**每一次成交都在同时段中位数之上**，其中两次的下一格分别是 500% 和 600%——一分钱没丢；它还要求当前值 >0，所以「加购完全归零」这个最该报的情况它反而不报，而那本来就归 `add_to_cart_zero` 管。`begin_checkout_drop` 35 天**零触发**，连 9/15 免运费事故的两个窗口都没抓到。
+- 9/15 真事故的签名是**加购正常甚至偏高、进结账归零、成交归零**——人一直在加购，就是没人结账。这正是零检测规则在看的东西；偏离带规则一直在它周围量，从没量到它。阈值留在 `ga4.realtime.drop` 里没删，是为了让诊断能拿新数据重新定价，不必从头吵一遍。
 - 不因 30 分钟没有 Purchase 单独告警。Purchase 一层改由平台推送的订单心跳负责（下节）；GA4 侧只保留交叉检查 `purchase_tracking_gap`：Worker 最近 20 分钟内查过订单、最新订单在 25 分钟内、同期 purchase 中位数 ≥1 而当前 purchase=0，相邻三窗 → 追踪断了，不是生意问题（`ga4.realtime.drop.purchase_tracking_mode`，单独开关，仍为 observe：POS / 草稿订单等未追踪渠道会让 GA4 合理地没有 purchase）。
 
 ### 订单心跳（平台推送）

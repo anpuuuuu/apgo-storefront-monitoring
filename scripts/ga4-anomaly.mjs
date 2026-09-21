@@ -15,7 +15,6 @@ import {
   baselineForSlot,
   countsForWindow,
   durationText,
-  evaluateDropRules,
   nextRuleState,
   settledWindow,
   shouldRecordAlert,
@@ -76,11 +75,10 @@ function funnelQuery() {
   };
 }
 
-/* Deviation-band rules arm separately from the zero rules: they start in
-   observe (would_alert only) and are promoted after their own review, the
-   same path the zero rules took. */
+/* What is left of the old deviation-band block: the purchase tracking
+   cross-check, which arms on its own switch. The band rules it used to sit
+   beside were retired on 2026-09-21; see the note above the rule list. */
 const dropSettings = settings.drop || {};
-const dropMode = dropSettings.mode || 'observe';
 
 /* What to check first. Store-side changes (shipping, discounts, stock,
    checkout settings, app/theme updates) cause most real hits; the 2026-09-15
@@ -103,14 +101,12 @@ const RULE_TEXT = {
   purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
 };
 
-/* Deviation-band rules confirm over more windows than the zero rules: three
-   days of full-coverage observe showed two begin_checkout_drop windows that
-   healed on the very next sample; a third adjacent window would have caught
-   neither. */
+/* The tracking cross-check confirms over more windows than the zero rules:
+   a single window with an order but no GA4 purchase is ordinary timing. */
 const dropRuleSettings = { ...settings, consecutive_zeros: Number(dropSettings.consecutive_windows) || settings.consecutive_zeros };
 // Orders from POS, draft orders and other untracked channels can legitimately
 // have no GA4 purchase, so the tracking cross-check arms on its own switch.
-const purchaseTrackingMode = dropSettings.purchase_tracking_mode || dropMode;
+const purchaseTrackingMode = dropSettings.purchase_tracking_mode || 'observe';
 
 // Which pages were producing the events: one extra realtime query, only when
 // an armed rule is about to page, cached for the run.
@@ -238,28 +234,24 @@ results.push(await updateRule(
   { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout } }
 ));
 
-// Partial failures the zero rules cannot see: traffic is normal but ATC
-// collapsed, or ATC is normal but the checkout ratio collapsed. Disjoint
-// from the zero rules (current must be > 0) so an armed zero rule and an
-// armed drop rule never page twice for the same window.
-const drop = evaluateDropRules(current, baseline, dropSettings);
-results.push(await updateRule(
-  'add_to_cart_drop',
-  drop.add_to_cart_drop,
-  { current: { page_view: current.page_view, add_to_cart: current.add_to_cart }, baseline: { page_view: baseline.page_view, add_to_cart: baseline.add_to_cart }, trafficOk: drop.trafficOk },
-  dropMode,
-  dropRuleSettings,
-));
-results.push(await updateRule(
-  'begin_checkout_drop',
-  drop.begin_checkout_drop,
-  {
-    current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout, checkout_ratio: drop.currentRatio },
-    baseline: { add_to_cart: baseline.add_to_cart, begin_checkout: baseline.begin_checkout, checkout_ratio: drop.baselineRatio },
-  },
-  dropMode,
-  dropRuleSettings,
-));
+/* The deviation-band rules add_to_cart_drop and begin_checkout_drop were
+   retired on 2026-09-21. Replayed over 35 settled days:
+
+     add_to_cart_drop    3 firings, and in all three the till kept ringing
+                         (purchases at 100% of the slot median during the
+                         firing, 500% and 600% in the window right after).
+                         It also required current > 0, so the failure that
+                         matters most -- add_to_cart at zero -- was the one
+                         case it could not report. add_to_cart_zero already
+                         covers that, and covers it for free.
+     begin_checkout_drop 0 firings in 35 days, including both windows of the
+                         2026-09-15 free-shipping incident. Never worked.
+
+   The 9/15 signature was add_to_cart healthy or high with begin_checkout at
+   zero -- people adding to cart, nobody able to check out. That is what the
+   zero rules watch for, and what the band rules were measuring around
+   without ever catching. evaluateDropRules stays in the library for the
+   diagnostic, so the idea can be re-priced rather than re-argued. */
 
 // Cross-check against the Worker's Shopify order heartbeat: an order placed
 // inside this window that GA4 did not see as a purchase is a tracking gap,

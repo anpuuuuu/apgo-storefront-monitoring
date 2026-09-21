@@ -42,19 +42,21 @@
       "min_gap_minutes": 15,
       "coverage_min_ratio": 0.8,
       "drop": {
-        "mode": "armed",
-        "observe_since": "2026-09-08",
-        "armed_since": "2026-09-11",
-        "consecutive_windows": 3,
-        "purchase_tracking_mode": "observe",
-        "traffic_floor_ratio": 0.6,
-        "drop_ratio": 0.35,
-        "add_to_cart_min_median": 8,
-        "begin_checkout_min_median": 2,
-        "current_atc_min": 8,
-        "purchase_tracking_order_minutes": 25,
-        "purchase_tracking_check_max_age_minutes": 20
-      }
+      "_retired": "add_to_cart_drop and begin_checkout_drop were retired 2026-09-21. Replayed over 35 settled days: add_to_cart_drop fired 3 times (20260902-1800, 20260905-2000, 20260907-1930) and purchases held at or above the slot median through every one, with 500% and 600% windows immediately after; it also required current > 0, so add_to_cart at zero -- the failure that matters -- was the one case it could not report, and add_to_cart_zero already covers that. begin_checkout_drop fired 0 times in 35 days including both windows of the 2026-09-15 free-shipping incident. The incident signature was add_to_cart healthy with begin_checkout at zero, which is what the zero rules watch. Thresholds below are kept so the diagnostic can re-price the idea.",
+      "mode": "retired",
+      "observe_since": "2026-09-08",
+      "armed_since": "2026-09-11",
+      "retired_since": "2026-09-21",
+      "consecutive_windows": 3,
+      "purchase_tracking_mode": "observe",
+      "traffic_floor_ratio": 0.6,
+      "drop_ratio": 0.35,
+      "add_to_cart_min_median": 8,
+      "begin_checkout_min_median": 2,
+      "current_atc_min": 8,
+      "purchase_tracking_order_minutes": 25,
+      "purchase_tracking_check_max_age_minutes": 20
+    }
     },
     "daily": {
       "mode": "observe",
