@@ -76,22 +76,18 @@
   },
   "orders": {
     "_readme": "Push-based order heartbeat in workers/error-monitor/orders.mjs (POST /orders/event from Shopify Flow, a WooCommerce webhook, or any backend); values mirror ORDER_LIMITS in workers/error-monitor/config.mjs. Mode is the Worker var ORDERS_MODE.",
+    "_threshold_evidence": "455 orders, 2026-09-09 to 09-20: median gap 19 min, p90 1h19m, longest healthy gap 5h51m; the only longer one, 8h01m, was the 09-15 free-shipping incident. Replayed over those days, 7 hours fires once (the incident) and 4 hours fires nine times on days confirmed healthy. Retune from observed_max_gap_minutes in the heartbeat, not by feel.",
     "mode": "armed",
     "observe_since": "2026-09-09",
     "armed_since": "2026-09-11",
+    "rewritten_since": "2026-09-21",
     "source": "push",
-    "min_samples": 8,
-    "bootstrap_minutes": 360,
-    "push_stale_hours": 24,
-    "retention_days": 35,
-    "check_minutes": 10,
-    "baseline_days": 28,
-    "sample_minutes": 30,
-    "percentile": 0.9,
-    "multiplier": 1.5,
-    "floor_minutes": 90,
-    "cap_minutes": 720,
+    "gap_hours": 7,
     "critical_multiplier": 2,
-    "realert_hours": 6
+    "realert_hours": 6,
+    "check_minutes": 10,
+    "observed_gap_days": 28,
+    "push_stale_hours": 24,
+    "retention_days": 35
   }
 }
