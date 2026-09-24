@@ -15,6 +15,8 @@ import {
   baselineForSlot,
   countsForWindow,
   durationText,
+  isEmptyWindow,
+  nextEmptyState,
   nextRuleState,
   settledWindow,
   shouldRecordAlert,
@@ -87,8 +89,6 @@ const RULE_ADVICE = {
   ga4_collection_zero: '先查：GA4 / Web Pixel 设置最近有没有改；主题或 app 有没有更新',
   add_to_cart_zero: '先查：广告商品的变体 / 库存 / 加购按钮；主题或 app 有没有更新',
   begin_checkout_zero: '先查：广告商品的运费（free shipping）、折扣、库存、结账设置最近有没有改',
-  add_to_cart_drop: '先查：广告商品的变体 / 库存 / 价格显示；主题或 app 有没有更新',
-  begin_checkout_drop: '先查：广告商品的运费（free shipping）、折扣、库存、结账设置最近有没有改',
   purchase_tracking_gap: '先查：Web Pixel / GA4 结账事件设置',
 };
 
@@ -96,8 +96,6 @@ const RULE_TEXT = {
   ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
   add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
   begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
-  add_to_cart_drop: '流量正常但「加入购物车」塌到平时的 35% 以下（加购按钮/选项可能坏了 → 对照第1/2层巡检）',
-  begin_checkout_drop: '加购正常但「进入结账」比例塌到平时的 35% 以下（结账入口可能坏了 → 手机实测走一遍结账）',
   purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
 };
 
@@ -214,6 +212,66 @@ if (truncated) {
   console.error(`基线被截断：GA4 报告有 ${funnel.rowCount} 行，只拿到 ${(funnel.rows || []).length} 行。不判断，直接退出。`);
   process.exit(0);
 }
+
+/* A window where every single event is zero, on a site Layer 1 says is up,
+   is missing data rather than a dead storefront.
+
+   2026-09-24 is the case: window 16:30-17:00 came back page_view 0 against a
+   baseline of 180, add_to_cart 0 against 12.5, everything else 0 too — and
+   add_to_cart_zero paged. Meanwhile the synthetic watch passed three times
+   inside that window with real shipping rates, the storefront was serving the
+   GA4 tag and firing page_view, and an order was placed at 17:24. The data
+   simply had not arrived: querying the same period 19 minutes later showed 30
+   page views where the alerting run had seen none. GA4's backlog ran past
+   three hours that day against the 90 minutes measured on 09-20.
+
+   Chasing the backlog with a bigger lag makes Layer 4 useless. Refusing to
+   judge an empty window does not: a real storefront failure still puts people
+   on the site, so page_view stays above zero and the funnel rules keep
+   working. Every-event-zero is the one shape that cannot be a storefront
+   problem, because a storefront cannot stop its own page views. If the site
+   really is down, that is Layer 1's page, not this one's.
+
+   Deliberately gated on storefrontHealthy: if Layer 1 is unhappy too, the
+   zeros may be real and the rules should still speak. */
+const emptyWindow = isEmptyWindow(current, baseline, EVENT_NAMES, {
+  storefrontHealthy,
+  pageViewMinMedian: Number(settings.page_view_min_median) || 10,
+});
+
+if (emptyWindow) {
+  const emptyNext = nextEmptyState(await getState('ga4:realtime:empty'), window);
+  const { consecutive } = emptyNext;
+  await setState('ga4:realtime:empty', emptyNext);
+  await logAlert('layer4', 'data_quality', {
+    rule: 'window_empty',
+    window: window.key,
+    consecutive,
+    baseline: { page_view: baseline.page_view },
+  });
+
+  /* Silence is right for a backlog and wrong for a tag that has been removed,
+     and after enough consecutive empty windows the second becomes the better
+     explanation. Still not a business alert: the wording has to say the
+     storefront is probably fine, or it trains the owner to ignore the next
+     real one. */
+  const need = Number(settings.empty_window_notify_after) || 6;
+  if (consecutive === need) {
+    await telegram([
+      `🟠 [第4层·数据质量] GA4 连续 ${consecutive} 个时段一条数据都没有`,
+      `最近判断的时段 ${window.clock.slice(0, 2)}:${window.clock.slice(2)}，平时这个时段约 ${baseline.page_view} 次浏览`,
+      '**这不是店坏了**：店铺是否正常由第1层和结账探测负责，它们没有报警。',
+      '常见原因：GA4 处理积压（等等就会补上）、或者主题/app 更新把埋点拿掉了。',
+      '要确认埋点：打开任一商品页，看 dataLayer 里还有没有 page_view 事件。',
+      process.env.RUN_URL || '',
+    ].join('\n'), { silent: true });
+  }
+
+  await heartbeat('layer4', { status: 'ok', window: window.key, note: 'window empty, not judged', consecutive });
+  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, consecutive, baselinePageView: baseline.page_view }));
+  process.exit(0);
+}
+await setState('ga4:realtime:empty', { consecutive: 0, windowKey: window.key, checkedAt: new Date().toISOString() });
 
 const results = [];
 results.push(await updateRule(

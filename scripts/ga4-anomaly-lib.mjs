@@ -259,3 +259,42 @@ export function isDailyStageFresh(prior, stage, targetDate, nowMs, rerunMs) {
   const generatedMs = Date.parse(prior.generatedAt);
   return Number.isFinite(generatedMs) && nowMs - generatedMs < rerunMs;
 }
+
+/* A window where every event is zero, on a site Layer 1 says is up, is
+   missing data rather than a dead storefront.
+
+   2026-09-24: window 16:30-17:00 returned page_view 0 against a baseline of
+   180, and every other event zero too, so add_to_cart_zero paged. Inside that
+   same window the synthetic checkout watch passed three times with real
+   shipping rates, the storefront was serving the GA4 tag and firing
+   page_view, and an order was placed at 17:24. The data had simply not
+   arrived — querying the same period 19 minutes later showed 30 page views
+   where the alerting run saw none. GA4's backlog ran past three hours that
+   day, against the 90 minutes measured on 09-20.
+
+   Raising the lag to chase a backlog makes Layer 4 useless. Refusing to judge
+   an empty window does not, because a real storefront failure still puts
+   people on the site: page_view stays above zero and every funnel rule keeps
+   working. Every-event-zero is the one shape that cannot be a storefront
+   problem, since a storefront cannot stop its own page views.
+
+   storefrontHealthy gates it deliberately. If Layer 1 is unhappy too the
+   zeros may be real, and the rules should still be allowed to speak. */
+export function isEmptyWindow(current, baseline, eventNames, { storefrontHealthy, pageViewMinMedian = 10 } = {}) {
+  if (!storefrontHealthy) return false;
+  const total = (eventNames || []).reduce((sum, name) => sum + (Number(current?.[name]) || 0), 0);
+  if (total !== 0) return false;
+  // Without a baseline worth the name this is just a quiet night, and quiet
+  // nights are not worth suppressing anything over.
+  return Number(baseline?.page_view) >= pageViewMinMedian;
+}
+
+/* Consecutive empty windows, keyed on slot identity like the rule streaks, so
+   a re-read of the same slot cannot inflate the count. */
+export function nextEmptyState(previous, window) {
+  const prior = previous || {};
+  const consecutive = prior.windowKey === window.key
+    ? Number(prior.consecutive) || 1
+    : (Number(prior.consecutive) || 0) + 1;
+  return { consecutive, windowKey: window.key, checkedAt: new Date().toISOString() };
+}
