@@ -5,6 +5,7 @@ import {
   BROKEN,
   OK,
   UNMEASURED,
+  appendWatchLog,
   judgeProbe,
   judgeRun,
   nextWatchState,
@@ -210,4 +211,29 @@ test('the site catalog lets the watch write a heartbeat', async () => {
      and the Dispatcher never schedules it. */
   const catalog = await readFile(new URL('../workers/site-catalog.generated.mjs', import.meta.url), 'utf8');
   assert.match(catalog, /"watch"/);
+});
+
+test('the rolling log keeps a window-sized history and drops the rest', () => {
+  /* Layer 4 judges a slot that closed up to 2.5 hours ago, so the log has to
+     reach back further than that; 12 hours does, without growing forever. */
+  const hour = 3_600_000;
+  const now = Date.parse('2026-09-24T12:00:00Z');
+  let log = null;
+  for (let i = 40; i >= 0; i -= 1) {
+    log = appendWatchLog(log, { at: now - i * 20 * 60_000, status: 'ok' });
+  }
+  assert.ok(log.entries.length > 7, 'must still cover a window from 2.5 hours ago');
+  assert.equal(log.entries.at(-1).at, now);
+  assert.ok(log.entries.every((row) => now - row.at <= 12 * hour));
+
+  // An entry older than the cap is dropped, not kept forever.
+  const withAncient = appendWatchLog({ entries: [{ at: now - 30 * hour, status: 'broken' }] }, { at: now, status: 'ok' });
+  assert.deepEqual(withAncient.entries.map((row) => row.status), ['ok']);
+});
+
+test('the log tolerates junk rather than throwing inside a monitor', () => {
+  const now = Date.parse('2026-09-24T12:00:00Z');
+  const log = appendWatchLog({ entries: [{ at: 'nonsense' }, null, { status: 'ok' }] }, { at: now, status: 'ok' });
+  assert.deepEqual(log.entries, [{ at: now, status: 'ok' }]);
+  assert.deepEqual(appendWatchLog(undefined, { at: now, status: 'ok' }).entries.length, 1);
 });

@@ -45,11 +45,11 @@ export function propertyMinuteNow(nowMs, timeZone) {
    means runReport, which on 2026-09-20 held nothing at all for the last 60
    minutes and only part of 90-60. Hence a lag of 90 minutes and a whole slot:
    detection moves from about an hour to about two, in exchange for six times
-   fewer false alarms.
-
-   The lag is 120 rather than 90 so the whole slot sits inside the settled
-   zone. At 90 the slot would end 77 minutes back, and the 90-60 band was
-   measured half-filled (46 page views against a typical 120), which would
+   fewer false alarms.
+
+   The lag is 120 rather than 90 so the whole slot sits inside the settled
+   zone. At 90 the slot would end 77 minutes back, and the 90-60 band was
+   measured half-filled (46 page views against a typical 120), which would
    quietly reintroduce the very bias this replaces. */
 export function settledWindow(nowMs, { timeZone, lagMinutes = 120, slotMinutes = 30 }) {
   const stamp = propertyMinuteNow(nowMs - lagMinutes * 60_000, timeZone);
@@ -297,4 +297,51 @@ export function nextEmptyState(previous, window) {
     ? Number(prior.consecutive) || 1
     : (Number(prior.consecutive) || 0) + 1;
   return { consecutive, windowKey: window.key, checkedAt: new Date().toISOString() };
+}
+
+/* What the synthetic checkout probe saw during the window this alert is
+   about.
+
+   A Layer 4 alert names a slot that closed up to two hours ago, so "the probe
+   is fine now" answers a question nobody asked. The probe runs every 20
+   minutes and keeps a rolling log, so the honest answer is what it found
+   inside that slot -- on 2026-09-24 it had passed three times inside the very
+   window that paged, which was the whole case for the alert being false.
+
+   This NEVER decides whether the alert fires. It is a sentence in the
+   message, the same rule the order heartbeat follows for traffic: a probe
+   that agrees tells the owner where to look first, and a probe that has
+   nothing to say must not be able to keep a real alert quiet. */
+export function watchVerdictLine(log, window, { nowMs = Date.now(), maxAgeMinutes = 45, padMinutes = 20 } = {}) {
+  const entries = (Array.isArray(log?.entries) ? log.entries : [])
+    .filter((row) => Number.isFinite(Number(row?.at)));
+  if (!entries.length) return '🤖 结账探测：没有记录（探测可能还没开始跑）';
+
+  /* Padded by one probe interval each side. The probe runs every 20 minutes
+     against a 30-minute window, so strict containment usually finds a single
+     run — on 2026-09-24 it caught one of the three that bracketed the window.
+     A break lasting long enough for the funnel to notice also shows in the
+     runs either side, so the padded range is better evidence and still
+     honestly about that period. */
+  const from = window.startMs - padMinutes * 60_000;
+  const until = window.endMs + padMinutes * 60_000;
+  const covering = entries.filter((row) => Number(row.at) >= from && Number(row.at) < until);
+  if (covering.length) {
+    const broken = covering.filter((row) => row.status === 'broken' || row.status === 'degraded').length;
+    const measured = covering.filter((row) => row.status !== 'unmeasured').length;
+    if (!measured) return `🤖 结账探测：覆盖该时段跑了 ${covering.length} 次，但都没测准（限流或超时），说明不了什么`;
+    if (!broken) {
+      const how = measured === 1 ? '一次，成功加购并拿到运费' : `${measured} 次，全部成功加购并拿到运费`;
+      return `🤖 结账探测：**覆盖该时段跑了 ${how}** → 那时店铺能买，优先查 GA4 埋点而不是店铺`;
+    }
+    return `🤖 结账探测：覆盖该时段 ${broken}/${measured} 次走不完结账 → 这很可能是真的故障，先按下面的清单查`;
+  }
+
+  // No probe landed inside the slot. Say so, and offer the nearest one with
+  // its age attached rather than letting it pose as evidence about the window.
+  const latest = entries.reduce((best, row) => (Number(row.at) > Number(best.at) ? row : best), entries[0]);
+  const ageMinutes = Math.round((nowMs - Number(latest.at)) / 60_000);
+  if (ageMinutes > maxAgeMinutes) return `🤖 结账探测：最近一次是 ${ageMinutes} 分钟前，太旧，不作数`;
+  const word = latest.status === 'ok' ? '成功加购并拿到运费' : latest.status === 'unmeasured' ? '没测准' : '走不完结账';
+  return `🤖 结账探测：该时段前后没有记录；最近一次是 ${ageMinutes} 分钟前，${word}`;
 }
