@@ -9,7 +9,9 @@ import {
   durationText,
   evaluateDropRules,
   isDailyStageFresh,
+  isEmptyWindow,
   minuteToMs,
+  nextEmptyState,
   nextRuleState,
   propertyMinuteNow,
   realertDelayHours,
@@ -349,4 +351,55 @@ test('the retired deviation-band rules stay retired', async () => {
   assert.match(drop._retired, /35 settled days/);
   // purchase_tracking_gap still lives in this block and is not retired with them.
   assert.equal(drop.purchase_tracking_mode, 'observe');
+});
+
+/* ---------------------------------------------------------------- *
+   The empty-window guard, from the 2026-09-24 false positive.
+ * ---------------------------------------------------------------- */
+
+const EVENTS = ['page_view', 'view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
+const zero = { page_view: 0, view_item: 0, add_to_cart: 0, begin_checkout: 0, purchase: 0 };
+const busy = { page_view: 180, view_item: 128, add_to_cart: 12.5, begin_checkout: 3, purchase: 1 };
+
+test('a window where every event is zero is missing data, not a dead store', () => {
+  /* The exact 2026-09-24 numbers. The synthetic watch passed three times
+     inside this window, the storefront was firing page_view, and an order
+     was placed at 17:24 -- the data had simply not arrived. */
+  assert.equal(isEmptyWindow(zero, busy, EVENTS, { storefrontHealthy: true, pageViewMinMedian: 10 }), true);
+});
+
+test('one event surviving means the data did arrive, so judge it', () => {
+  // A storefront cannot stop its own page views. Anything above zero
+  // anywhere means the pipeline delivered, and the rules should speak.
+  for (const name of EVENTS) {
+    const current = { ...zero, [name]: 1 };
+    assert.equal(
+      isEmptyWindow(current, busy, EVENTS, { storefrontHealthy: true }),
+      false,
+      `${name} > 0 must not be suppressed`,
+    );
+  }
+});
+
+test('a quiet night is not suppressed, because there is nothing to suppress', () => {
+  // Without a baseline worth the name, zero is just 3am.
+  const sleepy = { ...busy, page_view: 4 };
+  assert.equal(isEmptyWindow(zero, sleepy, EVENTS, { storefrontHealthy: true, pageViewMinMedian: 10 }), false);
+});
+
+test('when Layer 1 is unhappy too, the zeros may be real and the rules still speak', () => {
+  /* This is the one case where every-event-zero can genuinely mean the
+     storefront died. Suppressing it would turn the guard into a way to
+     hide a real outage. */
+  assert.equal(isEmptyWindow(zero, busy, EVENTS, { storefrontHealthy: false }), false);
+});
+
+test('empty windows count per slot, not per run', () => {
+  const first = { key: '202609241630' };
+  const second = { key: '202609241700' };
+  const a = nextEmptyState(null, first);
+  assert.equal(a.consecutive, 1);
+  // A re-read of the same slot is one observation.
+  assert.equal(nextEmptyState(a, first).consecutive, 1);
+  assert.equal(nextEmptyState(a, second).consecutive, 2);
 });
