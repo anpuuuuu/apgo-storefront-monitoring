@@ -18,6 +18,7 @@ import {
   settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
+  watchVerdictLine,
 } from '../scripts/ga4-anomaly-lib.mjs';
 
 const SETTINGS = { consecutive_zeros: 2, max_gap_minutes: 45, min_gap_minutes: 15 };
@@ -402,4 +403,93 @@ test('empty windows count per slot, not per run', () => {
   // A re-read of the same slot is one observation.
   assert.equal(nextEmptyState(a, first).consecutive, 1);
   assert.equal(nextEmptyState(a, second).consecutive, 2);
+});
+
+/* ---------------------------------------------------------------- *
+   Carrying the checkout probe's verdict into the Layer 4 alert.
+ * ---------------------------------------------------------------- */
+
+const WINDOW = settledWindow(Date.parse('2026-09-24T10:51:00Z'), { timeZone: TZ });
+
+test('the line reports what the probe saw around the window, not what it sees now', () => {
+  /* The real 2026-09-24 timing: the probe ran at 08:25, 08:45 and 09:06 UTC
+     against a window of 08:30-09:00. Only one of those is strictly inside,
+     which is why the range is padded by a probe interval — three runs saying
+     the store was buyable is the whole case for that alert being false, and
+     one is thin. */
+  const log = { entries: [
+    { at: WINDOW.startMs - 5 * 60_000, status: 'ok' },   // 08:25, just before
+    { at: WINDOW.startMs + 15 * 60_000, status: 'ok' },  // 08:45, inside
+    { at: WINDOW.endMs + 6 * 60_000, status: 'ok' },     // 09:06, just after
+  ] };
+  const line = watchVerdictLine(log, WINDOW, { nowMs: Date.parse('2026-09-24T10:51:00Z') });
+  assert.match(line, /覆盖该时段跑了 3 次/);
+  assert.match(line, /优先查 GA4 埋点/);
+});
+
+test('the padding is one probe interval, not an open door', () => {
+  // A run an hour either side says nothing about this window and must not be
+  // counted as if it did.
+  const far = { entries: [
+    { at: WINDOW.startMs - 60 * 60_000, status: 'broken' },
+    { at: WINDOW.endMs + 60 * 60_000, status: 'broken' },
+  ] };
+  assert.match(watchVerdictLine(far, WINDOW, { nowMs: WINDOW.endMs + 65 * 60_000 }), /该时段前后没有记录/);
+
+  // And the boundary itself: exactly padMinutes out is in, a minute more is
+  // out. What matters is that the run outside the range never gets counted as
+  // covering the window — which of the two "not covering" wordings comes back
+  // depends on its age and is not the point here.
+  const edge = { entries: [{ at: WINDOW.startMs - 20 * 60_000, status: 'ok' }] };
+  assert.match(watchVerdictLine(edge, WINDOW, {}), /覆盖该时段/);
+  const past = { entries: [{ at: WINDOW.startMs - 21 * 60_000, status: 'ok' }] };
+  assert.doesNotMatch(watchVerdictLine(past, WINDOW, { nowMs: WINDOW.endMs }), /覆盖该时段/);
+});
+
+test('a probe that failed inside the window points the other way', () => {
+  const log = { entries: [
+    { at: WINDOW.startMs + 60_000, status: 'broken' },
+    { at: WINDOW.startMs + 600_000, status: 'ok' },
+  ] };
+  assert.match(watchVerdictLine(log, WINDOW, {}), /1\/2 次走不完结账/);
+});
+
+test('probes that could not measure say so instead of vouching for the store', () => {
+  const log = { entries: [
+    { at: WINDOW.startMs + 60_000, status: 'unmeasured' },
+    { at: WINDOW.startMs + 600_000, status: 'unmeasured' },
+  ] };
+  assert.match(watchVerdictLine(log, WINDOW, {}), /都没测准/);
+});
+
+test('with nothing inside the window, the nearest run is offered with its age attached', () => {
+  const now = Date.parse('2026-09-24T10:51:00Z');
+  const log = { entries: [{ at: now - 25 * 60_000, status: 'ok' }] };
+  const line = watchVerdictLine(log, WINDOW, { nowMs: now });
+  assert.match(line, /该时段前后没有记录/);
+  assert.match(line, /25 分钟前/);
+});
+
+test('a stale probe is not allowed to pose as evidence', () => {
+  const now = Date.parse('2026-09-24T10:51:00Z');
+  const log = { entries: [{ at: now - 5 * 3_600_000, status: 'ok' }] };
+  assert.match(watchVerdictLine(log, WINDOW, { nowMs: now }), /太旧，不作数/);
+});
+
+test('no log at all is stated plainly, never silently omitted', () => {
+  // A missing probe must read as "we do not know", never as reassurance.
+  assert.match(watchVerdictLine(null, WINDOW, {}), /没有记录/);
+  assert.match(watchVerdictLine({ entries: [] }, WINDOW, {}), /没有记录/);
+});
+
+test('the probe line is only ever a line, never a gate', () => {
+  /* Guards the contract rather than the text: watchVerdictLine returns a
+     string in every case, so no code path can read it as permission to stay
+     quiet. The order heartbeat follows the same rule for traffic. */
+  const cases = [null, { entries: [] }, { entries: [{ at: WINDOW.startMs + 1, status: 'ok' }] }, { entries: [{ at: 0, status: 'broken' }] }];
+  for (const log of cases) {
+    const line = watchVerdictLine(log, WINDOW, { nowMs: Date.parse('2026-09-24T10:51:00Z') });
+    assert.equal(typeof line, 'string');
+    assert.ok(line.length > 0);
+  }
 });

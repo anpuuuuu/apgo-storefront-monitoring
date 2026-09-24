@@ -19,6 +19,7 @@ import { discoverAdTargets } from './discover-ad-targets.mjs';
 import { createStorefrontClient, probeProduct, snapshotHandles } from './checkout-probe-lib.mjs';
 import {
   BROKEN,
+  appendWatchLog,
   OK,
   judgeProbe,
   judgeRun,
@@ -36,6 +37,7 @@ const settings = config.storefront_watch || {};
 const address = config.investigator?.address || {};
 const STATE_KEY = 'probe:watch';
 const HANDLES_KEY = 'probe:watch:handles';
+const LOG_KEY = 'probe:watch:log';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 if (settings.mode === 'off' || !address.zip) {
@@ -160,6 +162,16 @@ if (dryRun) {
 
 const { shouldAlert, recovered, next, confirmed } = nextWatchState(previous, verdict, nowMs, settings);
 await setState(STATE_KEY, next);
+
+/* A Layer 4 alert names a window that closed up to two hours ago, so it needs
+   to know what the probe found back then, not what it finds now. Keep a short
+   rolling log for it to read. */
+await setState(LOG_KEY, appendWatchLog(await getState(LOG_KEY), {
+  at: nowMs,
+  status: verdict.status,
+  measured: verdict.measured,
+  broken: verdict.broken,
+}));
 console.log(JSON.stringify({ ...summary, consecutive: next.consecutive, confirmed, shouldAlert, recovered }));
 
 if (shouldAlert) {

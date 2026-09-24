@@ -21,6 +21,7 @@ import {
   settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
+  watchVerdictLine,
 } from './ga4-anomaly-lib.mjs';
 import { investigate } from './investigator.mjs';
 
@@ -160,6 +161,10 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
       const evidenceEvent = rule.startsWith('begin_checkout') || rule === 'purchase_tracking_gap' ? 'add_to_cart' : 'view_item';
       const screens = await screensEvidence(evidenceEvent);
       if (screens) lines.push(screens);
+      /* Never gates the alert, only the wording -- the same rule the order
+         heartbeat follows for traffic. A probe with nothing to say must not
+         be able to keep a real alert quiet. */
+      lines.push(watchVerdictLine(await getState('probe:watch:log'), window, { nowMs: now }));
       if (RULE_ADVICE[rule]) lines.push(RULE_ADVICE[rule]);
       lines.push(process.env.RUN_URL || '');
       await telegram(lines.join('\n'));

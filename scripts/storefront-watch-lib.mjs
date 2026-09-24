@@ -180,3 +180,20 @@ export function recoveryMessage({ results, brokenSince, nowMs = Date.now(), runU
   if (runUrl) lines.push(runUrl);
   return lines.join('\n');
 }
+
+/* A short rolling log of what the probe found, so a Layer 4 alert about a
+   window two hours old can answer the question that actually matters: was the
+   store buyable *then*?
+
+   "The probe is fine now" is much weaker evidence than "the probe succeeded
+   three times inside the window you are alerting about", and on 2026-09-24 it
+   was the difference between a two-hour investigation and a one-line answer.
+   Twelve hours is enough to cover any window Layer 4 will ever judge. */
+export function appendWatchLog(previous, entry, { capHours = 12, slotMinutes = 20 } = {}) {
+  const entries = Array.isArray(previous?.entries) ? previous.entries : [];
+  const cutoff = entry.at - capHours * 3_600_000;
+  const kept = entries
+    .filter((row) => Number.isFinite(Number(row?.at)) && Number(row.at) > cutoff && Number(row.at) < entry.at)
+    .slice(-Math.ceil((capHours * 60) / slotMinutes));
+  return { entries: [...kept, entry] };
+}
