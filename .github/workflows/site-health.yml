@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       suite: ${{ steps.plan.outputs.suite }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -46,7 +46,7 @@ jobs:
 
   browser:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -56,12 +56,12 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
@@ -76,7 +76,7 @@ jobs:
         run: npm run test:${{ needs.plan.outputs.suite }}
       - name: Upload diagnostic artifacts
         if: failure() && vars.MONITOR_MODE == 'live'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-${{ needs.plan.outputs.suite }}-${{ matrix.id }}-${{ github.run_id }}
           path: |
@@ -89,11 +89,11 @@ jobs:
   finalize:
     if: always()
     needs: [plan, browser]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Require heartbeat configuration in Live mode

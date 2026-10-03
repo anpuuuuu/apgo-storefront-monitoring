@@ -31,13 +31,13 @@ jobs:
     # An explicit manual diagnostic remains available when the owner resumes;
     # the Dispatcher Cron (trigger=scheduler) honours the pause like a schedule.
     if: (github.event_name != 'schedule' || (vars.MONITOR_SCHEDULE_ENABLED == 'true' && vars.MONITOR_LAYER4_PAUSED != 'true')) && !(inputs.trigger == 'scheduler' && vars.MONITOR_LAYER4_PAUSED == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       mode: ${{ steps.select.outputs.mode }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 24 }
       - id: matrix
         run: echo "matrix=$(node scripts/site-matrix.mjs 4)" >> "$GITHUB_OUTPUT"
@@ -58,11 +58,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 24 }
       - name: Authenticate with Google OIDC/WIF
         id: google-auth

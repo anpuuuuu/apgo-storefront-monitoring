@@ -22,6 +22,6 @@
   "devDependencies": {
     "@playwright/test": "^1.50.0",
     "cross-env": "^10.0.0",
-    "wrangler": "^4.31.0"
+    "wrangler": "^4.147.0"
   }
 }

@@ -43,12 +43,12 @@ jobs:
     # The watch honours the same Layer 4 pause switch: pausing Layer 4 and then
     # being paged by its fast line would be a surprise.
     if: (github.event_name != 'schedule' || (vars.MONITOR_SCHEDULE_ENABLED == 'true' && vars.MONITOR_LAYER4_PAUSED != 'true')) && !(inputs.trigger == 'scheduler' && vars.MONITOR_LAYER4_PAUSED == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 24 }
       - id: matrix
         run: echo "matrix=$(node scripts/site-matrix.mjs 4)" >> "$GITHUB_OUTPUT"
@@ -58,13 +58,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Two products, a few seconds of shipping-rate polling each, plus the pause
     # between them. Anything past this is a hung request, not a slow store.
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 24 }
       # continue-on-error: a failed token exchange must not stop the probe. The
       # script falls back to the cached handle list, then to fixtures.
