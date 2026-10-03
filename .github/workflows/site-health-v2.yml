@@ -47,13 +47,13 @@ jobs:
   # suppress the retry — see scripts/layer2-gate.mjs.
   gate:
     if: github.event_name != 'schedule' || vars.MONITOR_SCHEDULE_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 24 }
       - id: check
         env:
@@ -65,7 +65,7 @@ jobs:
   plan:
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
       cadence: ${{ steps.select.outputs.cadence }}
@@ -75,8 +75,8 @@ jobs:
       source_sha: ${{ steps.source.outputs.sha }}
       plan_error: ${{ steps.contracts.outputs.error || steps.discover.outputs.error }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -106,7 +106,7 @@ jobs:
         run: |
           for minute in 1 2 3; do echo "Waiting for storefront deployment ($minute/3)..."; sleep 60; done
       - name: Checkout exact Theme commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.source.outputs.repository }}
           ref: ${{ steps.source.outputs.sha }}
@@ -164,7 +164,7 @@ jobs:
           matrix="$(node scripts/layer2-config.mjs matrix config/sites.json '${{ steps.select.outputs.cadence }}' ad-targets.json)"
           printf '%s\n' "$matrix" > layer2-matrix.json
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: layer2-plan-${{ github.run_id }}
           path: |
@@ -175,22 +175,22 @@ jobs:
 
   browser-batch:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-central-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install each browser engine once
         run: timeout 720 npx playwright install --with-deps chromium webkit || npx playwright install chromium webkit
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: layer2-plan-${{ github.run_id }}
           path: .
@@ -209,7 +209,7 @@ jobs:
         run: node scripts/run-layer2-batch.mjs
       - name: Upload evidence and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer2-batch-${{ github.run_id }}
           path: artifacts/
@@ -219,14 +219,14 @@ jobs:
   finalize:
     if: always() && needs.plan.result != 'skipped'
     needs: [plan, browser-batch]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: needs.browser-batch.result != 'skipped'
         continue-on-error: true
         with:
@@ -271,7 +271,7 @@ jobs:
       - name: Fail missing or twice-failed Journeys
         if: steps.aggregate.outputs.status == 'failed'
         run: exit 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: layer2-summary-${{ github.run_id }}
