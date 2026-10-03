@@ -33,6 +33,7 @@ export function dailyPublicStatus(summary) {
     segmentCount: summary.segments.length,
     anomalyCount: summary.anomalies.length,
     persistentAnomalyCount: summary.persistent?.length || 0,
+    armedPersistentAnomalyCount: summary.armedPersistent?.length || 0,
     dataQualityCodes: summary.dataQualityIssues.map(({ code }) => code),
     persistentDataQualityCodes: (summary.persistentDataQualityIssues || []).map(({ code }) => code),
     realtimeCoverage: summary.realtimeCoverage || null,

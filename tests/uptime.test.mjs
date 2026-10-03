@@ -40,9 +40,13 @@ test('Layer 2 failures can never be stored as a healthy heartbeat', () => {
   assert.equal(normalizeHeartbeatStatus(''), 'error');
 });
 
-test('a 429 run is throttling, not an outage: no alert before three probes, own wording after', async () => {
-  const { evaluateUptimeSample, isThrottledSample } = await import('../workers/error-monitor/uptime.mjs');
-  const limits = { failureThreshold: 2, throttleThreshold: 3, slowThreshold: 3, slowMs: 5000, uptimeRealertMs: 3_600_000 };
+test('a 429 run backs off and rolls up separately from real outages', async () => {
+  const { evaluateUptimeSample, isThrottledSample, shouldSkipUptimeProbe } = await import('../workers/error-monitor/uptime.mjs');
+  const limits = {
+    failureThreshold: 2, throttleThreshold: 3, slowThreshold: 3, slowMs: 5000,
+    uptimeRealertMs: 3_600_000, throttleBackoffBaseMs: 15 * 60_000,
+    throttleBackoffMaxMs: 60 * 60_000, throttleDigestMs: 6 * 60 * 60_000,
+  };
   const now = Date.now();
   const throttled = { id: 'apgo-my:homepage', ok: false, status: 429, latencyMs: 90, error: 'HTTP 429' };
   const down = { id: 'apgo-my:homepage', ok: false, status: 503, latencyMs: 90, error: 'HTTP 503' };
@@ -51,15 +55,28 @@ test('a 429 run is throttling, not an outage: no alert before three probes, own 
   assert.equal(isThrottledSample(down), false);
 
   let step = evaluateUptimeSample(null, throttled, now, limits);
+  assert.equal(step.state.nextProbeAtMs, now + 15 * 60_000);
+  assert.equal(shouldSkipUptimeProbe(step.state, now + 5 * 60_000), true);
   step = evaluateUptimeSample(step.state, throttled, now, limits);
   assert.deepEqual(step.events, [], 'two 429s in a row (the 2026-09-09 pattern) stay silent');
   assert.equal(step.state.failures, 0, '429 never counts as a failure');
   step = evaluateUptimeSample(step.state, throttled, now, limits);
   assert.deepEqual(step.events, ['throttled']);
-  assert.equal(step.state.incidentOpen, true);
+  assert.equal(step.state.incidentOpen, false, 'monitor throttling is not a storefront outage');
+  assert.equal(step.state.nextProbeAtMs, now + 60 * 60_000);
+  assert.equal(step.state.throttleSamplesSinceDigest, 3);
   step = evaluateUptimeSample(step.state, ok, now, limits);
-  assert.deepEqual(step.events, ['recovery']);
+  assert.deepEqual(step.events, [], 'a throttle digest does not create a noisy recovery message');
   assert.equal(step.state.throttled, 0);
+
+  const legacyThrottleState = {
+    incidentOpen: true,
+    lastAlertMs: now - 60_000,
+    lastSample: throttled,
+  };
+  const migrated = evaluateUptimeSample(legacyThrottleState, ok, now, limits);
+  assert.deepEqual(migrated.events, [], 'a pre-backoff 429 incident is closed silently after deployment');
+  assert.equal(migrated.state.incidentOpen, false);
 
   let real = evaluateUptimeSample(null, down, now, limits);
   real = evaluateUptimeSample(real.state, down, now, limits);

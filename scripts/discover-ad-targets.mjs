@@ -13,14 +13,28 @@ export class AdDiscoveryError extends Error {
   }
 }
 
-export function normalizeLandingPath(value) {
+export function normalizeLandingPath(value, storeOrigin = '') {
   const raw = String(value || '').trim();
   if (!raw || raw === '(not set)') return '';
+  // GA4 occasionally contains a comma-separated navigation trail or a full
+  // external URL in this dimension. Neither is a storefront landing page.
+  if (/[\r\n,]/.test(raw)) return '';
   try {
-    const parsed = new URL(raw, 'https://store.invalid');
+    const base = new URL('https://store.invalid');
+    const parsed = new URL(raw, base);
+    if (parsed.origin !== base.origin) {
+      if (!storeOrigin || parsed.origin !== new URL(storeOrigin).origin) return '';
+    }
     let pathname = decodeURIComponent(parsed.pathname || '/');
     pathname = pathname.replace(/\/{2,}/g, '/');
     if (pathname.length > 1) pathname = pathname.replace(/\/$/, '');
+    // Checkout/cart/account routes are session- or customer-specific. Testing
+    // them later creates guaranteed 404s and leaks checkout tokens into logs.
+    const first = pathname.toLowerCase().split('/').filter(Boolean)[0] || '';
+    if (new Set([
+      'admin', 'account', 'authentication', 'cart', 'challenge', 'checkout',
+      'checkouts', 'orders', 'password', 'wallets',
+    ]).has(first)) return '';
     return pathname || '/';
   } catch {
     return '';
@@ -56,7 +70,7 @@ export function buildAdTargets(rows, config, siteId = '') {
   const merged = new Map();
   for (const row of rows || []) {
     if (!channels.has(row.channel)) continue;
-    const landingPath = normalizeLandingPath(row.landingPage);
+    const landingPath = normalizeLandingPath(row.landingPage, primarySite.baseUrl);
     const market = marketMap[row.country];
     if (!landingPath || !market || !primarySite.markets?.some((entry) => entry.id === market)) continue;
     const key = `${primarySite.id}|${market}|${landingPath}`;

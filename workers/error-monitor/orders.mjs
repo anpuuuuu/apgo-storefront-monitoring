@@ -92,6 +92,16 @@ export function evaluateOrderGap({ lastOrderAtMs, nowMs, gapMinutes = ORDER_LIMI
   return { severity, ageMinutes: round(ageMinutes), thresholdMinutes: gapMinutes };
 }
 
+export function orderGapMinutesAt(nowMs, timeZone = ORDER_LIMITS.timeZone, limits = ORDER_LIMITS) {
+  const { hour } = bucketFor(nowMs, timeZone);
+  const start = Number(limits.nightStartHour);
+  const end = Number(limits.nightEndHour);
+  const overnight = start < end
+    ? hour >= start && hour < end
+    : hour >= start || hour < end;
+  return overnight ? Number(limits.nightGapMinutes) : Number(limits.gapMinutes);
+}
+
 export function formatMinutes(minutes) {
   if (!Number.isFinite(minutes)) return 'ever';
   const total = Math.max(0, Math.round(minutes));
@@ -231,7 +241,11 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
   const lastOrderAtMs = Math.max(...times);
   await setState(env.DB, lastKey, { createdAt: new Date(lastOrderAtMs).toISOString(), receivedAt: push.lastReceivedAt || null, checkedAt: new Date(nowMs).toISOString() });
 
-  const evaluation = evaluateOrderGap({ lastOrderAtMs, nowMs });
+  const evaluation = evaluateOrderGap({
+    lastOrderAtMs,
+    nowMs,
+    gapMinutes: orderGapMinutesAt(nowMs, timeZone),
+  });
   const traffic = await getState(env.DB, siteKey(site.id, 'ga4:realtime:last'));
   const state = (await getState(env.DB, alertKey)) || { open: false, severity: null, lastAlertMs: 0, lastOrderAtMs: null };
   const detail = {

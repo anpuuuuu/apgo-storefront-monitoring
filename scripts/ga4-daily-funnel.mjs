@@ -11,14 +11,15 @@ import {
   telegram,
 } from './monitor-lib.mjs';
 import { dailyPublicStatus } from './ga4-public-status.mjs';
+import { persistentDailyAnomalies, splitDailyAnomalies } from './ga4-daily-alert-lib.mjs';
 import { coverageForDate, isDailyStageFresh } from './ga4-anomaly-lib.mjs';
 
 requireEnv();
 
 const stage = process.env.DAILY_STAGE === 'confirm' ? 'confirm' : 'primary';
 /* Daily funnel arms independently from the realtime rules (see ga4-anomaly).
-   Kept in observe while PURCHASE_REVENUE_MISSING persists — armed, it would
-   nag about the same known data-quality issue every day. */
+   Individual issues can graduate without turning the historically noisy
+   revenue and segment observations into Telegram alerts. */
 const mode = config.ga4.daily.mode || config.ga4.mode;
 const targetDate = mytDate(-1).replaceAll('-', '');
 const targetWeekday = new Date(`${mytDate(-1)}T12:00:00+08:00`).getUTCDay();
@@ -300,18 +301,23 @@ if (stage === 'primary') {
     throw new Error(`GA4 daily primary is missing for ${targetDate}; confirm cannot pass without it`);
   }
   summary.primaryGeneratedAt = primary.generatedAt;
-  const confirmedLabels = new Set(anomalies.map((item) => item.label));
-  const persistent = (primary?.anomalies || []).filter((item) => confirmedLabels.has(item.label));
+  const persistent = persistentDailyAnomalies(primary?.anomalies, anomalies);
   summary.persistent = persistent;
+  const split = splitDailyAnomalies(persistent, {
+    defaultMode: mode,
+    issueModes: config.ga4.daily.issue_modes || {},
+  });
+  summary.armedPersistent = split.armed;
+  summary.observedPersistent = split.observed;
   const primaryQualityCodes = new Set((primary?.dataQualityIssues || []).map((item) => item.code));
   summary.persistentDataQualityIssues = dataQualityIssues.filter((item) => primaryQualityCodes.has(item.code));
-  if (persistent.length) {
-    const kind = mode === 'armed' ? 'business_alert' : 'would_alert';
-    await logAlert('layer4', kind, summary);
-    if (mode === 'armed') {
-      const lines = persistent.slice(0, 8).map((item) => `${item.label}: ${item.issues.join(', ')}`);
-      await telegram(`APGO GA4 daily funnel alert (${targetDate})\n${lines.join('\n')}\n${process.env.RUN_URL || ''}`);
-    }
+  if (split.observed.length) {
+    await logAlert('layer4', 'would_alert', { ...summary, persistent: split.observed });
+  }
+  if (split.armed.length) {
+    await logAlert('layer4', 'business_alert', { ...summary, persistent: split.armed });
+    const lines = split.armed.slice(0, 8).map((item) => `${item.label}: ${item.issues.join(', ')}`);
+    await telegram(`APGO GA4 daily funnel alert (${targetDate})\n${lines.join('\n')}\n${process.env.RUN_URL || ''}`);
   }
   if (summary.persistentDataQualityIssues.length) {
     const kind = mode === 'armed' ? 'data_quality_alert' : 'would_alert';
@@ -325,6 +331,7 @@ if (stage === 'primary') {
     targetDate,
     stage,
     persistentCount: persistent.length,
+    armedPersistentCount: split.armed.length,
     persistentDataQualityCount: summary.persistentDataQualityIssues.length,
     primaryGeneratedAt: primary.generatedAt,
   });

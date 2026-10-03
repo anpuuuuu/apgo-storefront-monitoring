@@ -73,7 +73,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       source_repo: ${{ steps.source.outputs.repository }}
       source_sha: ${{ steps.source.outputs.sha }}
-      plan_error: ${{ steps.discover.outputs.error }}
+      plan_error: ${{ steps.contracts.outputs.error || steps.discover.outputs.error }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -112,12 +112,25 @@ jobs:
           ref: ${{ steps.source.outputs.sha }}
           path: workspaces/${{ steps.select.outputs.site_id }}/theme
       - name: Validate monitoring and Theme contracts
+        id: contracts
+        shell: bash
         env:
           MONITOR_SITE_ID: ${{ steps.select.outputs.site_id }}
           MONITOR_THEME_ROOT: ${{ github.workspace }}/workspaces/${{ steps.select.outputs.site_id }}/theme
         run: |
-          node scripts/layer2-config.mjs validate config/sites.json
-          npm run test:theme-contract
+          set +e
+          output="$({ node scripts/layer2-config.mjs validate config/sites.json && npm run test:theme-contract; } 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          if [ "$status" -ne 0 ]; then
+            detail="$(printf '%s\n' "$output" | grep -m1 -E '^✖ ' || true)"
+            if [ -z "$detail" ]; then detail="$(printf '%s\n' "$output" | grep -m1 -E 'AssertionError|Error:' || true)"; fi
+            if [ -z "$detail" ]; then detail="$(printf '%s\n' "$output" | awk 'NF { line=$0 } END { print line }')"; fi
+            detail="$(printf '%s' "$detail" | tr '\r\n' ' ' | cut -c1-500)"
+            echo "error=$detail" >> "$GITHUB_OUTPUT"
+            exit "$status"
+          fi
       - name: Authenticate GA4 discovery through OIDC/WIF
         id: google-auth
         uses: google-github-actions/auth@v3
@@ -214,6 +227,7 @@ jobs:
         with:
           node-version: 24
       - uses: actions/download-artifact@v4
+        if: needs.browser-batch.result != 'skipped'
         continue-on-error: true
         with:
           name: layer2-batch-${{ github.run_id }}

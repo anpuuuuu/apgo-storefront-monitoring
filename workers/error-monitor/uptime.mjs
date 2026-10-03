@@ -38,12 +38,22 @@ export function isThrottledSample(sample) {
   return !sample.ok && Number(sample.status) === 429;
 }
 
+export function shouldSkipUptimeProbe(state, now = Date.now()) {
+  return Number(state?.nextProbeAtMs || 0) > now;
+}
+
+function throttleBackoffMs(consecutive, limits) {
+  const base = Number(limits.throttleBackoffBaseMs || 15 * 60_000);
+  const cap = Number(limits.throttleBackoffMaxMs || 60 * 60_000);
+  return Math.min(cap, base * (2 ** Math.max(0, Number(consecutive || 1) - 1)));
+}
+
 /* Pure state machine for one probe result. Returns the next state and the
    events the caller should announce ('recovery', 'down', 'throttled',
    'slow'). A 429 is Shopify rate-limiting the probe, not the storefront
-   failing: it never adds to `failures`, and only a run of throttleThreshold
-   consecutive 429s (15 minutes at the 5-minute cadence) opens an incident,
-   under its own wording. Observed 2026-09-09: 429 for exactly two probes
+   failing: it never adds to `failures`. Each 429 backs the target off for
+   15/30/60 minutes, and only a run of throttleThreshold observed 429s enters
+   the six-hour digest. Observed 2026-09-09: 429 for exactly two probes
    every 20 minutes for three hours while /cart.js stayed 200 and recovery
    latency was ~130 ms — 18 Telegram messages for a limiter cycle. */
 export function evaluateUptimeSample(previous, sample, now, limits = LIMITS) {
@@ -55,26 +65,45 @@ export function evaluateUptimeSample(previous, sample, now, limits = LIMITS) {
     slowIncidentOpen: false,
     lastAlertMs: 0,
     lastSlowAlertMs: 0,
+    throttleEpisodeOpen: false,
+    throttleSamplesSinceDigest: 0,
+    throttleEpisodesSinceDigest: 0,
+    lastThrottleDigestMs: 0,
+    nextProbeAtMs: 0,
     ...(previous || {}),
   };
   const events = [];
   const canAlert = !state.incidentOpen || now - Number(state.lastAlertMs || 0) >= limits.uptimeRealertMs;
 
   if (sample.ok) {
-    if (state.incidentOpen) events.push('recovery');
+    // Before throttle backoff existed, a 429 could open a storefront incident.
+    // Close that legacy state silently so the first successful probe after
+    // deployment does not announce a misleading storefront recovery.
+    const legacyThrottleIncident = state.incidentOpen && isThrottledSample(state.lastSample || {});
+    if (state.incidentOpen && !legacyThrottleIncident) events.push('recovery');
     state.failures = 0;
     state.throttled = 0;
+    state.throttleEpisodeOpen = false;
+    state.nextProbeAtMs = 0;
     state.incidentOpen = false;
   } else if (isThrottledSample(sample)) {
+    if (!state.throttleEpisodeOpen) state.throttleEpisodesSinceDigest += 1;
+    state.throttleEpisodeOpen = true;
+    state.throttleSamplesSinceDigest += 1;
     state.throttled += 1;
-    if (state.throttled >= limits.throttleThreshold && canAlert) {
+    state.failures = 0;
+    state.nextProbeAtMs = now + throttleBackoffMs(state.throttled, limits);
+    const digestDue = !state.lastThrottleDigestMs
+      || now - Number(state.lastThrottleDigestMs) >= Number(limits.throttleDigestMs || 6 * 60 * 60_000);
+    if (state.throttled >= limits.throttleThreshold && digestDue) {
       events.push('throttled');
-      state.incidentOpen = true;
-      state.lastAlertMs = now;
+      state.lastThrottleDigestMs = now;
     }
   } else {
     state.failures += 1;
     state.throttled = 0;
+    state.throttleEpisodeOpen = false;
+    state.nextProbeAtMs = 0;
     if (state.failures >= limits.failureThreshold && canAlert) {
       events.push('down');
       state.incidentOpen = true;
@@ -98,7 +127,7 @@ export function evaluateUptimeSample(previous, sample, now, limits = LIMITS) {
   return { state, events };
 }
 
-async function updateTargetState(env, sample) {
+async function updateTargetState(env, sample, siteSamples = []) {
   const key = `uptime:${sample.id}`;
   const site = SITES.find((entry) => sample.id.startsWith(`${entry.id}:`));
   const label = site?.label || sample.id.split(':')[0];
@@ -114,8 +143,26 @@ async function updateTargetState(env, sample) {
       await sendTelegram(env, `🔴 [${label}][Layer 1] ${sample.id} failed ${state.failures} consecutive probes\n${sample.error}\n${sample.url}`);
       await logAlert(env.DB, layer, 'down', { ...sample, failures: state.failures });
     } else if (event === 'throttled') {
-      await sendTelegram(env, `🟠 [${label}][Layer 1 Throttled] ${sample.id} rate-limited (HTTP 429) for ${state.throttled} consecutive probes\nShopify is limiting the monitor, not necessarily customers — compare with /cart.js and Layer 2\n${sample.url}`, { silent: true });
-      await logAlert(env.DB, layer, 'throttled', { ...sample, throttled: state.throttled });
+      const cart = siteSamples.find((entry) => entry.id === `${site.id}:cart-api`);
+      const cartVerdict = cart?.skipped
+        ? '/cart.js: skipped'
+        : cart
+          ? `/cart.js: HTTP ${cart.status || 0}${cart.ok ? ' OK' : ` · ${cart.error}`}`
+          : '/cart.js: no same-run result';
+      await sendTelegram(env, `🟠 [${label}][Layer 1 Throttled · 6h digest] ${sample.id} was rate-limited ${state.throttleSamplesSinceDigest} times across ${state.throttleEpisodesSinceDigest} episode(s)\nMonitor probes are backing off up to 60 minutes; this is not by itself a customer outage\n${cartVerdict}\n${sample.url}`, { silent: true });
+      await logAlert(env.DB, layer, 'throttled', {
+        ...sample,
+        throttled: state.throttled,
+        samples: state.throttleSamplesSinceDigest,
+        episodes: state.throttleEpisodesSinceDigest,
+        nextProbeAt: new Date(state.nextProbeAtMs).toISOString(),
+        cart: cart || null,
+      });
+      state.throttleSamplesSinceDigest = 0;
+      state.throttleEpisodesSinceDigest = 0;
+      // The next observed 429 starts the next digest's episode count even if
+      // Shopify never returned a successful sample between the two digests.
+      state.throttleEpisodeOpen = false;
     } else if (event === 'slow') {
       await sendTelegram(env, `🟠 [${label}][Layer 1 Slow] ${sample.id} exceeded 5 seconds for ${state.slowSamples} probes\nLatest: ${sample.latencyMs} ms\n${sample.url}`, { silent: true });
       await logAlert(env.DB, layer, 'slow', { ...sample, slowSamples: state.slowSamples });
@@ -201,14 +248,32 @@ export async function runScheduledUptime(env, scheduledTime) {
   ).bind(scheduledTime).run();
   if (!dedupe.meta?.changes) return { duplicate: true, samples: [] };
 
-  const samples = await Promise.all(UPTIME_TARGETS.map(probe));
+  const now = Date.now();
+  const samples = await Promise.all(UPTIME_TARGETS.map(async (target) => {
+    const state = await getState(env.DB, `uptime:${target.id}`);
+    if (shouldSkipUptimeProbe(state, now)) {
+      return {
+        id: target.id,
+        url: target.url,
+        ok: null,
+        status: 0,
+        latencyMs: 0,
+        error: 'throttle backoff',
+        skipped: true,
+        nextProbeAt: new Date(Number(state.nextProbeAtMs)).toISOString(),
+      };
+    }
+    return probe(target);
+  }));
   for (const sample of samples) {
+    if (sample.skipped) continue;
     await env.DB.prepare(
       `INSERT INTO uptime_samples
        (scheduled_time, target, ok, http_status, latency_ms, error)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
     ).bind(scheduledTime, sample.id, sample.ok ? 1 : 0, sample.status, sample.latencyMs, sample.error).run();
-    await updateTargetState(env, sample);
+    const siteSamples = samples.filter((entry) => entry.id.startsWith(`${sample.id.split(':')[0]}:`));
+    await updateTargetState(env, sample, siteSamples);
   }
 
   for (const site of SITES) {

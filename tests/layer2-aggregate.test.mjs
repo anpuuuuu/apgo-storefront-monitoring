@@ -162,10 +162,15 @@ test('a run our own concurrency group cancelled must never page', () => {
 });
 
 test('failed or empty planning can never create a healthy heartbeat', () => {
-  const failedPlan = runAggregate(null, { planResult: 'failure', expected: [] });
+  const failedPlan = runAggregate(null, {
+    planResult: 'failure',
+    expected: [],
+    planError: '✖ PDP cart writes lock every purchase entry point and surface only real failures',
+  });
   assert.equal(failedPlan.aggregate.status, 'failed');
   assert.equal(failedPlan.aggregate.planningFailed, true);
   assert.match(failedPlan.output, /alert_title=APGO Layer 2 test planning failed/);
+  assert.match(failedPlan.output, /PDP cart writes lock every purchase entry point/);
 
   const emptyPlan = runAggregate(null, { expected: [] });
   assert.equal(emptyPlan.aggregate.status, 'failed');
