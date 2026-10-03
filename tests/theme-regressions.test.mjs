@@ -29,8 +29,11 @@ test('PDP cart writes lock every purchase entry point and surface only real fail
   );
   assert.doesNotMatch(recoveryBlock, /cart\/add\.js/);
   assert.match(script, /addToCart\(\{ btn: addBtn \}\)\.catch\(function \(error\) \{[\s\S]*?handleCartFailure\(error\)/);
-  assert.match(script, /addToCart\(\{ btn: buyBtn, silent: true \}\)[\s\S]*?handleCartFailure\(error\)/);
-  assert.match(script, /function commitFromConfirm[\s\S]*?handleCartFailure\(error\)/);
+  // The handler may receive purchase intent so a known cart-limit failure can
+  // route Buy now shoppers to the cart. The contract is that the rejected
+  // write reaches handleCartFailure, not that the call has exactly one arg.
+  assert.match(script, /addToCart\(\{ btn: buyBtn, silent: true \}\)[\s\S]*?handleCartFailure\(error(?:,\s*['"]buy['"])?\)/);
+  assert.match(script, /function commitFromConfirm[\s\S]*?handleCartFailure\(error(?:,\s*intent)?\)/);
 });
 
 test('cart quantity failures explain refresh state and restore server-rendered cart', () => {

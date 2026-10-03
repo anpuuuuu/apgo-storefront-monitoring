@@ -5,6 +5,7 @@ import {
   bucketFor,
   evaluateOrderGap,
   formatMinutes,
+  orderGapMinutesAt,
   orderAlertText,
   parseOrderEvent,
   percentile,
@@ -44,7 +45,7 @@ test('percentile uses nearest rank', () => {
   assert.equal(percentile([], 0.9), null);
 });
 
-test('the gap threshold is one flat number, chosen from 455 real orders', () => {
+test('the daytime gap threshold is measured from 455 real orders and overnight waits until 08:00', () => {
   /* 2026-09-09 to 09-20: median gap 19 min, p90 1h19m, longest healthy gap
      5h51m, and the only longer one (8h01m) was the 09-15 free-shipping
      incident. Replaying the rule over those days fires once, on the
@@ -52,6 +53,7 @@ test('the gap threshold is one flat number, chosen from 455 real orders', () => 
      confirmed were healthy. Anything tighter than the observed spread is
      noise, so the number is locked here with the evidence beside it. */
   assert.equal(ORDER_LIMITS.gapMinutes, 420);
+  assert.equal(ORDER_LIMITS.nightGapMinutes, 540);
   assert.ok(ORDER_LIMITS.gapMinutes > 5 * 60 + 51, "must clear the longest healthy gap");
   assert.ok(ORDER_LIMITS.gapMinutes < 8 * 60 + 1, "must still catch the 09-15 incident");
 });
@@ -69,10 +71,16 @@ test('evaluateOrderGap warns past the threshold and escalates at twice it', () =
   // No order on record at all is the most serious reading there is.
   assert.equal(evaluateOrderGap({ lastOrderAtMs: null, nowMs: NOW }).severity, "critical");
   assert.equal(evaluateOrderGap({ lastOrderAtMs: NaN, nowMs: NOW }).severity, "critical");
-  // The time of day no longer changes the verdict; that is the point.
-  const night = Date.parse("2026-09-07T20:00:00Z");
-  assert.equal(evaluateOrderGap({ lastOrderAtMs: night - 421 * 60_000, nowMs: night }).severity, "warning");
   assert.equal(evaluateOrderGap({ lastOrderAtMs: NOW - 421 * 60_000, nowMs: NOW, gapMinutes: 600 }).severity, null, "threshold is overridable");
+});
+
+test('night quiet hours use nine hours, then return to seven hours at 08:00 MYT', () => {
+  const early = Date.parse('2026-09-07T22:10:00Z'); // Tuesday 06:10 MYT
+  const opening = Date.parse('2026-09-08T00:00:00Z'); // Tuesday 08:00 MYT
+  assert.equal(orderGapMinutesAt(early, TZ), 540);
+  assert.equal(orderGapMinutesAt(opening, TZ), 420);
+  assert.equal(evaluateOrderGap({ lastOrderAtMs: early - 8 * 60 * 60_000, nowMs: early, gapMinutes: orderGapMinutesAt(early, TZ) }).severity, null);
+  assert.equal(evaluateOrderGap({ lastOrderAtMs: opening - 8 * 60 * 60_000, nowMs: opening, gapMinutes: orderGapMinutesAt(opening, TZ) }).severity, 'warning');
 });
 
 test('summarizeOrderGaps reports the margin instead of setting the threshold', () => {

@@ -49,9 +49,12 @@ export const LIMITS = {
   requestTimeoutMs: 10_000,
   slowMs: 5_000,
   failureThreshold: 2,
-  // HTTP 429 is the platform limiting the probe; it needs a longer run than a
-  // real failure before it is worth a message (3 probes = 15 minutes).
+  // HTTP 429 is the platform limiting the probe. It backs off 15/30/60 minutes
+  // and only three observed 429s enter the six-hour digest.
   throttleThreshold: 3,
+  throttleBackoffBaseMs: 15 * 60_000,
+  throttleBackoffMaxMs: 60 * 60_000,
+  throttleDigestMs: 6 * 60 * 60_000,
   slowThreshold: 3,
   uptimeRealertMs: 60 * 60_000,
   // Heartbeat incidents already alert again when warning escalates to
@@ -111,6 +114,13 @@ export const ORDER_LIMITS = {
      Catching a broken checkout quickly is the funnel's job: on 09-15 the GA4
      rule paged at 00:46, five hours before a 7-hour gap rule would have. */
   gapMinutes: 420,
+  // Overnight gaps repeatedly reached 7h02m-8h46m and then recovered with a
+  // normal morning order while every synthetic checkout signal stayed green.
+  // Defer that warning until business hours; the 7-hour daytime backstop is
+  // unchanged and the synthetic funnel remains the fast failure detector.
+  nightGapMinutes: 540,
+  nightStartHour: 0,
+  nightEndHour: 8,
   criticalMultiplier: 2,
   /* Reported in the heartbeat so the margin above real traffic stays visible
      and gapMinutes can be retuned from evidence instead of taste. */

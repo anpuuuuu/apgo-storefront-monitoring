@@ -14,8 +14,16 @@ const config = loadLayer2Config();
 
 test('landing paths remove query strings, hashes and duplicate slashes', () => {
   assert.equal(normalizeLandingPath('/products/demo/?utm_source=meta#buy'), '/products/demo');
-  assert.equal(normalizeLandingPath('https://apgo.my//pages/promo/?fbclid=1'), '/pages/promo');
+  assert.equal(normalizeLandingPath('https://apgo.my//pages/promo/?fbclid=1', 'https://apgo.my'), '/pages/promo');
   assert.equal(normalizeLandingPath('(not set)'), '');
+});
+
+test('landing paths reject session routes, external URLs and malformed navigation trails', () => {
+  assert.equal(normalizeLandingPath('/checkouts/cn/private-token/en-my'), '');
+  assert.equal(normalizeLandingPath('/checkout'), '');
+  assert.equal(normalizeLandingPath('/cart?discount=private'), '');
+  assert.equal(normalizeLandingPath('https://example.com/pages/promo', 'https://apgo.my'), '', 'another origin is not a storefront landing');
+  assert.equal(normalizeLandingPath('/, https://youtube.com/@apgomy, https://tiktok.com/@apgomy'), '');
 });
 
 test('GA4 rows are normalized into named values', () => {
@@ -41,6 +49,14 @@ test('paid targets merge UTM variants, reject organic and rank commerce activity
   assert.equal(targets[0].market, 'SG');
   assert.equal(targets[1].landingPath, '/products/a');
   assert.equal(targets[1].sessions, 8);
+});
+
+test('commerce activity cannot promote a private checkout URL into the journey plan', () => {
+  const targets = buildAdTargets([
+    { landingPage: '/checkouts/cn/private-token/en-my', channel: 'Paid Social', country: 'Malaysia', sessions: 1, addToCarts: 1, checkouts: 9 },
+    { landingPage: '/products/public', channel: 'Paid Social', country: 'Malaysia', sessions: 2, addToCarts: 0, checkouts: 0 },
+  ], config);
+  assert.deepEqual(targets.map(({ landingPath }) => landingPath), ['/products/public']);
 });
 
 test('target count obeys the configured maximum', () => {

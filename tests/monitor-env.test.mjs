@@ -25,6 +25,7 @@ test('Daily public status retains acceptance evidence without revenue, AOV, rows
   const status = dailyPublicStatus(summary);
   assert.equal(status.primaryGeneratedAt, 'before');
   assert.equal(status.hasPurchaseRevenue, true);
+  assert.equal(status.armedPersistentAnomalyCount, 0);
   assert.deepEqual(status.dataQualityCodes, ['TEST']);
   assert.ok(!JSON.stringify(status).includes('987654.32'));
   assert.equal(status.overall, undefined);
