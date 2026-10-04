@@ -12,12 +12,16 @@ import {
 } from './monitor-lib.mjs';
 import {
   appendCoverage,
+  baselineForRollingWindow,
   baselineForSlot,
   countsForWindow,
   durationText,
+  evaluateCheckoutCompletion,
+  hoursForWindow,
   isEmptyWindow,
   nextEmptyState,
   nextRuleState,
+  rollingWindowEndingAt,
   settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
@@ -55,6 +59,11 @@ const window = settledWindow(Date.now(), {
   lagMinutes: Number(settings.settled_lag_minutes) || 120,
   slotMinutes: Number(settings.window_minutes) || 30,
 });
+const completionSettings = settings.checkout_completion || {};
+const completionWindow = rollingWindowEndingAt(window, {
+  durationMinutes: Number(completionSettings.window_minutes) || 120,
+  timeZone: config.ga4.timezone,
+});
 
 /* One query answers both sides, because the baseline only ever looks at the
    same hour of day. Without the hour filter this is 28 days x 1440 minutes x 5
@@ -63,14 +72,16 @@ const window = settledWindow(Date.now(), {
    thousand rows. rowCount is checked below anyway. */
 function funnelQuery() {
   return {
-    dateRanges: [{ startDate: `${config.ga4.baseline_days}daysAgo`, endDate: 'today' }],
+    // One extra date covers a two-hour cohort that crosses midnight on the
+    // oldest baseline day.
+    dateRanges: [{ startDate: `${Number(config.ga4.baseline_days) + 1}daysAgo`, endDate: 'today' }],
     dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
     metrics: [{ name: 'eventCount' }],
     dimensionFilter: {
       andGroup: {
         expressions: [
           eventFilter(),
-          { filter: { fieldName: 'hour', stringFilter: { value: window.clock.slice(0, 2) } } },
+          { filter: { fieldName: 'hour', inListFilter: { values: hoursForWindow(completionWindow, config.ga4.timezone) } } },
         ],
       },
     },
@@ -90,6 +101,7 @@ const RULE_ADVICE = {
   ga4_collection_zero: '先查：GA4 / Web Pixel 设置最近有没有改；主题或 app 有没有更新',
   add_to_cart_zero: '先查：广告商品的变体 / 库存 / 加购按钮；主题或 app 有没有更新',
   begin_checkout_zero: '先查：广告商品的运费（free shipping）、折扣、库存、结账设置最近有没有改',
+  checkout_completion_drop: '先查：Shopify 后台 abandoned checkouts、付款方式、折扣、地址验证和库存；这条规则不预设是哪一个支付网关',
   purchase_tracking_gap: '先查：Web Pixel / GA4 结账事件设置',
 };
 
@@ -97,6 +109,7 @@ const RULE_TEXT = {
   ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
   add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
   begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
+  checkout_completion_drop: '进入结账仍有量，但完成购买比例明显下降（abandoned checkout 可能正在增加）',
   purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
 };
 
@@ -134,11 +147,11 @@ async function screensEvidence(eventName) {
   return top.length ? `${eventName} 来自: ${top.map((row) => `${row.screen} (${row.count})`).join(' · ')}` : '';
 }
 
-async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings = settings) {
+async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings = settings, ruleWindow = window) {
   const key = `ga4:realtime:${rule}`;
   const previous = await getState(key) || { consecutive: 0, active: false, lastAlertedAt: 0 };
   const now = Date.now();
-  const { next, confirmed } = nextRuleState(previous, abnormal, now, ruleSettings, window);
+  const { next, confirmed } = nextRuleState(previous, abnormal, now, ruleSettings, ruleWindow);
   next.detail = detail;
   const schedule = settings.realert_schedule_hours || settings.realert_hours;
   const shouldRecord = shouldRecordAlert(previous, confirmed, now, schedule);
@@ -156,15 +169,15 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
       const header = next.alertCount > 1 ? `🟠 [第4层·业务指标] 仍在持续（第 ${next.alertCount} 次提醒，已持续 ${since}）` : `🟡 [第4层·业务指标] ${ruleText}`;
       const lines = [header];
       if (next.alertCount > 1) lines.push(ruleText);
-      lines.push(`时段 ${window.clock.slice(0, 2)}:${window.clock.slice(2)}–${window.endStamp.slice(8, 10)}:${window.endStamp.slice(10)}（已结算，约 ${Math.round((now - window.endMs) / 60_000)} 分钟前）`);
+      lines.push(`时段 ${ruleWindow.startStamp.slice(8, 10)}:${ruleWindow.startStamp.slice(10)}–${ruleWindow.endStamp.slice(8, 10)}:${ruleWindow.endStamp.slice(10)}（已结算，约 ${Math.round((now - ruleWindow.endMs) / 60_000)} 分钟前）`);
       lines.push(`当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}`);
-      const evidenceEvent = rule.startsWith('begin_checkout') || rule === 'purchase_tracking_gap' ? 'add_to_cart' : 'view_item';
+      const evidenceEvent = rule.startsWith('begin_checkout') || rule === 'checkout_completion_drop' || rule === 'purchase_tracking_gap' ? 'add_to_cart' : 'view_item';
       const screens = await screensEvidence(evidenceEvent);
       if (screens) lines.push(screens);
       /* Never gates the alert, only the wording -- the same rule the order
          heartbeat follows for traffic. A probe with nothing to say must not
          be able to keep a real alert quiet. */
-      lines.push(watchVerdictLine(await getState('probe:watch:log'), window, { nowMs: now }));
+      lines.push(watchVerdictLine(await getState('probe:watch:log'), ruleWindow, { nowMs: now }));
       if (RULE_ADVICE[rule]) lines.push(RULE_ADVICE[rule]);
       lines.push(process.env.RUN_URL || '');
       await telegram(lines.join('\n'));
@@ -190,7 +203,7 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
   await setState(key, next);
   return {
     rule, abnormal, confirmed, consecutive: next.consecutive, recorded: shouldRecord, mode: ruleMode,
-    window: window.key, gapMinutes: next.gapMinutes, coverageGap: next.coverageGap, duplicate: next.duplicate,
+    window: ruleWindow.key, gapMinutes: next.gapMinutes, coverageGap: next.coverageGap, duplicate: next.duplicate,
   };
 }
 
@@ -204,6 +217,15 @@ const truncated = Number(funnel.rowCount || 0) > (funnel.rows || []).length;
 const current = countsForWindow(funnel, window, EVENT_NAMES);
 if (simulated) current.add_to_cart = 0;
 const baseline = baselineForSlot(funnel, window, EVENT_NAMES, median);
+const completionCurrent = countsForWindow(funnel, completionWindow, ['begin_checkout', 'purchase']);
+const completionBaseline = baselineForRollingWindow(
+  funnel,
+  completionWindow,
+  ['begin_checkout', 'purchase'],
+  median,
+  { timeZone: config.ga4.timezone, baselineDays: Number(config.ga4.baseline_days) || 28 },
+);
+const completion = evaluateCheckoutCompletion(completionCurrent, completionBaseline, completionSettings);
 
 if (validateOnly) {
   console.log(JSON.stringify({ mode: 'validate', window, rows: (funnel.rows || []).length, rowCount: funnel.rowCount, truncated, current, baseline, storefrontHealthy }, null, 2));
@@ -296,6 +318,30 @@ results.push(await updateRule(
     && current.begin_checkout === 0,
   { current: { add_to_cart: current.add_to_cart, begin_checkout: current.begin_checkout }, baseline: { begin_checkout: baseline.begin_checkout } }
 ));
+results.push(await updateRule(
+  'checkout_completion_drop',
+  completion.abnormal,
+  {
+    current: {
+      begin_checkout: completion.checkout,
+      purchase: completion.purchase,
+      checkout_to_purchase: Math.round(completion.currentRate * 1000) / 1000,
+      estimated_abandonment: Math.round(Math.max(0, 1 - completion.currentRate) * 1000) / 1000,
+    },
+    baseline: {
+      begin_checkout: completion.baselineCheckout,
+      checkout_to_purchase: Math.round(completion.baselineRate * 1000) / 1000,
+      sample_days: completionBaseline.sample_days,
+    },
+    absolute_drop: Math.round(completion.absoluteDrop * 1000) / 1000,
+  },
+  completionSettings.mode || 'observe',
+  {
+    ...settings,
+    consecutive_zeros: Number(completionSettings.consecutive_windows) || 2,
+  },
+  completionWindow,
+));
 
 /* The deviation-band rules add_to_cart_drop and begin_checkout_drop were
    retired on 2026-09-21. Replayed over 35 settled days:
@@ -349,7 +395,11 @@ await setState('ga4:realtime:coverage', { checkedAt: appendCoverage(coverageStat
    cannot tell "nobody could check out" from "nobody came". Leave the latest
    window here for it to read. The reverse direction already exists:
    purchase_tracking_gap above reads orders:last, which the Worker writes. */
-await setState('ga4:realtime:last', { checkedAt: new Date().toISOString(), window: window.key, windowClock: window.clock, current, baseline });
+await setState('ga4:realtime:last', {
+  checkedAt: new Date().toISOString(), window: window.key, windowClock: window.clock,
+  current, baseline,
+  checkoutCompletion: { window: completionWindow.key, current: completionCurrent, baseline: completionBaseline, abnormal: completion.abnormal },
+});
 
-await heartbeat('layer4', { kind: 'realtime', mode, current, baseline, results });
-console.log(JSON.stringify({ ok: true, kind: 'realtime', mode, current, baseline, storefrontHealthy, results }, null, 2));
+await heartbeat('layer4', { kind: 'realtime', mode, current, baseline, checkoutCompletion: completion, results });
+console.log(JSON.stringify({ ok: true, kind: 'realtime', mode, current, baseline, checkoutCompletion: completion, storefrontHealthy, results }, null, 2));

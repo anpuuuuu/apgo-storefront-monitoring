@@ -24,6 +24,8 @@
 
 配置集中在 `config/sites.json`。每天通过 WIF 只读 GA4 最近 3 天的付费 Landing Page，去除 UTM 后合并并优先选择有 ATC/Checkout 的页面，最多检查 10 个；GA4/Auth 失败明确报告 `AD_DISCOVERY_FAILED`。
 
+永久下架且预期返回 404 的商品可以登记在 `adDiscovery.retiredLandingPaths`，只精确排除指定路径，不会放宽其他页面的 404 判断。退休日及以前的 GA4 历史数据不再把 Layer 2 判红；退休日之后若该路径重新出现付费 session，则每日任务会单独静默提醒检查广告目的地，但不会让浏览器批次假失败。
+
 - 每天 MYT 09:37：流量最高的 3 个可购买 Landing Page 由 Android Chromium 执行完整 Add → Cart → Checkout；iPhone WebKit 对相同页面验证 Safari 渲染、图片、CTA 与选项状态，但不写购物车。其余最多 7 个页面按日期轮换 Android/iPhone，只读验证；Desktop 每个市场只跑基础 Smoke。
 - 每次 `main` Theme 更新后等待 3 分钟，再按同一职责检查当前广告页面：Android 负责完整购买，iPhone 负责 Safari 只读交互；连续 Push 只保留最新 Commit。
 - 没有付费 Landing Page 时仍执行一条 Android 核心购买流程和一条 iPhone 只读 UI 流程，不会产生空的绿色结果。
@@ -105,7 +107,9 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 - **它只改措辞，永远不压制告警**——跟订单告警里流量那条同一个原则。探测说店能买 → 「优先查 GA4 埋点而不是店铺」；探测也走不完结账 → 「这很可能是真的故障」；探测没记录或太旧 → 明写读不到，绝不当成「没事」。
 - **`mode: observe` 起步**（`storefront_watch.mode`）。头几天要的是实测，不是信任；日志显示它在一个正常营业的店上持续报 ok 之后再 arm。
 
-排程由 Dispatcher Worker 的 Cloudflare Cron（`*/5`）负责：读取 `/health`，Layer 4 心跳 ≥28 分钟就 `workflow_dispatch` 一次 `realtime`；UTC 04:25 / 06:55 之后各派发一次 `daily-primary` / `daily-confirm`；Layer 3 心跳 >90 分钟派发 self-health。GitHub 自己的 `19,49 * * * *` 与 daily cron 保留作冗余——GitHub 对高频 cron 只送达约 18%，对每日 cron 会晚 4–6 小时，不能单独依赖。KV 锁、最近 15 分钟已有 run、以及失败后 60 分钟退避都会阻止重复派发。
+排程由 Dispatcher Worker 的 Cloudflare Cron（`*/5`）负责：读取 `/health`，Layer 4 心跳 ≥28 分钟就 `workflow_dispatch` 一次 `realtime`；UTC 04:25 / 06:55 之后各派发一次 `daily-primary` / `daily-confirm`；UTC 14:00（Asia/Kuala_Lumpur 22:00）派发 `evening-summary`；Layer 3 心跳 >90 分钟派发 self-health。GitHub 自己的 `19,49 * * * *` 与 daily cron 保留作冗余——GitHub 对高频 cron 只送达约 18%，对每日 cron 会晚 4–6 小时，不能单独依赖。KV 锁、D1 日报去重、最近 15 分钟已有 run、以及失败后 60 分钟退避都会阻止重复派发。
+
+正常状态不发送逐次成功消息。业务异常、监控心跳延迟及其恢复仍即时通知；除此之外只在每天 22:00 发送一次汇总，列出各层状态、当天 Shopify push 订单数，以及 GA4 已结算时段的 `begin_checkout → purchase` 完成率。未完成数是 GA4 事件差值，只用于快速发现 abandoned checkout 上升，不冒充 Shopify 后台的精确 abandoned checkout 名单。
 
 - 告警送达：首次触发后状况持续，按 `realert_schedule_hours: [1, 2, 3]` 在 +1h、+2h、+3h 各提醒一次，之后每 3 小时，每条注明「第 N 次提醒，已持续 X」；恢复时发 🟢（静默）。文案带「先查什么」（运费 / 折扣 / 库存 / 结账设置 / 主题或 app 更新）和当时正在产生加购的商品页（按 `unifiedScreenName` 拆，**取的是被判断的那个时段**，不是发告警的那一刻）。2026-09-15 的 free-shipping 事故在旧的 6 小时平铺重报下 00:46 响过一次后 07:16 才再响，中间被淹没在杂讯里。
 - Collection：Layer 1 正常、同期中位数 ≥10、连续两个窗口 page_view=0。
@@ -181,7 +185,7 @@ Workflow 失败通知（`scripts/workflow-failure-notify.mjs`）只在同一 wor
 | 4 | 90 分钟 |
 
 - Worker Cron 检查 Layer 2/3/4。
-- Dispatcher Cron 每 5 分钟按 `/health` 心跳年龄补派 Layer 4 realtime（≥28 分钟）、每日两阶段、Layer 3 自检，以及 Layer 2 daily（UTC 02:10 = 10:10 MYT 之后心跳仍超过 6 小时就派 `site-health-v2.yml cadence=daily`，每站点每日一次；`site-health-v2.yml` 的 `gate` job 会让迟到的 GitHub 排程在心跳 8 小时内新鲜时跳过，避免同一天跑两遍浏览器批次）；`SCHEDULER_ENABLED=false` 关闭，`SCHEDULER_DRY_RUN=true` 只记录决策。
+- Dispatcher Cron 每 5 分钟按 `/health` 心跳年龄补派 Layer 4 realtime（≥28 分钟）、每日两阶段、22:00 汇总、Layer 3 自检，以及 Layer 2 daily（UTC 02:10 = 10:10 MYT 之后心跳仍超过 6 小时就派 `site-health-v2.yml cadence=daily`，每站点每日一次；`site-health-v2.yml` 的 `gate` job 会让迟到的 GitHub 排程在心跳 8 小时内新鲜时跳过，避免同一天跑两遍浏览器批次）；`SCHEDULER_ENABLED=false` 关闭，`SCHEDULER_DRY_RUN=true` 只记录决策。
 - GitHub 每小时检查 Worker `/health`、Layer 1、Layer 2/4 最近 scheduled run；Layer 4 超过 45 分钟无完成 run 时补派，作为低于 90 分钟 warning 线的第二兜底。
 - Workflow 成功但 Heartbeat 写入失败仍视为失败。
 

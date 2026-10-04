@@ -154,6 +154,17 @@ jobs:
           set -e
           echo "$output"
           if [ "$status" -ne 0 ]; then detail="$(echo "$output" | tr '\r\n' ' ' | cut -c1-500)"; echo "error=$detail" >> "$GITHUB_OUTPUT"; exit "$status"; fi
+          retired="$(node -e "const p=require('./ad-targets.json'); process.stdout.write(JSON.stringify(p.retiredTraffic || []))")"
+          echo "retired_traffic=$retired" >> "$GITHUB_OUTPUT"
+      - name: Notify if paid traffic returns to an intentionally retired URL
+        if: steps.select.outputs.cadence == 'daily' && vars.MONITOR_MODE == 'live' && steps.discover.outputs.retired_traffic != '[]' && steps.discover.outputs.retired_traffic != ''
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MONITOR_SITE_LABEL: APGO MY
+          RETIRED_TRAFFIC_JSON: ${{ steps.discover.outputs.retired_traffic }}
+        run: node scripts/retired-landing-notify.mjs
       - name: Build serial Batch plan
         id: matrix
         env:

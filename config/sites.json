@@ -22,6 +22,13 @@
         "lookbackDays": 3,
         "maxLandingPages": 10,
         "minimumSessions": 1,
+        "retiredLandingPaths": [
+          {
+            "path": "/products/atomic-crystal-merdeka-set",
+            "retiredOn": "2026-10-04",
+            "reason": "Product permanently discontinued; an intentional 404 is not a storefront regression. Alert separately only if paid traffic appears after retirement."
+          }
+        ],
         "paidChannels": [
           "Paid Social",
           "Paid Search",

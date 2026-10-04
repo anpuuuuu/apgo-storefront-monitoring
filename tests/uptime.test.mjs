@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { heartbeatSeverity, shouldAlertHeartbeat } from '../workers/error-monitor/uptime.mjs';
-import { normalizeHeartbeatStatus } from '../workers/error-monitor/index.mjs';
+import { classifyHealth, normalizeHeartbeatStatus } from '../workers/error-monitor/index.mjs';
 
 test('heartbeat delay escalates only after two complete stale windows', () => {
   const limit = 90 * 60_000;
@@ -38,6 +38,19 @@ test('Layer 2 failures can never be stored as a healthy heartbeat', () => {
   assert.equal(normalizeHeartbeatStatus('failed'), 'error');
   assert.equal(normalizeHeartbeatStatus('TEST_CONFIG_STALE'), 'error');
   assert.equal(normalizeHeartbeatStatus(''), 'error');
+});
+
+test('health distinguishes a fresh failed check from a broken monitor', () => {
+  const freshFailure = classifyHealth([{ layers: [
+    { layer: 'layer1', status: 'ok', stale: false },
+    { layer: 'layer2', status: 'error', stale: false },
+  ] }]);
+  assert.deepEqual(freshFailure, { monitoringOperational: true, checksPassing: false });
+  const delayed = classifyHealth([{ layers: [
+    { layer: 'layer1', status: 'ok', stale: false },
+    { layer: 'layer2', status: 'ok', stale: true },
+  ] }]);
+  assert.deepEqual(delayed, { monitoringOperational: false, checksPassing: false });
 });
 
 test('a 429 run backs off and rolls up separately from real outages', async () => {

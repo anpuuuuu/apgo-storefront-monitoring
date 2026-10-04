@@ -89,6 +89,27 @@ test('daily primary and confirm follow their UTC deadlines and markers', () => {
   assert.equal(confirm.decisions.find((d) => d.inputs.mode === 'daily-confirm').markerKey, dailyMarkerKey(day('07:00'), 'confirm'));
 });
 
+test('22:00 MYT evening summary is dispatched once per day', () => {
+  const day = (clock) => Date.parse(`2026-10-04T${clock}:00Z`);
+  const prior = new Set([
+    'daily:2026-10-04:primary',
+    'daily:2026-10-04:confirm',
+  ]);
+  const early = planDispatches({ health: health(), now: day('13:55'), sites: SITES, markers: prior });
+  assert.ok(!early.decisions.some((entry) => entry.inputs.mode === 'evening-summary'));
+
+  const due = planDispatches({ health: health(), now: day('14:00'), sites: SITES, markers: prior });
+  const summary = due.decisions.find((entry) => entry.inputs.mode === 'evening-summary');
+  assert.equal(summary.markerKey, 'daily:2026-10-04:summary');
+  assert.equal(summary.inputs.trigger, 'scheduler');
+
+  const marked = planDispatches({
+    health: health(), now: day('14:05'), sites: SITES,
+    markers: new Set([...prior, 'daily:2026-10-04:summary']),
+  });
+  assert.ok(!marked.decisions.some((entry) => entry.inputs.mode === 'evening-summary'));
+});
+
 test('one workflow is claimed once per tick: daily wins over realtime, layer3 goes to self-health', () => {
   const plan = planDispatches({ health: health({ layer4: 60, layer3: 100 }), now: Date.parse('2026-09-08T04:30:00Z'), sites: SITES });
   assert.deepEqual(plan.decisions.map((d) => [d.workflow, d.target]), [

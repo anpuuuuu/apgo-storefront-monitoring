@@ -13,6 +13,16 @@ export function normalizeHeartbeatStatus(status) {
   return ['ok', 'passed', 'transient'].includes(String(status || '').toLowerCase()) ? 'ok' : 'error';
 }
 
+export function classifyHealth(sites) {
+  const layers = (sites || []).flatMap((site) => site.layers || []);
+  return {
+    // Freshness answers whether the monitoring machinery is running. A fresh
+    // error is evidence that it is running and found a failed check.
+    monitoringOperational: layers.length > 0 && layers.every((row) => !row.missing && !row.stale),
+    checksPassing: layers.length > 0 && layers.every((row) => !row.missing && !row.stale && row.status === 'ok'),
+  };
+}
+
 async function health(env) {
   const heartbeats = await listHeartbeats(env.DB);
   const now = Date.now();
@@ -38,7 +48,8 @@ async function health(env) {
     const layer1 = site.layers.find((row) => row.layer === 'layer1');
     return Boolean(layer1 && !layer1.stale && layer1.status === 'ok');
   });
-  return json({ ok, service: 'apgo-monitoring', now: new Date(now).toISOString(), sites, heartbeats: statuses }, ok ? 200 : 503);
+  const classification = classifyHealth(sites);
+  return json({ ok, ...classification, service: 'apgo-monitoring', now: new Date(now).toISOString(), sites, heartbeats: statuses }, ok ? 200 : 503);
 }
 
 async function heartbeat(request, env) {

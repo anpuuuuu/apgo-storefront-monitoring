@@ -16,6 +16,12 @@ test('current Layer 2 configuration is valid', () => {
   assert.doesNotThrow(() => validateLayer2Config(cloneConfig()));
 });
 
+test('retired landing paths require exact unique paths and a retirement date', () => {
+  const config = cloneConfig();
+  config.monitoring.layer2.adDiscovery.retiredLandingPaths.push({ path: 'products/no-slash', retiredOn: 'today' });
+  assert.throws(() => validateLayer2Config(config), /invalid retired landing path/);
+});
+
 test('dynamic Layer 2 is not blocked by an obsolete legacy product fixture', () => {
   const config = cloneConfig();
   delete config.sites[0].fixtures.laundryPdp;

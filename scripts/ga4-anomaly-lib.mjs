@@ -67,6 +67,35 @@ export function settledWindow(nowMs, { timeZone, lagMinutes = 120, slotMinutes =
   };
 }
 
+/* A wider cohort ending at the newest settled slot. Checkout completion is
+   not meaningful in a single 30-minute bucket: somebody can begin at 19:29
+   and purchase at 19:34. A two-hour cohort keeps both events together while
+   retaining the same settled-data boundary as the zero rules. */
+export function rollingWindowEndingAt(window, { durationMinutes = 120, timeZone }) {
+  const endMs = Number(window?.endMs);
+  const startMs = endMs - Number(durationMinutes) * 60_000;
+  const startStamp = propertyMinuteNow(startMs, timeZone);
+  const endStamp = propertyMinuteNow(endMs, timeZone);
+  return {
+    key: `${startStamp}-${endStamp}`,
+    clock: startStamp.slice(8, 12),
+    startStamp,
+    endStamp,
+    startMs,
+    endMs,
+    slotMinutes: Number(window?.slotMinutes) || 30,
+    durationMinutes: Number(durationMinutes),
+  };
+}
+
+export function hoursForWindow(window, timeZone) {
+  const values = new Set();
+  for (let cursor = window.startMs; cursor < window.endMs; cursor += 30 * 60_000) {
+    values.add(propertyMinuteNow(cursor, timeZone).slice(8, 10));
+  }
+  return [...values].sort();
+}
+
 /* Counts for one slot out of a dateHourMinute report. Half-open on the end so
    a minute never lands in two slots. */
 export function countsForWindow(report, window, eventNames) {
@@ -99,6 +128,48 @@ export function baselineForSlot(report, window, eventNames, medianFn) {
   }
   const days = [...byDate.values()];
   return Object.fromEntries(eventNames.map((name) => [name, medianFn(days.map((day) => day[name] || 0))]));
+}
+
+/* Median of equal-duration cohorts ending at the same local clock on prior
+   days. Ratios are calculated per day before taking the median; a ratio of
+   medians would overweight high-volume days and hide the exact shape this
+   rule is meant to detect. */
+export function baselineForRollingWindow(report, window, eventNames, medianFn, { timeZone, baselineDays = 28 } = {}) {
+  const days = [];
+  for (let offset = 1; offset <= baselineDays; offset += 1) {
+    const date = propertyMinuteNow(window.endMs - offset * 86_400_000, timeZone).slice(0, 8);
+    const endStamp = `${date}${window.endStamp.slice(8, 12)}`;
+    const endMs = minuteToMs(endStamp, timeZone);
+    const startMs = endMs - window.durationMinutes * 60_000;
+    days.push(countsForWindow(report, {
+      startStamp: propertyMinuteNow(startMs, timeZone),
+      endStamp,
+    }, eventNames));
+  }
+  const result = Object.fromEntries(eventNames.map((name) => [name, medianFn(days.map((day) => day[name] || 0))]));
+  const rates = days
+    .filter((day) => Number(day.begin_checkout) > 0)
+    .map((day) => Number(day.purchase || 0) / Number(day.begin_checkout));
+  result.checkout_to_purchase = medianFn(rates);
+  result.sample_days = rates.length;
+  return result;
+}
+
+export function evaluateCheckoutCompletion(current, baseline, settings = {}) {
+  const checkout = Number(current?.begin_checkout || 0);
+  const purchase = Number(current?.purchase || 0);
+  const baselineCheckout = Number(baseline?.begin_checkout || 0);
+  const baselineRate = Number(baseline?.checkout_to_purchase || 0);
+  const currentRate = checkout > 0 ? purchase / checkout : 0;
+  const absoluteDrop = baselineRate - currentRate;
+  const ratioToBaseline = baselineRate > 0 ? currentRate / baselineRate : null;
+  const abnormal = checkout >= Number(settings.checkout_min || 15)
+    && baselineCheckout >= Number(settings.baseline_checkout_min || 8)
+    && Number(baseline?.sample_days || 0) >= Number(settings.baseline_min_days || 14)
+    && baselineRate > 0
+    && currentRate < baselineRate * Number(settings.ratio_to_baseline || 0.5)
+    && absoluteDrop >= Number(settings.absolute_drop || 0.15);
+  return { abnormal, checkout, purchase, currentRate, baselineRate, baselineCheckout, absoluteDrop, ratioToBaseline };
 }
 
 /* "Two consecutive windows" only means something when the samples are

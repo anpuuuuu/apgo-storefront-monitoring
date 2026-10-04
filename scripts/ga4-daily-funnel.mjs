@@ -145,7 +145,7 @@ function sameWeekdayDates(allDates) {
   return allDates.filter((date) => {
     const iso = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
     return date !== targetDate && new Date(`${iso}T12:00:00+08:00`).getUTCDay() === targetWeekday;
-  }).slice(-4);
+  }).slice(-Number(config.ga4.daily.baseline_weekdays || 12));
 }
 
 function baselineFor(samples) {
@@ -165,9 +165,9 @@ function anomaliesFor(label, current, baseline) {
   if (current.begin_checkout >= config.ga4.daily.checkout_min
       && baseline.checkout_to_purchase > 0
       && rates(current).checkout_to_purchase < baseline.checkout_to_purchase * threshold) issues.push('checkout_to_purchase');
-  if (current.begin_checkout >= config.ga4.daily.checkout_min
-      && baseline.revenue > 0
-      && current.revenue < baseline.revenue * threshold) issues.push('revenue');
+  /* Absolute revenue is deliberately report-only. Traffic, promotions,
+     product mix and AOV can all move it without a storefront failure; using
+     it as an anomaly made nearly every replayed day look broken. */
   return issues.length ? { label, issues, current: compact(current), baseline } : null;
 }
 
@@ -186,7 +186,7 @@ if (isDailyStageFresh(priorStage, stage, targetDate, Date.now(), rerunMs) && pro
 
 const [eventReport, itemReport, globalReport, commerceReport] = await Promise.all([
   ga('runReport', {
-    dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
+    dateRanges: [{ startDate: `${Number(config.ga4.daily.lookback_days || 90)}daysAgo`, endDate: 'yesterday' }],
     dimensions: [
       { name: 'date' }, { name: 'eventName' }, { name: 'country' },
       { name: 'deviceCategory' }, { name: 'pagePath' },
@@ -196,7 +196,7 @@ const [eventReport, itemReport, globalReport, commerceReport] = await Promise.al
     limit: '250000',
   }),
   ga('runReport', {
-    dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
+    dateRanges: [{ startDate: `${Number(config.ga4.daily.lookback_days || 90)}daysAgo`, endDate: 'yesterday' }],
     dimensions: [{ name: 'date' }, { name: 'country' }, { name: 'deviceCategory' }, { name: 'itemName' }],
     metrics: [
       { name: 'itemsViewed' },
@@ -208,13 +208,13 @@ const [eventReport, itemReport, globalReport, commerceReport] = await Promise.al
     limit: '250000',
   }),
   ga('runReport', {
-    dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
+    dateRanges: [{ startDate: `${Number(config.ga4.daily.lookback_days || 90)}daysAgo`, endDate: 'yesterday' }],
     dimensions: [{ name: 'date' }],
     metrics: [{ name: 'totalPurchasers' }, { name: 'transactions' }, { name: 'purchaseRevenue' }],
     limit: '1000',
   }),
   ga('runReport', {
-    dateRanges: [{ startDate: '35daysAgo', endDate: 'yesterday' }],
+    dateRanges: [{ startDate: `${Number(config.ga4.daily.lookback_days || 90)}daysAgo`, endDate: 'yesterday' }],
     dimensions: [{ name: 'date' }, { name: 'country' }, { name: 'deviceCategory' }],
     metrics: [{ name: 'totalPurchasers' }, { name: 'transactions' }, { name: 'purchaseRevenue' }],
     limit: '10000',
@@ -223,7 +223,7 @@ const [eventReport, itemReport, globalReport, commerceReport] = await Promise.al
 
 const { detailed, products, global, commerce } = buildStats(eventReport, itemReport, globalReport, commerceReport);
 const baselineDates = sameWeekdayDates([...global.keys()].sort());
-if (!global.has(targetDate) || baselineDates.length < 3) {
+if (!global.has(targetDate) || baselineDates.length < Number(config.ga4.daily.baseline_min_samples || 8)) {
   throw new Error(`GA4 daily dataset incomplete: target=${targetDate}, weekday baseline samples=${baselineDates.length}`);
 }
 

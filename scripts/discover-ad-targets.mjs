@@ -47,14 +47,21 @@ function number(value) {
 }
 
 export function rowsFromReport(report) {
-  return (report?.rows || []).map((row) => ({
-    landingPage: row.dimensionValues?.[0]?.value || '',
-    channel: row.dimensionValues?.[1]?.value || '',
-    country: row.dimensionValues?.[2]?.value || '',
-    sessions: number(row.metricValues?.[0]?.value),
-    addToCarts: number(row.metricValues?.[1]?.value),
-    checkouts: number(row.metricValues?.[2]?.value),
-  }));
+  return (report?.rows || []).map((row) => {
+    const dimensions = row.dimensionValues || [];
+    const dated = dimensions.length >= 4;
+    return {
+      // Older fixtures have the original three dimensions. Production now
+      // adds date so post-retirement traffic is separate from old history.
+      date: dated ? dimensions[0]?.value || '' : '',
+      landingPage: dimensions[dated ? 1 : 0]?.value || '',
+      channel: dimensions[dated ? 2 : 1]?.value || '',
+      country: dimensions[dated ? 3 : 2]?.value || '',
+      sessions: number(row.metricValues?.[0]?.value),
+      addToCarts: number(row.metricValues?.[1]?.value),
+      checkouts: number(row.metricValues?.[2]?.value),
+    };
+  });
 }
 
 export function buildAdTargets(rows, config, siteId = '') {
@@ -66,13 +73,14 @@ export function buildAdTargets(rows, config, siteId = '') {
   const sites = new Map((config.sites || []).filter((site) => site.enabled).map((site) => [site.id, site]));
   const primarySite = siteId ? sites.get(siteId) : [...sites.values()][0];
   if (!primarySite) throw new AdDiscoveryError('no enabled site is configured');
+  const retired = new Set((discovery.retiredLandingPaths || []).map((entry) => normalizeLandingPath(entry.path, primarySite.baseUrl)).filter(Boolean));
 
   const merged = new Map();
   for (const row of rows || []) {
     if (!channels.has(row.channel)) continue;
     const landingPath = normalizeLandingPath(row.landingPage, primarySite.baseUrl);
     const market = marketMap[row.country];
-    if (!landingPath || !market || !primarySite.markets?.some((entry) => entry.id === market)) continue;
+    if (!landingPath || retired.has(landingPath) || !market || !primarySite.markets?.some((entry) => entry.id === market)) continue;
     const key = `${primarySite.id}|${market}|${landingPath}`;
     const current = merged.get(key) || {
       site: primarySite.id,
@@ -120,6 +128,51 @@ export function buildAdTargets(rows, config, siteId = '') {
     .map((target, index) => ({ ...target, rank: index + 1 }));
 }
 
+export function retiredLandingTraffic(rows, config, siteId = '') {
+  const discovery = config.monitoring?.layer2?.adDiscovery || {};
+  const channels = new Set(discovery.paidChannels || []);
+  const marketMap = discovery.countryMarketMap || {};
+  const sites = new Map((config.sites || []).filter((site) => site.enabled).map((site) => [site.id, site]));
+  const site = siteId ? sites.get(siteId) : [...sites.values()][0];
+  if (!site) throw new AdDiscoveryError('no enabled site is configured');
+  const definitions = new Map((discovery.retiredLandingPaths || []).map((entry) => [
+    normalizeLandingPath(entry.path, site.baseUrl),
+    { ...entry, retiredDate: String(entry.retiredOn || '').replaceAll('-', '') },
+  ]));
+  const found = new Map();
+  for (const row of rows || []) {
+    if (!channels.has(row.channel)) continue;
+    const landingPath = normalizeLandingPath(row.landingPage, site.baseUrl);
+    const definition = definitions.get(landingPath);
+    const market = marketMap[row.country];
+    if (!definition || !market || !/^\d{8}$/.test(row.date || '') || row.date <= definition.retiredDate) continue;
+    const activity = number(row.sessions) + number(row.addToCarts) + number(row.checkouts);
+    if (!activity) continue;
+    const key = `${site.id}|${market}|${landingPath}`;
+    const current = found.get(key) || {
+      site: site.id, market, landingPath, retiredOn: definition.retiredOn,
+      reason: definition.reason || '', latestDate: '', sessions: 0, addToCarts: 0, checkouts: 0,
+    };
+    current.latestDate = current.latestDate > row.date ? current.latestDate : row.date;
+    current.sessions += number(row.sessions);
+    current.addToCarts += number(row.addToCarts);
+    current.checkouts += number(row.checkouts);
+    found.set(key, current);
+  }
+  return [...found.values()].sort((a, b) => b.latestDate.localeCompare(a.latestDate) || b.sessions - a.sessions);
+}
+
+export function formatRetiredLandingAlert(items, label = 'APGO') {
+  const lines = (items || []).slice(0, 5).map((item) => (
+    `${item.landingPath}：${item.latestDate} 仍有付费 sessions=${item.sessions}, add-to-cart=${item.addToCarts}, checkouts=${item.checkouts}`
+  ));
+  return [
+    `🟡 [${label}][Layer 2 · Retired Landing] 已下架网址重新出现付费流量`,
+    ...lines,
+    '该网址不会加入浏览器故障批次；请检查广告目的地或取消下架登记。',
+  ].join('\n');
+}
+
 export async function fetchAdReport({ accessToken, propertyId, lookbackDays = 3, fetchImpl = fetch }) {
   if (!accessToken) throw new AdDiscoveryError('GOOGLE_OAUTH_ACCESS_TOKEN is required');
   if (!propertyId) throw new AdDiscoveryError('GA4_PROPERTY_ID is required');
@@ -132,6 +185,7 @@ export async function fetchAdReport({ accessToken, propertyId, lookbackDays = 3,
     body: JSON.stringify({
       dateRanges: [{ startDate: `${Math.max(1, number(lookbackDays))}daysAgo`, endDate: 'today' }],
       dimensions: [
+        { name: 'date' },
         { name: 'landingPagePlusQueryString' },
         { name: 'sessionDefaultChannelGroup' },
         { name: 'country' },
@@ -151,8 +205,12 @@ export async function fetchAdReport({ accessToken, propertyId, lookbackDays = 3,
 }
 
 export async function discoverAdTargets(config, env = process.env) {
+  return (await discoverAdTargetReport(config, env)).targets;
+}
+
+export async function discoverAdTargetReport(config, env = process.env) {
   const discovery = config.monitoring?.layer2?.adDiscovery;
-  if (!discovery?.enabled) return [];
+  if (!discovery?.enabled) return { targets: [], retiredTraffic: [] };
   const enabledSites = (config.sites || []).filter((site) => site.enabled && site.type === 'shopify');
   const site = env.MONITOR_SITE_ID
     ? enabledSites.find((entry) => entry.id === env.MONITOR_SITE_ID)
@@ -163,21 +221,26 @@ export async function discoverAdTargets(config, env = process.env) {
     propertyId: env.GA4_PROPERTY_ID || site.ga4PropertyId,
     lookbackDays: discovery.lookbackDays,
   });
-  return buildAdTargets(rowsFromReport(report), config, site.id);
+  const rows = rowsFromReport(report);
+  return {
+    targets: buildAdTargets(rows, config, site.id),
+    retiredTraffic: retiredLandingTraffic(rows, config, site.id),
+  };
 }
 
 async function main() {
   const configPath = path.resolve(process.argv[2] || defaultConfigPath);
   const outputPath = path.resolve(process.argv[3] || path.join(path.dirname(configPath), 'ad-targets.json'));
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  const targets = await discoverAdTargets(config);
+  const { targets, retiredTraffic } = await discoverAdTargetReport(config);
   const output = {
     generatedAt: new Date().toISOString(),
     lookbackDays: config.monitoring?.layer2?.adDiscovery?.lookbackDays || 3,
     targets,
+    retiredTraffic,
   };
   fs.writeFileSync(outputPath, `${JSON.stringify(output, null, 2)}\n`);
-  console.log(JSON.stringify({ adTargets: targets.length, output: outputPath, targets }));
+  console.log(JSON.stringify({ adTargets: targets.length, retiredTraffic: retiredTraffic.length, output: outputPath, targets }));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
