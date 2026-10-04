@@ -4,6 +4,7 @@ import {
   eventCountsThrough,
   formatAbandonedCount,
   formatEveningSummary,
+  formatLayer1ProbeSummary,
   orderStatsForDate,
   reportDateForEvening,
   summarizeHealth,
@@ -22,6 +23,14 @@ test('Shopify abandoned reporting distinguishes counts, missing setup, and read 
   assert.match(formatAbandonedCount({ status: 'ok', count: 10_000, precision: 'AT_LEAST' }, '20:00'), /至少 10000 个/);
   assert.match(formatAbandonedCount({ status: 'not_configured' }, '20:00'), /尚未接通/);
   assert.match(formatAbandonedCount({ status: 'error' }, '20:00'), /读取失败.*不按 0/);
+});
+
+test('Layer 1 throttling is reported in the 22:00 summary instead of a standalone alert', () => {
+  assert.equal(formatLayer1ProbeSummary({
+    homepage: { samples: 33, successes: 20, throttles: 13 },
+    'cart-api': { samples: 73, successes: 73, throttles: 0 },
+  }), 'Layer 1 探针：主页成功 20/33，被限流 13 次；/cart.js 成功 73/73');
+  assert.match(formatLayer1ProbeSummary(null), /读取失败.*不按 0/);
 });
 
 test('the normal report omits the optional Shopify Admin line when it is disabled', () => {

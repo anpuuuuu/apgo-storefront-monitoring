@@ -74,7 +74,22 @@ export const SCHEDULER_DEFAULTS = {
   tickTtlSeconds: 10 * 60,
   notifyThrottleKey: 'notify-throttle:scheduler',
   notifyThrottleSeconds: 60 * 60,
+  transientFailureTtlSeconds: 30 * 60,
+  transientRetryLockSeconds: 60,
 };
+
+export function isTransientDispatchError(error) {
+  return /GitHub workflow dispatch HTTP (?:429|5\d\d)\b/.test(String(error?.message || error));
+}
+
+function dispatchFailureKey(decision) {
+  return `dispatch-failure:${decision.workflow}:${decision.target}`;
+}
+
+function newlyCreatedDispatch(before = [], after = []) {
+  const known = new Set(before.map((run) => String(run.id)));
+  return after.find((run) => run.event === 'workflow_dispatch' && !known.has(String(run.id))) || null;
+}
 
 export function utcDateKey(nowMs) {
   return new Date(nowMs).toISOString().slice(0, 10);
@@ -265,14 +280,45 @@ export async function runSchedulerTick(env, scheduledTime, deps) {
     const plan = preliminary.decisions.length ? planDispatches({ ...base, runs }) : preliminary;
 
     const dispatched = [];
+    const failedDispatches = [];
     for (const decision of plan.decisions) {
       if (dryRun) { dispatched.push({ ...decision, dryRun: true }); continue; }
       if (decision.lockKey) await kvPut(decision.lockKey, iso, { expirationTtl: decision.lockTtl });
-      await dispatch(decision.workflow, decision.inputs);
+      try {
+        await dispatch(decision.workflow, decision.inputs);
+      } catch (error) {
+        if (!isTransientDispatchError(error)) throw error;
+
+        // A 5xx from GitHub is ambiguous: the dispatch may have been accepted
+        // before the gateway timed out. Compare run ids with the pre-dispatch
+        // snapshot before deciding that anything failed.
+        const after = await listRuns(decision.workflow).catch(() => []);
+        const reconciled = newlyCreatedDispatch(runs[decision.workflow], after);
+        if (reconciled) {
+          if (decision.markerKey) await kvPut(decision.markerKey, iso, { expirationTtl: decision.markerTtl });
+          await kvPut(dispatchFailureKey(decision), 'recovered', { expirationTtl: 60 });
+          dispatched.push({ ...decision, reconciledRunId: reconciled.id });
+          log(JSON.stringify({ event: 'scheduler_dispatch_reconciled', workflow: decision.workflow, target: decision.target, runId: reconciled.id }));
+          continue;
+        }
+
+        // Retry on the next five-minute tick instead of retaining the normal
+        // 10-30 minute lock. The first transient stays in logs; only a second
+        // consecutive failure becomes a Telegram incident.
+        if (decision.lockKey) await kvPut(decision.lockKey, iso, { expirationTtl: config.transientRetryLockSeconds });
+        const failureKey = dispatchFailureKey(decision);
+        const prior = await kvGet(failureKey);
+        await kvPut(failureKey, `failed:${iso}`, { expirationTtl: config.transientFailureTtlSeconds });
+        const consecutive = String(prior || '').startsWith('failed:') ? 2 : 1;
+        failedDispatches.push({ target: decision.target, workflow: decision.workflow, consecutive, error: String(error?.message || error).slice(0, 300) });
+        if (consecutive >= 2) throw new Error(`GitHub workflow dispatch failed twice consecutively: ${String(error?.message || error)}`);
+        continue;
+      }
+      await kvPut(dispatchFailureKey(decision), 'recovered', { expirationTtl: 60 });
       if (decision.markerKey) await kvPut(decision.markerKey, iso, { expirationTtl: decision.markerTtl });
       dispatched.push(decision);
     }
-    const summary = { event: 'scheduler_tick', scheduledTime, at: iso, dryRun, decisions: plan.decisions, skipped: plan.skipped, dispatched: dispatched.length };
+    const summary = { event: 'scheduler_tick', scheduledTime, at: iso, dryRun, decisions: plan.decisions, skipped: plan.skipped, dispatched: dispatched.length, failedDispatches };
     log(JSON.stringify(summary));
     return summary;
   } catch (error) {

@@ -60,7 +60,19 @@ export function formatAbandonedCount(abandoned, cutoffLabel) {
   return 'Shopify abandoned：尚未接通只读 Admin API';
 }
 
-export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, orders, health, completionState, abandoned, timeZone }) {
+export function formatLayer1ProbeSummary(probes) {
+  if (probes === null) return 'Layer 1 探针：汇总读取失败（不按 0 计算）';
+  const homepage = probes?.homepage;
+  const cart = probes?.['cart-api'];
+  if (!homepage && !cart) return 'Layer 1 探针：今天没有样本';
+  const homepageText = homepage
+    ? `主页成功 ${homepage.successes}/${homepage.samples}${homepage.throttles ? `，被限流 ${homepage.throttles} 次` : '，没有被限流'}`
+    : '主页没有样本';
+  const cartText = cart ? `/cart.js 成功 ${cart.successes}/${cart.samples}` : '/cart.js 没有样本';
+  return `Layer 1 探针：${homepageText}；${cartText}`;
+}
+
+export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, orders, health, completionState, abandoned, layer1Probes, timeZone }) {
   const checkout = Number(counts.begin_checkout || 0);
   const purchase = Number(counts.purchase || 0);
   const completion = checkout > 0 ? purchase / checkout : Number.NaN;
@@ -74,6 +86,7 @@ export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, o
     `${healthy ? '🟢' : '🟠'} [${label}][22:00 每日报告] ${reportDate.slice(0, 4)}-${reportDate.slice(4, 6)}-${reportDate.slice(6, 8)}`,
     `监控自身：${health.monitoringOperational ? '正常运行' : '有心跳延迟'}；检查结果：${health.checksPassing ? '全部通过' : '有失败项'}`,
     `分层：${layerText || '读不到健康状态'}`,
+    formatLayer1ProbeSummary(layer1Probes),
     `订单：今天 ${orders.count} 单；最后一单 ${localClock(orders.lastAt, timeZone)} ${timeZone}`,
     `GA4（已结算至 ${cutoffLabel}）：进入结账 ${checkout}，购买 ${purchase}，完成率 ${percent(completion)}`,
     `GA4 未完成估算：${notCompleted} 次（${percent(checkout > 0 ? notCompleted / checkout : Number.NaN)}）`,
