@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { heartbeatSeverity, shouldAlertHeartbeat } from '../workers/error-monitor/uptime.mjs';
+import { formatThrottleEvidence, heartbeatSeverity, shouldAlertHeartbeat } from '../workers/error-monitor/uptime.mjs';
 import { classifyHealth, normalizeHeartbeatStatus } from '../workers/error-monitor/index.mjs';
 
 test('heartbeat delay escalates only after two complete stale windows', () => {
@@ -11,6 +11,12 @@ test('heartbeat delay escalates only after two complete stale windows', () => {
   assert.equal(heartbeatSeverity(limit * 2, limit), 'warning');
   assert.equal(heartbeatSeverity(limit * 2 + 1, limit), 'critical');
   assert.equal(heartbeatSeverity(Number.POSITIVE_INFINITY, limit), 'critical');
+});
+
+test('429 diagnostics keep only useful response provenance', () => {
+  const headers = new Headers({ server: 'cloudflare', 'cf-ray': 'abc-KUL', 'retry-after': '60' });
+  assert.equal(formatThrottleEvidence(headers), ' · server=cloudflare · retry-after=60 · cf-ray=abc-KUL');
+  assert.equal(formatThrottleEvidence(null), '');
 });
 
 test('daily Layer 2 heartbeat warns at 30 hours and becomes critical at 36 hours', () => {

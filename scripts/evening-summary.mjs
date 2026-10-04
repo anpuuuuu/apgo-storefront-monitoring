@@ -1,5 +1,6 @@
 import {
   config,
+  d1,
   ga,
   getState,
   requireEnv,
@@ -46,6 +47,30 @@ const cutoffLabel = cutoffStamp.endsWith('2400')
   : `${cutoffStamp.slice(8, 10)}:${cutoffStamp.slice(10, 12)}`;
 const events = ['begin_checkout', 'purchase'];
 
+async function dailyLayer1ProbeSummary(startMs, endMs) {
+  try {
+    const rows = await d1(
+      `SELECT target, COUNT(*) AS samples,
+         SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS successes,
+         SUM(CASE WHEN http_status = 429 THEN 1 ELSE 0 END) AS throttles
+       FROM uptime_samples
+       WHERE target LIKE ?1
+         AND created_at >= datetime(?2 / 1000, 'unixepoch')
+         AND created_at < datetime(?3 / 1000, 'unixepoch')
+       GROUP BY target`,
+      [`${site.id}:%`, startMs, endMs]
+    );
+    return Object.fromEntries(rows.map((row) => [String(row.target).split(':').at(-1), {
+      samples: Number(row.samples || 0),
+      successes: Number(row.successes || 0),
+      throttles: Number(row.throttles || 0),
+    }]));
+  } catch (error) {
+    console.warn(JSON.stringify({ event: 'evening_layer1_probe_summary_failed', reason: String(error?.message || error).slice(0, 200) }));
+    return null;
+  }
+}
+
 async function dailyAbandonedCount() {
   const settings = site.shopifyAdmin;
   if (config.shopify_abandoned?.mode === 'off' || !settings?.shopEnv || !settings?.tokenEnv) return { status: 'disabled' };
@@ -70,7 +95,12 @@ async function dailyAbandonedCount() {
   }
 }
 
-const [report, healthResponse, orderLog, completionState, abandoned] = await Promise.all([
+const reportStartMs = minuteToMs(`${reportDate}0000`, timeZone);
+const reportEndMs = cutoffStamp.endsWith('2400')
+  ? minuteToMs(`${propertyMinuteNow(reportStartMs + 30 * 60 * 60_000, timeZone).slice(0, 8)}0000`, timeZone)
+  : minuteToMs(cutoffStamp, timeZone);
+
+const [report, healthResponse, orderLog, completionState, abandoned, layer1Probes] = await Promise.all([
   ga('runReport', {
     dateRanges: [{ startDate: reportDate, endDate: reportDate }],
     dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
@@ -82,6 +112,7 @@ const [report, healthResponse, orderLog, completionState, abandoned] = await Pro
   getState('orders:log'),
   getState('ga4:realtime:checkout_completion_drop'),
   dailyAbandonedCount(),
+  dailyLayer1ProbeSummary(reportStartMs, reportEndMs),
 ]);
 const healthPayload = await healthResponse.json().catch(() => null);
 if (!healthPayload?.sites) throw new Error(`Worker health unreadable: HTTP ${healthResponse.status}`);
@@ -98,6 +129,7 @@ const text = formatEveningSummary({
   health,
   completionState,
   abandoned,
+  layer1Probes,
   timeZone,
 });
 

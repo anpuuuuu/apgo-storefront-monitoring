@@ -120,9 +120,10 @@ test('one workflow is claimed once per tick: daily wins over realtime, layer3 go
   assert.deepEqual(plan.decisions[1].inputs, { layer3_selftest: 'true', rollout_validation: 'false' });
 });
 
-function fakeDeps({ healthBody = health({ layer4: 45 }), runs = {}, dispatchFails = false } = {}) {
+function fakeDeps({ healthBody = health({ layer4: 45 }), runs = {}, listRunsSequence = null, dispatchFails = false } = {}) {
   const kv = new Map();
-  const calls = { dispatch: [], listRuns: [], notify: [], log: [] };
+  const calls = { dispatch: [], listRuns: [], notify: [], log: [], puts: [] };
+  let listRunsCall = 0;
   return {
     kv,
     calls,
@@ -131,13 +132,17 @@ function fakeDeps({ healthBody = health({ layer4: 45 }), runs = {}, dispatchFail
       now: () => NOON,
       log: (line) => calls.log.push(JSON.parse(line)),
       fetchHealth: async () => healthBody,
-      listRuns: async (workflow) => { calls.listRuns.push(workflow); return runs[workflow] || []; },
+      listRuns: async (workflow) => {
+        calls.listRuns.push(workflow);
+        const sequenced = listRunsSequence?.[listRunsCall++];
+        return sequenced ?? runs[workflow] ?? [];
+      },
       dispatch: async (workflow, inputs) => {
         if (dispatchFails) throw new Error('GitHub workflow dispatch HTTP 502');
         calls.dispatch.push({ workflow, inputs });
       },
       kvGet: async (key) => kv.get(key) ?? null,
-      kvPut: async (key, value) => { kv.set(key, value); },
+      kvPut: async (key, value, options) => { kv.set(key, value); calls.puts.push({ key, value, options }); },
       notify: async (error) => calls.notify.push(String(error.message)),
     },
   };
@@ -179,11 +184,33 @@ test('daily marker is written only after a successful dispatch', async () => {
 
   const failing = fakeDeps({ healthBody: health({ layer4: 5 }), dispatchFails: true });
   failing.deps.now = () => at;
-  await assert.rejects(runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 5, failing.deps), /HTTP 502/);
+  const first = await runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 5, failing.deps);
   assert.ok(!failing.kv.has('daily:2026-09-08:primary'));
-  assert.deepEqual(failing.calls.notify, ['GitHub workflow dispatch HTTP 502']);
-  await assert.rejects(runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 6, failing.deps), /HTTP 502/);
-  assert.equal(failing.calls.notify.length, 1, 'second failure inside the throttle window does not page again');
+  assert.equal(first.failedDispatches[0].consecutive, 1);
+  assert.deepEqual(failing.calls.notify, [], 'one transient GitHub failure stays silent');
+  await assert.rejects(runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 6, failing.deps), /failed twice consecutively/);
+  assert.equal(failing.calls.notify.length, 1, 'the second consecutive transient becomes an incident');
+});
+
+test('an ambiguous 504 is reconciled when GitHub created a new workflow run', async () => {
+  const accepted = fakeDeps({
+    dispatchFails: true,
+    listRunsSequence: [[], [{ id: 99, event: 'workflow_dispatch', status: 'queued', conclusion: null, created_at: new Date(NOON).toISOString() }]],
+  });
+  const result = await runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 7, accepted.deps);
+  assert.equal(result.dispatched, 1);
+  assert.deepEqual(result.failedDispatches, []);
+  assert.deepEqual(accepted.calls.notify, []);
+  assert.ok(accepted.calls.log.some((entry) => entry.event === 'scheduler_dispatch_reconciled' && entry.runId === 99));
+});
+
+test('a first transient dispatch failure shortens the lock for the next tick', async () => {
+  const failing = fakeDeps({ dispatchFails: true });
+  const result = await runSchedulerTick({ SCHEDULER_DRY_RUN: 'false' }, 8, failing.deps);
+  assert.equal(result.failedDispatches[0].consecutive, 1);
+  const lockWrites = failing.calls.puts.filter((entry) => entry.key === 'dispatch-lock:monitor-alerts:realtime');
+  assert.equal(lockWrites.at(-1).options.expirationTtl, SCHEDULER_DEFAULTS.transientRetryLockSeconds);
+  assert.deepEqual(failing.calls.notify, []);
 });
 
 test('Layer 2 daily is dispatched once per site after 02:10 UTC when the heartbeat is stale', () => {

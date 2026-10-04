@@ -20,6 +20,7 @@ async function probe(target) {
     await target.validate(response);
     return { id: target.id, url: target.url, ok: true, status: response.status, latencyMs, error: '' };
   } catch (error) {
+    const baseError = error?.name === 'AbortError' ? 'timeout after 10s' : String(error?.message || error);
     return {
       id: target.id,
       url: target.url,
@@ -27,11 +28,22 @@ async function probe(target) {
       // Keep the real status so a 429 can be told apart from a timeout or 5xx.
       status: response?.status || 0,
       latencyMs: Date.now() - started,
-      error: error?.name === 'AbortError' ? 'timeout after 10s' : String(error?.message || error),
+      error: response?.status === 429 ? `${baseError}${formatThrottleEvidence(response.headers)}` : baseError,
     };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function formatThrottleEvidence(headers) {
+  if (!headers || typeof headers.get !== 'function') return '';
+  const evidence = [
+    ['server', headers.get('server')],
+    ['retry-after', headers.get('retry-after')],
+    ['cf-ray', headers.get('cf-ray')],
+    ['shopify-stage', headers.get('x-shopify-stage')],
+  ].filter(([, value]) => value).map(([name, value]) => `${name}=${String(value).slice(0, 100)}`);
+  return evidence.length ? ` · ${evidence.join(' · ')}` : '';
 }
 
 export function isThrottledSample(sample) {
@@ -144,12 +156,9 @@ async function updateTargetState(env, sample, siteSamples = []) {
       await logAlert(env.DB, layer, 'down', { ...sample, failures: state.failures });
     } else if (event === 'throttled') {
       const cart = siteSamples.find((entry) => entry.id === `${site.id}:cart-api`);
-      const cartVerdict = cart?.skipped
-        ? '/cart.js: skipped'
-        : cart
-          ? `/cart.js: HTTP ${cart.status || 0}${cart.ok ? ' OK' : ` · ${cart.error}`}`
-          : '/cart.js: no same-run result';
-      await sendTelegram(env, `🟠 [${label}][Layer 1 Throttled · 6h digest] ${sample.id} was rate-limited ${state.throttleSamplesSinceDigest} times across ${state.throttleEpisodesSinceDigest} episode(s)\nMonitor probes are backing off up to 60 minutes; this is not by itself a customer outage\n${cartVerdict}\n${sample.url}`, { silent: true });
+      // A probe-only 429 is operational context, not a customer incident.
+      // Keep the evidence in D1 for the 22:00 report instead of sending a
+      // standalone Telegram message every six hours.
       await logAlert(env.DB, layer, 'throttled', {
         ...sample,
         throttled: state.throttled,
