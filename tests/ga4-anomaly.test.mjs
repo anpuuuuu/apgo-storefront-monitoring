@@ -7,7 +7,10 @@ import {
   countsForWindow,
   coverageForDate,
   durationText,
+  evaluateCheckoutCompletion,
   evaluateDropRules,
+  baselineForRollingWindow,
+  hoursForWindow,
   isDailyStageFresh,
   isEmptyWindow,
   minuteToMs,
@@ -15,6 +18,7 @@ import {
   nextRuleState,
   propertyMinuteNow,
   realertDelayHours,
+  rollingWindowEndingAt,
   settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
@@ -122,6 +126,54 @@ test('appendCoverage keeps the newest entries within the cap', () => {
   assert.equal(list.at(-1), at(200));
   assert.equal(list[0], at(1));
   assert.deepEqual(appendCoverage(undefined, at(0)), [at(0)]);
+});
+
+test('rolling checkout completion uses a settled two-hour cohort', () => {
+  const slot = settledWindow(Date.parse('2026-10-04T14:19:00Z'), {
+    timeZone: 'Asia/Kuala_Lumpur', lagMinutes: 120, slotMinutes: 30,
+  });
+  const rolling = rollingWindowEndingAt(slot, { durationMinutes: 120, timeZone: 'Asia/Kuala_Lumpur' });
+  assert.equal(rolling.startStamp, '202610041830');
+  assert.equal(rolling.endStamp, '202610042030');
+  assert.deepEqual(hoursForWindow(rolling, 'Asia/Kuala_Lumpur'), ['18', '19', '20']);
+});
+
+test('checkout completion requires volume, relative drop and absolute drop', () => {
+  const settings = {
+    checkout_min: 15, baseline_checkout_min: 8, baseline_min_days: 14,
+    ratio_to_baseline: 0.5, absolute_drop: 0.15,
+  };
+  const baseline = { begin_checkout: 24, checkout_to_purchase: 0.4, sample_days: 28 };
+  assert.equal(evaluateCheckoutCompletion({ begin_checkout: 22, purchase: 2 }, baseline, settings).abnormal, true);
+  assert.equal(evaluateCheckoutCompletion({ begin_checkout: 10, purchase: 0 }, baseline, settings).abnormal, false, 'thin current cohorts do not page');
+  assert.equal(evaluateCheckoutCompletion({ begin_checkout: 22, purchase: 5 }, baseline, settings).abnormal, false, 'relative drop alone is insufficient when the absolute drop is small');
+  assert.equal(evaluateCheckoutCompletion({ begin_checkout: 22, purchase: 7 }, baseline, settings).abnormal, false, 'healthy completion stays quiet');
+});
+
+test('rolling baseline takes the median of daily completion rates', () => {
+  const endMs = Date.parse('2026-10-04T12:30:00Z'); // 20:30 MYT
+  const window = {
+    endMs,
+    endStamp: '202610042030',
+    durationMinutes: 120,
+  };
+  const row = (stamp, event, count) => ({
+    dimensionValues: [{ value: stamp }, { value: event }],
+    metricValues: [{ value: String(count) }],
+  });
+  const report = { rows: [
+    row('202610031900', 'begin_checkout', 20), row('202610031910', 'purchase', 8),
+    row('202610021900', 'begin_checkout', 10), row('202610021910', 'purchase', 2),
+  ] };
+  const baseline = baselineForRollingWindow(report, window, ['begin_checkout', 'purchase'], (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }, { timeZone: 'Asia/Kuala_Lumpur', baselineDays: 2 });
+  assert.equal(baseline.begin_checkout, 15);
+  assert.equal(baseline.purchase, 5);
+  assert.ok(Math.abs(baseline.checkout_to_purchase - 0.3) < Number.EPSILON);
+  assert.equal(baseline.sample_days, 2);
 });
 
 test('coverageForDate counts distinct windows on the MYT calendar day', () => {

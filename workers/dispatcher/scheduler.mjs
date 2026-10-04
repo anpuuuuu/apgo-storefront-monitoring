@@ -25,6 +25,7 @@ export const SCHEDULER_DEFAULTS = {
     workflow: 'monitor-alerts.yml',
     primaryAfterUtc: '04:25',
     confirmAfterUtc: '06:55',
+    summaryAfterUtc: '14:00',
     markerTtlSeconds: 36 * 60 * 60,
     recentRunMinutes: 15,
     failureBackoffMinutes: 60,
@@ -144,6 +145,7 @@ export function planDispatches({ health, now, locks = new Set(), markers = new S
   const daily = config.daily;
   const primaryKey = dailyMarkerKey(nowMs, 'primary');
   const confirmKey = dailyMarkerKey(nowMs, 'confirm');
+  const summaryKey = dailyMarkerKey(nowMs, 'summary');
   if (layerAges(health, sites, 'layer4').length) {
     if (clock >= daily.primaryAfterUtc) {
       consider('daily-primary', {
@@ -167,6 +169,17 @@ export function planDispatches({ health, now, locks = new Set(), markers = new S
       });
     } else {
       skipped.push({ target: 'daily-confirm', reason: 'before_deadline' });
+    }
+    if (clock >= daily.summaryAfterUtc) {
+      consider('evening-summary', {
+        workflow: daily.workflow,
+        inputs: { mode: 'evening-summary', simulate_zero: 'false', trigger: 'scheduler' },
+        markerKey: summaryKey,
+        markerTtl: daily.markerTtlSeconds,
+        gate: daily,
+      });
+    } else {
+      skipped.push({ target: 'evening-summary', reason: 'before_deadline' });
     }
   }
 
@@ -214,6 +227,7 @@ function candidateKeys(nowMs, config, sites = []) {
     ...(config.watch?.lockKey ? [config.watch.lockKey] : []),
     dailyMarkerKey(nowMs, 'primary'),
     dailyMarkerKey(nowMs, 'confirm'),
+    dailyMarkerKey(nowMs, 'summary'),
     ...sites.filter((site) => (site.enabledLayers || []).includes('layer2')).map((site) => layer2MarkerKey(nowMs, site.id)),
   ];
 }

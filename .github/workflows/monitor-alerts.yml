@@ -5,11 +5,12 @@ on:
     - cron: '19,49 * * * *'
     - cron: '17 4 * * *'
     - cron: '47 6 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [realtime, daily-primary, daily-confirm, validate, diagnose-revenue, diagnose-ga4]
+        options: [realtime, daily-primary, daily-confirm, evening-summary, validate, diagnose-revenue, diagnose-ga4]
         default: realtime
       simulate_zero:
         type: boolean
@@ -50,11 +51,15 @@ jobs:
           mode=realtime
           if [ "$SCHEDULE" = '17 4 * * *' ]; then mode=daily-primary; fi
           if [ "$SCHEDULE" = '47 6 * * *' ]; then mode=daily-confirm; fi
+          if [ "$SCHEDULE" = '0 14 * * *' ]; then mode=evening-summary; fi
           if [ "$EVENT_NAME" = workflow_dispatch ]; then mode="${INPUT_MODE:-realtime}"; fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
   ga4:
     needs: plan
+    concurrency:
+      group: layer4-${{ matrix.siteId }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -100,6 +105,7 @@ jobs:
               node scripts/investigator.mjs snapshot || echo 'investigator snapshot failed (non-fatal)'
               exit $status ;;
             daily-confirm) DAILY_STAGE=confirm node scripts/ga4-daily-funnel.mjs ;;
+            evening-summary) node scripts/evening-summary.mjs ;;
             *) node scripts/ga4-anomaly.mjs ;;
           esac
       - name: Notify execution failure only in Live mode

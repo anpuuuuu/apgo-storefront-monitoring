@@ -5,7 +5,9 @@ import {
   AdDiscoveryError,
   buildAdTargets,
   fetchAdReport,
+  formatRetiredLandingAlert,
   normalizeLandingPath,
+  retiredLandingTraffic,
   rowsFromReport,
 } from '../scripts/discover-ad-targets.mjs';
 import { loadLayer2Config } from '../scripts/layer2-config.mjs';
@@ -28,13 +30,32 @@ test('landing paths reject session routes, external URLs and malformed navigatio
 
 test('GA4 rows are normalized into named values', () => {
   const rows = rowsFromReport({ rows: [{
-    dimensionValues: [{ value: '/products/a' }, { value: 'Paid Social' }, { value: 'Malaysia' }],
+    dimensionValues: [{ value: '20261004' }, { value: '/products/a' }, { value: 'Paid Social' }, { value: 'Malaysia' }],
     metricValues: [{ value: '4' }, { value: '2' }, { value: '1' }],
   }] });
   assert.deepEqual(rows[0], {
-    landingPage: '/products/a', channel: 'Paid Social', country: 'Malaysia',
+    date: '20261004', landingPage: '/products/a', channel: 'Paid Social', country: 'Malaysia',
     sessions: 4, addToCarts: 2, checkouts: 1,
   });
+});
+
+test('retired products leave the browser plan, while only post-retirement paid traffic is reported', () => {
+  const copy = structuredClone(config);
+  copy.monitoring.layer2.adDiscovery.retiredLandingPaths = [{
+    path: '/products/a', retiredOn: '2026-10-04', reason: 'permanently discontinued',
+  }];
+  const rows = [
+    { date: '20261004', landingPage: '/products/a', channel: 'Paid Social', country: 'Malaysia', sessions: 124, addToCarts: 10, checkouts: 7 },
+    { date: '20261005', landingPage: '/products/a', channel: 'Paid Social', country: 'Malaysia', sessions: 2, addToCarts: 1, checkouts: 0 },
+    { date: '20261005', landingPage: '/products/b', channel: 'Paid Social', country: 'Malaysia', sessions: 3, addToCarts: 0, checkouts: 0 },
+  ];
+  assert.deepEqual(buildAdTargets(rows, copy).map((entry) => entry.landingPath), ['/products/b']);
+  const retired = retiredLandingTraffic(rows, copy);
+  assert.equal(retired.length, 1);
+  assert.deepEqual({ sessions: retired[0].sessions, addToCarts: retired[0].addToCarts, checkouts: retired[0].checkouts }, {
+    sessions: 2, addToCarts: 1, checkouts: 0,
+  });
+  assert.match(formatRetiredLandingAlert(retired, 'APGO MY'), /不会加入浏览器故障批次/);
 });
 
 test('paid targets merge UTM variants, reject organic and rank commerce activity first', () => {

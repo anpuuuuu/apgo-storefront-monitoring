@@ -167,6 +167,13 @@ export function validateLayer2Config(config, { legacy = false, contract = Boolea
     if (!Object.keys(discovery.countryMarketMap || {}).length) {
       throw new Layer2ConfigError('adDiscovery countryMarketMap must not be empty');
     }
+    const retired = discovery.retiredLandingPaths || [];
+    if (!Array.isArray(retired)) throw new Layer2ConfigError('adDiscovery retiredLandingPaths must be an array');
+    unique(retired, 'retired landing path', (entry) => entry.path);
+    for (const entry of retired) {
+      if (!/^\/[^?#,]*$/.test(entry.path || '')) throw new Layer2ConfigError(`invalid retired landing path: ${entry.path || '(empty)'}`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.retiredOn || '')) throw new Layer2ConfigError(`retired landing path ${entry.path} needs retiredOn YYYY-MM-DD`);
+    }
   }
   if (!Array.isArray(layer2.devices) || layer2.devices.length < 2) {
     throw new Layer2ConfigError('monitoring.layer2.devices must contain at least desktop and mobile');
