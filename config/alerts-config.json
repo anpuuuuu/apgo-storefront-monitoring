@@ -21,7 +21,7 @@
     "alert_retention_days": 90
   },
   "ga4": {
-    "mode": "observe",
+    "mode": "off",
     "observe_since": "2026-08-20",
     "timezone": "Asia/Kuala_Lumpur",
     "baseline_days": 28,
@@ -94,6 +94,15 @@
       "timezone": "Asia/Kuala_Lumpur",
       "dedupe_hours": 30
     }
+  },
+  "shopify_abandoned": {
+    "_readme": "Read-only aggregate abandoned checkout observation via Admin GraphQL. No customer, address, line-item, recovery URL, or checkout record is stored. Observe first; it does not page independently.",
+    "mode": "observe",
+    "api_version": "2026-10",
+    "check_minutes": 30,
+    "window_minutes": 120,
+    "settled_lag_minutes": 120,
+    "retention_days": 35
   },
   "storefront_watch": {
     "_readme": "Synthetic checkout watch (scripts/storefront-watch.mjs). Every 20 minutes it adds a real product to an anonymous cart and asks /cart/shipping_rates.json for the investigator address. Public cart endpoints only: never the checkout page, never payment, never an order. It exists because Layer 4 now judges a settled GA4 window and takes about 2.5 hours; a cart that returns no shipping method is a fact and does not need settling.",

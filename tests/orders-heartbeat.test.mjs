@@ -7,6 +7,7 @@ import {
   formatMinutes,
   orderGapMinutesAt,
   orderAlertText,
+  orderSourceCategory,
   parseOrderEvent,
   percentile,
   summarizeOrderGaps,
@@ -132,10 +133,19 @@ test('parseOrderEvent validates the platform-agnostic payload', () => {
   const ok = parseOrderEvent({ siteId: 'apgo-my', orderId: 12345, createdAt: '2026-09-08T05:20:00+08:00', test: 'false' });
   assert.deepEqual(ok, { ok: true, event: { siteId: 'apgo-my', orderId: '12345', createdAtMs: Date.parse('2026-09-08T05:20:00+08:00'), test: false } });
   assert.equal(parseOrderEvent({ siteId: 'apgo-my', orderId: '1', createdAt: '2026-09-08T05:20:00Z', test: true }).event.test, true);
+  assert.equal(parseOrderEvent({ siteId: 'apgo-my', orderId: '2', createdAt: '2026-09-08T05:20:00Z', sourceName: 'web' }).event.source, 'web');
   assert.equal(parseOrderEvent({ orderId: '1', createdAt: '2026-09-08T05:20:00Z' }).error, 'siteId is required');
   assert.equal(parseOrderEvent({ siteId: 'apgo-my', createdAt: '2026-09-08T05:20:00Z' }).error, 'orderId is required');
   assert.equal(parseOrderEvent({ siteId: 'apgo-my', orderId: '1', createdAt: 'yesterday' }).error, 'createdAt must be ISO 8601');
   assert.equal(parseOrderEvent(null).ok, false);
+});
+
+test('order source is reduced to a non-PII operational category', () => {
+  assert.equal(orderSourceCategory('web'), 'web');
+  assert.equal(orderSourceCategory('shopify_draft_order'), 'draft');
+  assert.equal(orderSourceCategory('Point_Of_Sale'), 'pos');
+  assert.equal(orderSourceCategory('customer@example.com'), 'other');
+  assert.equal(orderSourceCategory(''), '');
 });
 
 test('appendOrderLog is idempotent, sorted, and trims old entries', () => {
@@ -151,4 +161,6 @@ test('appendOrderLog is idempotent, sorted, and trims old entries', () => {
   assert.deepEqual(stale.log.entries.map((entry) => entry.id), ['c'], 'entries beyond retention are dropped');
   const capped = appendOrderLog({ entries: Array.from({ length: 3 }, (_, i) => ({ id: `e${i}`, at: NOW - (10 - i) * 60_000 })) }, { orderId: 'new', createdAtMs: NOW }, NOW, { cap: 3 });
   assert.deepEqual(capped.log.entries.map((entry) => entry.id), ['e1', 'e2', 'new']);
+  const sourced = appendOrderLog(null, { orderId: 'web-order', createdAtMs: NOW, source: 'web' }, NOW);
+  assert.equal(sourced.log.entries[0].source, 'web');
 });

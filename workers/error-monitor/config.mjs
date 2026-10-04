@@ -133,3 +133,15 @@ export const ORDER_LIMITS = {
   bodyBytes: 8_192,
   timeZone: 'Asia/Kuala_Lumpur',
 };
+
+// Read-only Shopify abandoned-checkout observation. It is deliberately an
+// evidence source, not an independent pager, until production counts establish
+// a baseline. Only aggregate counts and time windows are retained.
+export const SHOPIFY_ABANDONED_LIMITS = {
+  checkMinutes: 30,
+  windowMinutes: 120,
+  settledLagMinutes: 120,
+  retentionDays: 35,
+  logCap: 2_000,
+  apiVersion: '2026-10',
+};
