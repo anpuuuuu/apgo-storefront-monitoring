@@ -84,6 +84,31 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           ORDER_EVENT_TOKEN_APGO_MY: ${{ secrets.ORDER_EVENT_TOKEN_APGO_MY }}
         run: printf '%s' "$ORDER_EVENT_TOKEN_APGO_MY" | npx wrangler secret put ORDER_EVENT_TOKEN_APGO_MY --config workers/error-monitor/wrangler.jsonc
+      # Optional read-only Shopify Admin credentials for aggregate abandoned
+      # checkout counts. Never upload an empty value over a working secret.
+      - name: Check Shopify Admin credential availability
+        if: inputs.worker == 'error-monitor'
+        id: shopify-admin
+        env:
+          SHOPIFY_ADMIN_SHOP_APGO_MY: ${{ vars.SHOPIFY_ADMIN_SHOP_APGO_MY }}
+          SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY }}
+        run: |
+          if [ -n "$SHOPIFY_ADMIN_SHOP_APGO_MY" ]; then echo 'shop_configured=true' >> "$GITHUB_OUTPUT"; else echo 'shop_configured=false' >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY" ]; then echo 'token_configured=true' >> "$GITHUB_OUTPUT"; else echo 'token_configured=false' >> "$GITHUB_OUTPUT"; fi
+      - name: Upload Shopify Admin shop domain
+        if: inputs.worker == 'error-monitor' && steps.shopify-admin.outputs.shop_configured == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          SHOPIFY_ADMIN_SHOP_APGO_MY: ${{ vars.SHOPIFY_ADMIN_SHOP_APGO_MY }}
+        run: printf '%s' "$SHOPIFY_ADMIN_SHOP_APGO_MY" | npx wrangler secret put SHOPIFY_ADMIN_SHOP_APGO_MY --config workers/error-monitor/wrangler.jsonc
+      - name: Upload Shopify Admin access token
+        if: inputs.worker == 'error-monitor' && steps.shopify-admin.outputs.token_configured == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY }}
+        run: printf '%s' "$SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY" | npx wrangler secret put SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY --config workers/error-monitor/wrangler.jsonc
       - name: Deploy Dispatcher
         if: inputs.worker == 'dispatcher'
         uses: cloudflare/wrangler-action@v4

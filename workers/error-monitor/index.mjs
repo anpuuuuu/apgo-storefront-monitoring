@@ -1,9 +1,10 @@
-import { HEARTBEAT_LIMITS, ORDER_LIMITS, SITES, siteById, siteKey } from './config.mjs';
+import { HEARTBEAT_LIMITS, ORDER_LIMITS, SHOPIFY_ABANDONED_LIMITS, SITES, siteById, siteKey } from './config.mjs';
 import { listHeartbeats, writeHeartbeat } from './db.mjs';
 import { corsHeaders, digestBrowserErrors, receiveError } from './errors.mjs';
 import { bearerToken, secretMatches } from './security.mjs';
 import { runScheduledUptime } from './uptime.mjs';
 import { receiveOrderEvent, runOrderHeartbeat } from './orders.mjs';
+import { runAbandonedObservation } from './shopify-abandoned.mjs';
 
 function json(value, status = 200, headers = {}) {
   return Response.json(value, { status, headers: { 'cache-control': 'no-store', ...headers } });
@@ -100,7 +101,16 @@ export default {
           catch (error) { orders.push({ siteId: site.id, ok: false, reason: String(error?.message || error).slice(0, 300) }); }
         }
       }
-      console.log(JSON.stringify({ event: 'scheduled_complete', scheduledTime: controller.scheduledTime, ...result, orders }));
+      // Aggregate-only Shopify evidence every 30 minutes. Missing credentials
+      // report not_configured and never interrupt the established monitors.
+      const abandoned = [];
+      if (!result.duplicate && new Date(controller.scheduledTime).getUTCMinutes() % SHOPIFY_ABANDONED_LIMITS.checkMinutes === 0) {
+        for (const site of SITES.filter((candidate) => candidate.shopifyAdmin)) {
+          try { abandoned.push({ siteId: site.id, ...(await runAbandonedObservation(env, site, controller.scheduledTime)) }); }
+          catch (error) { abandoned.push({ siteId: site.id, ok: false, reason: String(error?.message || error).slice(0, 300) }); }
+        }
+      }
+      console.log(JSON.stringify({ event: 'scheduled_complete', scheduledTime: controller.scheduledTime, ...result, orders, abandoned }));
     })());
   },
 };

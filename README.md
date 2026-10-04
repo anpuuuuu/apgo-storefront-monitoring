@@ -109,7 +109,7 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 
 排程由 Dispatcher Worker 的 Cloudflare Cron（`*/5`）负责：读取 `/health`，Layer 4 心跳 ≥28 分钟就 `workflow_dispatch` 一次 `realtime`；UTC 04:25 / 06:55 之后各派发一次 `daily-primary` / `daily-confirm`；UTC 14:00（Asia/Kuala_Lumpur 22:00）派发 `evening-summary`；Layer 3 心跳 >90 分钟派发 self-health。GitHub 自己的 `19,49 * * * *` 与 daily cron 保留作冗余——GitHub 对高频 cron 只送达约 18%，对每日 cron 会晚 4–6 小时，不能单独依赖。KV 锁、D1 日报去重、最近 15 分钟已有 run、以及失败后 60 分钟退避都会阻止重复派发。
 
-正常状态不发送逐次成功消息。业务异常、监控心跳延迟及其恢复仍即时通知；除此之外只在每天 22:00 发送一次汇总，列出各层状态、当天 Shopify push 订单数，以及 GA4 已结算时段的 `begin_checkout → purchase` 完成率。未完成数是 GA4 事件差值，只用于快速发现 abandoned checkout 上升，不冒充 Shopify 后台的精确 abandoned checkout 名单。
+正常状态不发送逐次成功消息。业务异常、监控心跳延迟及其恢复仍即时通知；除此之外只在每天 22:00 发送一次汇总，列出各层状态、当天 Shopify push 订单数，以及 GA4 已结算时段的 `begin_checkout → purchase` 完成率。未完成数是 GA4 事件差值，用来发现 checkout abandonment 上升；不冒充 Shopify 后台的逐笔名单。可选 Shopify Admin 聚合观察目前关闭，因此日报不会显示「尚未接通」之类的无行动价值提示。
 
 - 告警送达：首次触发后状况持续，按 `realert_schedule_hours: [1, 2, 3]` 在 +1h、+2h、+3h 各提醒一次，之后每 3 小时，每条注明「第 N 次提醒，已持续 X」；恢复时发 🟢（静默）。文案带「先查什么」（运费 / 折扣 / 库存 / 结账设置 / 主题或 app 更新）和当时正在产生加购的商品页（按 `unifiedScreenName` 拆，**取的是被判断的那个时段**，不是发告警的那一刻）。2026-09-15 的 free-shipping 事故在旧的 6 小时平铺重报下 00:46 响过一次后 07:16 才再响，中间被淹没在杂讯里。
 - Collection：Layer 1 正常、同期中位数 ≥10、连续两个窗口 page_view=0。
@@ -129,10 +129,10 @@ V2 只保留每天 MYT 09:37 与每次 `main` 更新后的巡检；旧 Workflow 
 POST https://apgo-error-monitor.wadeyeh.workers.dev/orders/event
 Authorization: Bearer <该站点的 ORDER_EVENT_TOKEN>
 Content-Type: application/json
-{ "siteId": "apgo-my", "orderId": "<平台订单 ID>", "createdAt": "<ISO 8601>", "test": false }
+{ "siteId": "apgo-my", "orderId": "<平台订单 ID>", "createdAt": "<ISO 8601>", "test": false, "source": "web" }
 ```
 
-- Shopify：Flow「Order created → Send HTTP request」，body 用 Liquid 模板填上面四个字段（`{{ order.id }}`、`{{ order.createdAt }}`、`{{ order.test }}`）。WooCommerce / 自建站 / Make 同样格式。
+- Shopify：Flow「Order created → Send HTTP request」，body 用 Liquid 模板填订单 ID、创建时间与 test；`source` 是可选字段，用来以后排除 POS / draft，Worker 只保留 `web` / `pos` / `draft` / `mobile` / `api` / `other` 粗分类，旧的四字段 payload 继续有效。WooCommerce / 自建站 / Make 同样格式。
 - Worker 以 `orderId` 去重（平台重试不会重复计数），`test: true` 直接丢弃，订单时间保存在 D1 `state` 的 `<site>:orders:log`（保留 35 天），最新一笔在 `<site>:orders:last` 供 GA4 交叉检查读取。
 - 每 10 分钟评估「距上一单多久」。08:00–24:00 MYT 使用 7 小时阈值；00:00–08:00 的自然夜间空档使用 9 小时，08:00 后仍没有新订单则立刻回到 7 小时判断。超过当前阈值两倍算 critical，6 小时内不重复。**恢复必须由新订单触发**，阈值变化永远不会产生「订单恢复了」。
 - 为什么是一个固定值而不是分时段的模型：455 笔真实订单（2026-09-09 至 09-20）显示间隔中位数 19 分钟、p90 1h19m，正常日最长间隔 5h51m，唯一更长的 8h01m 是 09-15 免运费事故。拿这批数据回放，7 小时只触发一次（就是那次事故），4 小时触发 9 次且全部落在老板确认正常的日子。旧的分桶 p90 模型做不到：4 小时窗口在正常情况下有 3.6% 的时间是零订单，同一个小时桶的订单数从 4 到 17 不等，分布宽度盖过了信号——这就是它在三个健康日里响了 11 次的原因。
@@ -141,6 +141,13 @@ Content-Type: application/json
 - 心跳 detail 里带 `observedMaxGapMinutes` 与 `observedP90GapMinutes`（最近 28 天实测），阈值要调时看这两个数字，不要凭感觉。
 - 推送源自身的健康单独看：从未收到推送记 `orders_push_missing`；超过 24 小时没有任何推送记 `orders_push_stale` 并提示先检查 Flow，而不是把它读成零销售。
 - 启用方式（每站点）：`config/sites.json` 加 `"orders": {"source": "push", "tokenEnv": "ORDER_EVENT_TOKEN_<SITE>"}` 并 `npm run generate:sites`；GitHub secret `ORDER_EVENT_TOKEN_<SITE>` 放一串随机值（部署 Workflow 在 secret 存在时才上传，不存在则跳过）；平台侧用同一个值当 Bearer。Worker var `ORDERS_MODE`：observe 只写 `would_alert` / `would_recover`；**2026-09-11 起 armed，2026-09-21 换成固定阈值**。要回退成静默把它改成 `observe` 再部署即可，阈值本身在 `ORDER_LIMITS.gapMinutes`。
+
+### Shopify abandoned checkout 聚合观察
+
+- **目前为 `off`，APGO MY 没有配置 Custom App。** 现有 GA4 completion、订单 push、Layer 2 浏览器旅程与公开购物车/运费探测继续负责异常发现；这已经覆盖“结账完成率下降、订单停止、店面路径异常”，但不能给出 Shopify 精确 abandoned 数量，也不能单凭结果认定某个支付供应商是根因。
+- Error Monitor 每 30 分钟读取一次与 GA4 对齐的已结算两小时 cohort，调用 Admin GraphQL [`abandonedCheckoutsCount`](https://shopify.dev/docs/api/admin-graphql/2026-10/queries/abandonedCheckoutsCount)，只筛 `recovery_state:not_recovered`。D1 的 `<site>:shopify:abandoned:latest` 与 `:log` 仅保存窗口、count、precision 与检查时间，保留 35 天。
+- 第一阶段固定为 `observe`：不单独发 Telegram，不把 API 失败当成 0，也不影响现有 Layer 1–4。22:00 日报会另外读取当天截至 GA4 cutoff 的聚合总数。至少积累 7 天后，才根据真实分布决定是否把它作为 GA4 checkout-completion 异常的确认条件。
+- Shopify Custom App 只授予 `read_orders`；安装/操作账号还要有 `manage_abandoned_checkouts`。Repository variable `SHOPIFY_ADMIN_SHOP_APGO_MY` 填 `*.myshopify.com`，Repository secret `SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY` 放 Admin API token。部署 Error Monitor 时会在值存在的情况下上传到 Worker；两者任一缺失时保持 `not_configured`。
 
 ### 调查员（告警后的自动排查，阶段 1a）
 
@@ -191,9 +198,9 @@ Workflow 失败通知（`scripts/workflow-failure-notify.mjs`）只在同一 wor
 
 ## Secrets 与 Variables
 
-Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`；可选 `ORDER_EVENT_TOKEN_APGO_MY`（订单心跳推送的共享密钥，同一值填在 Shopify Flow 的 Authorization header）。
+Secrets：`CF_API_TOKEN`、`CF_ACCOUNT_ID`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`MONITOR_HEARTBEAT_TOKEN`、`MONITOR_GITHUB_APP_PRIVATE_KEY`、`MONITOR_GITHUB_WEBHOOK_SECRET`；可选 `ORDER_EVENT_TOKEN_APGO_MY`（订单心跳推送的共享密钥，同一值填在 Shopify Flow 的 Authorization header）、`SHOPIFY_ADMIN_ACCESS_TOKEN_APGO_MY`（只读 abandoned 聚合）。
 
-Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`。`MONITOR_LAYER4_PAUSED=true` 暂停中央 Layer 4 定时、自检恢复触发与 Dispatcher 派发（`trigger=scheduler` 的 run 会被跳过），不影响 Layer 2 广告清单发现，也不代表 GA4 验收通过；长时间暂停时同时把 Dispatcher 的 `SCHEDULER_ENABLED` 改为 `false`，避免每 15 分钟产生一条 skipped run。Dispatcher Worker 自身的 `vars`：`CENTRAL_REPOSITORY`、`MONITOR_WORKER_URL`、`SCHEDULER_ENABLED`、`SCHEDULER_DRY_RUN`（在 `workers/dispatcher/wrangler.jsonc`）。`MONITOR_SHADOW_STARTED_AT`、`MONITOR_SHADOW_REVIEW_AFTER` 记录观察时间，不自动触发 Cutover。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
+Variables：`GCP_WIF_PROVIDER`、`MONITOR_WORKER_URL`、`MONITOR_DISPATCHER_URL`、`MONITOR_GITHUB_APP_ID`、`MONITOR_MODE`、`MONITOR_SCHEDULE_ENABLED`、可选 `SHOPIFY_ADMIN_SHOP_APGO_MY`（`*.myshopify.com`）。`MONITOR_LAYER4_PAUSED=true` 暂停中央 Layer 4 定时、自检恢复触发与 Dispatcher 派发（`trigger=scheduler` 的 run 会被跳过），不影响 Layer 2 广告清单发现，也不代表 GA4 验收通过；长时间暂停时同时把 Dispatcher 的 `SCHEDULER_ENABLED` 改为 `false`，避免每 15 分钟产生一条 skipped run。Dispatcher Worker 自身的 `vars`：`CENTRAL_REPOSITORY`、`MONITOR_WORKER_URL`、`SCHEDULER_ENABLED`、`SCHEDULER_DRY_RUN`（在 `workers/dispatcher/wrangler.jsonc`）。`MONITOR_SHADOW_STARTED_AT`、`MONITOR_SHADOW_REVIEW_AFTER` 记录观察时间，不自动触发 Cutover。GA4 Property ID 属于 Site 配置，不再用单一 Repo Variable。
 
 任何必要值缺失都必须失败，不再“跳过后显示绿色”。
 

@@ -50,7 +50,17 @@ function localClock(ms, timeZone) {
   }).format(new Date(ms));
 }
 
-export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, orders, health, completionState, timeZone }) {
+export function formatAbandonedCount(abandoned, cutoffLabel) {
+  if (!abandoned || abandoned.status === 'disabled') return null;
+  if (abandoned?.status === 'ok') {
+    const qualifier = abandoned.precision === 'EXACT' ? '' : '至少 ';
+    return `Shopify abandoned（已结算至 ${cutoffLabel}）：未恢复 ${qualifier}${abandoned.count} 个（聚合计数，不读取顾客名单）`;
+  }
+  if (abandoned?.status === 'error') return 'Shopify abandoned：读取失败（不按 0 计算）';
+  return 'Shopify abandoned：尚未接通只读 Admin API';
+}
+
+export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, orders, health, completionState, abandoned, timeZone }) {
   const checkout = Number(counts.begin_checkout || 0);
   const purchase = Number(counts.purchase || 0);
   const completion = checkout > 0 ? purchase / checkout : Number.NaN;
@@ -66,7 +76,8 @@ export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, o
     `分层：${layerText || '读不到健康状态'}`,
     `订单：今天 ${orders.count} 单；最后一单 ${localClock(orders.lastAt, timeZone)} ${timeZone}`,
     `GA4（已结算至 ${cutoffLabel}）：进入结账 ${checkout}，购买 ${purchase}，完成率 ${percent(completion)}`,
-    `未完成估算：${notCompleted} 次（${percent(checkout > 0 ? notCompleted / checkout : Number.NaN)}）；这是 GA4 事件口径，不是 Shopify 精确 abandoned checkout 名单`,
+    `GA4 未完成估算：${notCompleted} 次（${percent(checkout > 0 ? notCompleted / checkout : Number.NaN)}）`,
+    formatAbandonedCount(abandoned, cutoffLabel),
     `快速完成率规则：${completionState?.active ? '异常仍在持续' : '未触发'}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }

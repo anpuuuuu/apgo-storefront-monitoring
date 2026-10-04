@@ -8,7 +8,8 @@ import {
   telegram,
   workerUrl,
 } from './monitor-lib.mjs';
-import { settledWindow } from './ga4-anomaly-lib.mjs';
+import { minuteToMs, propertyMinuteNow, settledWindow } from './ga4-anomaly-lib.mjs';
+import { fetchAbandonedCount } from '../workers/error-monitor/shopify-abandoned.mjs';
 import {
   eventCountsThrough,
   formatEveningSummary,
@@ -45,7 +46,31 @@ const cutoffLabel = cutoffStamp.endsWith('2400')
   : `${cutoffStamp.slice(8, 10)}:${cutoffStamp.slice(10, 12)}`;
 const events = ['begin_checkout', 'purchase'];
 
-const [report, healthResponse, orderLog, completionState] = await Promise.all([
+async function dailyAbandonedCount() {
+  const settings = site.shopifyAdmin;
+  if (config.shopify_abandoned?.mode === 'off' || !settings?.shopEnv || !settings?.tokenEnv) return { status: 'disabled' };
+  const shopDomain = process.env[settings.shopEnv];
+  const accessToken = process.env[settings.tokenEnv];
+  if (!shopDomain || !accessToken) return { status: 'not_configured' };
+  const startMs = minuteToMs(`${reportDate}0000`, timeZone);
+  const endMs = cutoffStamp.endsWith('2400')
+    ? minuteToMs(`${propertyMinuteNow(startMs + 30 * 60 * 60_000, timeZone).slice(0, 8)}0000`, timeZone)
+    : minuteToMs(cutoffStamp, timeZone);
+  try {
+    return {
+      status: 'ok',
+      ...(await fetchAbandonedCount({
+        shopDomain, accessToken, startMs, endMs,
+        apiVersion: settings.apiVersion || config.shopify_abandoned?.api_version || '2026-10',
+      })),
+    };
+  } catch (error) {
+    console.warn(JSON.stringify({ event: 'evening_shopify_abandoned_failed', reason: String(error?.message || error).slice(0, 200) }));
+    return { status: 'error' };
+  }
+}
+
+const [report, healthResponse, orderLog, completionState, abandoned] = await Promise.all([
   ga('runReport', {
     dateRanges: [{ startDate: reportDate, endDate: reportDate }],
     dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
@@ -56,6 +81,7 @@ const [report, healthResponse, orderLog, completionState] = await Promise.all([
   fetch(`${workerUrl}/health`, { headers: { 'user-agent': 'APGO-HealthCheck/2.0 EveningSummary' } }),
   getState('orders:log'),
   getState('ga4:realtime:checkout_completion_drop'),
+  dailyAbandonedCount(),
 ]);
 const healthPayload = await healthResponse.json().catch(() => null);
 if (!healthPayload?.sites) throw new Error(`Worker health unreadable: HTTP ${healthResponse.status}`);
@@ -71,6 +97,7 @@ const text = formatEveningSummary({
   orders,
   health,
   completionState,
+  abandoned,
   timeZone,
 });
 

@@ -8,7 +8,7 @@
 
      POST /orders/event
      Authorization: Bearer <that site's ORDER_EVENT_TOKEN>
-     { "siteId": "apgo-my", "orderId": "…", "createdAt": "<ISO 8601>", "test": false }
+     { "siteId": "apgo-my", "orderId": "…", "createdAt": "<ISO 8601>", "test": false, "source": "web" }
 
    The measure is "minutes since the last order" against one flat threshold.
    That is blunt on purpose. An earlier version compared the gap with a
@@ -153,7 +153,23 @@ export function parseOrderEvent(body) {
   if (!orderId) return { ok: false, error: 'orderId is required' };
   if (!Number.isFinite(createdAtMs)) return { ok: false, error: 'createdAt must be ISO 8601' };
   const test = body.test === true || String(body.test).toLowerCase() === 'true';
-  return { ok: true, event: { siteId, orderId, createdAtMs, test } };
+  // Optional non-PII origin lets a later first-party completion calculation
+  // exclude POS/draft orders. Existing Flow payloads remain valid.
+  const source = orderSourceCategory(body.source ?? body.sourceName ?? body.channel);
+  return { ok: true, event: { siteId, orderId, createdAtMs, test, ...(source ? { source } : {}) } };
+}
+
+/* Store a coarse operational category, never an arbitrary channel label that
+   could accidentally contain customer or campaign data. */
+export function orderSourceCategory(value) {
+  const source = String(value || '').trim().toLowerCase();
+  if (!source) return '';
+  if (source === 'web' || source.includes('online_store')) return 'web';
+  if (source === 'pos' || source.includes('point_of_sale')) return 'pos';
+  if (source.includes('draft')) return 'draft';
+  if (source === 'iphone' || source === 'android' || source.includes('mobile')) return 'mobile';
+  if (source === 'api') return 'api';
+  return 'other';
 }
 
 /* Rolling list of {id, at} kept for retentionDays. Idempotent on orderId so
@@ -163,7 +179,7 @@ export function appendOrderLog(log, event, nowMs, { retentionDays = ORDER_LIMITS
   if (entries.some((entry) => entry.id === event.orderId)) return { log: { entries, updatedAt: log?.updatedAt || null }, duplicate: true };
   const cutoff = nowMs - retentionDays * 86_400_000;
   const kept = entries.filter((entry) => Number(entry.at) >= cutoff);
-  kept.push({ id: event.orderId, at: event.createdAtMs });
+  kept.push({ id: event.orderId, at: event.createdAtMs, ...(event.source ? { source: event.source } : {}) });
   kept.sort((a, b) => a.at - b.at);
   const trimmed = kept.length > cap ? kept.slice(kept.length - cap) : kept;
   return { log: { entries: trimmed, updatedAt: new Date(nowMs).toISOString() }, duplicate: false };
