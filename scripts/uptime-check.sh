@@ -50,7 +50,13 @@ d1_query() { # $1 sql, $2 json params array; prints result rows, non-zero on fai
   echo "$resp" | jq -c '.result[0].results // []'
 }
 
-tg_send() { # $1 message text
+# Same format as every other notification (workers/alert-format.mjs), written
+# by hand because this backup check is shell: colour, then "is the store OK |
+# do I need to act", then plain sentences, then the time, then technical
+# detail. Only red rings; pass "silent" as $2 for anything else.
+tg_send() { # $1 message text, $2 "silent" to deliver without ringing
+  local quiet=false
+  [ "${2:-}" = silent ] && quiet=true
   if [ "$MONITOR_MODE" = shadow ]; then
     echo 'Shadow: Telegram notification suppressed.'
     return 0
@@ -63,7 +69,8 @@ tg_send() { # $1 message text
   curl -sS --max-time 15 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${TG_CHAT}" \
     --data-urlencode "text=$1" \
-    --data-urlencode 'disable_web_page_preview=true' >/dev/null \
+    --data-urlencode 'disable_web_page_preview=true' \
+    --data-urlencode "disable_notification=${quiet}" >/dev/null \
     || echo "::warning::Telegram 发送失败"
 }
 
@@ -98,10 +105,14 @@ check_site() { # $1 baseUrl, $2 type; prints failure reason, empty = OK
 
 NOW_EPOCH=$(date +%s)
 NOW_MYT=$(TZ='Asia/Kuala_Lumpur' date '+%Y-%m-%d %H:%M')
+NOW_SHORT=$(TZ='Asia/Kuala_Lumpur' date '+%m/%d %H:%M')
+# "2026-10-06 03:11" -> "10/06 03:11", the way every other message writes time.
+short_time() { echo "$1" | sed -E 's/^[0-9]{4}-([0-9]{2})-([0-9]{2}) /\1\/\2 /'; }
 
 while read -r site; do
   id=$(echo "$site" | jq -r '.id')
   name=$(echo "$site" | jq -r '.name // .id')
+  label=$(echo "$site" | jq -r '.alertLabel // .name // .id')
   base=$(echo "$site" | jq -r '.baseUrl')
   type=$(echo "$site" | jq -r '.type // "shopify"')
   [ -z "$base" ] && continue
@@ -142,17 +153,23 @@ while read -r site; do
         echo "$id: 距上次告警 ${age_min} 分钟(<${REALERT_MIN}),不重复通知"
         continue
       fi
-      tg_send "🔴 [第1层·拨测] ${name} 仍然宕机
-自 ${prev_since:-未知} (MYT) 起持续无法访问
-本轮原因: ${reason}
+      tg_send "🔴 网站仍然打不开
+${label} · 店铺有问题｜要你马上处理
+从 $(short_time "${prev_since:-未知}") 起一直打不开，顾客现在很可能进不了网站。
+时间 ${NOW_SHORT}
+—— 技术细节 ——
+${reason}
 ${RUN_URL}"
       save_state "uptime:$id" "$(jq -cn --arg s "$prev_since" --argjson se "$prev_since_epoch" --argjson t "$NOW_EPOCH" '{status:"down",since:$s,since_epoch:$se,last_alert_at:$t}')"
       log_alert "realert" "$(jq -cn --arg id "$id" --arg r "$reason" '{site:$id,reason:$r}')"
     else
-      tg_send "🔴 [第1层·拨测] ${name} 疑似宕机
-检查失败: ${reason}
-(${RECHECK_DELAY} 秒后复查仍失败;每小时的真浏览器巡检会给出更多细节)
-时间: ${NOW_MYT} (MYT)
+      tg_send "🔴 网站打不开
+${label} · 店铺有问题｜要你马上处理
+检查网站失败，${RECHECK_DELAY} 秒后再查还是失败，顾客现在很可能进不了网站。
+请用手机打开网站试一下；如果确实打不开，先看 Shopify 后台有没有异常通知。
+时间 ${NOW_SHORT}
+—— 技术细节 ——
+${reason}
 ${RUN_URL}"
       save_state "uptime:$id" "$(jq -cn --arg s "$NOW_MYT" --argjson se "$NOW_EPOCH" --argjson t "$NOW_EPOCH" '{status:"down",since:$s,since_epoch:$se,last_alert_at:$t}')"
       log_alert "alert" "$(jq -cn --arg id "$id" --arg r "$reason" '{site:$id,reason:$r}')"
@@ -162,9 +179,10 @@ ${RUN_URL}"
     if [ "$prev_status" = "down" ]; then
       down_min="?"
       [ "$prev_since_epoch" -gt 0 ] && down_min=$(( (NOW_EPOCH - prev_since_epoch) / 60 ))
-      tg_send "✅ [第1层·拨测] ${name} 已恢复
-宕机开始: ${prev_since:-未知} (MYT)
-恢复时间: ${NOW_MYT} (MYT),本次宕机约 ${down_min} 分钟"
+      tg_send "✅ 网站恢复了
+${label} · 店铺正常｜不用处理
+网站又能打开了，这次大约打不开 ${down_min} 分钟（$(short_time "${prev_since:-未知}") 起）。
+时间 ${NOW_SHORT}" silent
       save_state "uptime:$id" '{"status":"up"}'
       log_alert "recovery" "$(jq -cn --arg id "$id" --argjson m "${down_min/\?/0}" '{site:$id,down_minutes:$m}')"
     elif [ "$prev_status" != "up" ]; then

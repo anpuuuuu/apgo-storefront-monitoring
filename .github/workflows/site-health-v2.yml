@@ -254,6 +254,7 @@ jobs:
           MONITOR_AGGREGATE_FILE: layer2-aggregate.json
           MONITOR_HEARTBEAT_DETAIL_FILE: layer2-heartbeat-detail.json
           MONITOR_CADENCE: ${{ needs.plan.outputs.cadence }}
+          MONITOR_SITE_ID: ${{ needs.plan.outputs.site_id }}
         run: node scripts/aggregate-layer2-results.mjs
       - name: Write only Live Daily heartbeat
         if: needs.plan.outputs.cadence == 'daily' && vars.MONITOR_MODE == 'live' && steps.aggregate.outputs.status != 'cancelled'
@@ -277,6 +278,10 @@ jobs:
           MONITOR_NOTIFY_MIN_CONSECUTIVE: "1"
           ALERT_TITLE: ${{ steps.aggregate.outputs.alert_title }}
           ALERT_DETAIL: ${{ steps.aggregate.outputs.detail }}
+          # The aggregate prepares the owner-facing message, store name
+          # included; the notifier formats and sends it. ALERT_TITLE/DETAIL
+          # stay for the generic fallback.
+          ALERT_FILE: layer2-alert.json
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/workflow-failure-notify.mjs
       - name: Fail missing or twice-failed Journeys

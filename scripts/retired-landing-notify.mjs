@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { formatRetiredLandingAlert } from './discover-ad-targets.mjs';
+import { retiredLandingAlert } from './discover-ad-targets.mjs';
 
 const token = process.env.TELEGRAM_BOT_TOKEN || '';
 const chatId = process.env.TELEGRAM_CHAT_ID || '';
@@ -12,11 +12,11 @@ if (!token || !chatId) {
 }
 
 try {
-  const text = formatRetiredLandingAlert(items, process.env.MONITOR_SITE_LABEL || 'APGO');
+  const alert = retiredLandingAlert(items, process.env.MONITOR_SITE_LABEL || 'APGO');
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true, disable_notification: true }),
+    body: JSON.stringify({ chat_id: chatId, text: alert.text, disable_web_page_preview: true, disable_notification: alert.silent }),
   });
   if (!response.ok) console.error(`Telegram retired landing notification failed: HTTP ${response.status}`);
   else console.log(JSON.stringify({ event: 'retired_landing_traffic_notified', count: items.length }));

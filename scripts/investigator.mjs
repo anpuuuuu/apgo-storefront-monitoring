@@ -17,7 +17,7 @@ import {
   fetchCatalog,
   matchScreensToProducts,
   probeProduct,
-  renderInvestigation,
+  investigationAlert,
   snapshotEntry,
   snapshotHandles,
 } from './checkout-probe-lib.mjs';
@@ -113,7 +113,7 @@ async function runInvestigation({ rule, ruleLabel, screens }) {
     const current = snapshotEntry(byHandle.get(probe.handle), probe);
     return { handle: probe.handle, title: probe.title, count: target.count || 0, probe, hadSnapshot: Boolean(previous), changes: diffProbe(previous, current) };
   });
-  const text = renderInvestigation({
+  const alert = investigationAlert({
     ruleLabel,
     address: settings.address,
     results,
@@ -124,7 +124,7 @@ async function runInvestigation({ rule, ruleLabel, screens }) {
   // Rings, like the business alert it follows. Wade, 2026-09-15: the 🔎 is
   // what says where to look, so it must reach the phone even when it found
   // nothing — at most one per incident (first page only), never a stream.
-  await telegram(text);
+  await telegram(alert);
   const summary = {
     rule,
     matched: matched.map((entry) => entry.handle),

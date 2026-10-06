@@ -263,7 +263,12 @@ test('verdict and the 🔎 message lead with the most likely cause and never cla
     unmatched: ['Cart – APGO Malaysia'],
     snapshotTakenAt: '2026-09-15T04:25:00.000Z',
   });
-  assert.ok(text.startsWith('🔎 [第4层·调查员] 加购后没有结账 自动排查'));
+  assert.ok(text.startsWith('🔎 排查结果：加购后没有结账\n'));
+  // The conclusion comes before any product detail: it used to be the last
+  // line, so the owner had to read everything before learning what it meant.
+  const lines = text.split('\n');
+  assert.ok(lines[2].startsWith('结论：最可能：免运费方案被关掉'), lines[2]);
+  assert.ok(lines.findIndex((line) => line.startsWith('结论：')) < lines.findIndex((line) => line.startsWith('1. ')));
   assert.ok(text.includes('邮编 86900，不进结账'));
   assert.ok(text.includes(`1. ${promo.title}  /products/${promo.handle}（加购 7）`));
   assert.ok(text.includes('加 1 件 → 购物车 10 件 RM 234.00（自动加入 +9）'));
@@ -272,14 +277,18 @@ test('verdict and the 🔎 message lead with the most likely cause and never cla
   assert.ok(text.includes('（快照 2026-09-15T04:25 没有这个商品）'));
   assert.ok(text.includes('对不上商品的页面：Cart – APGO Malaysia'));
   assert.ok(text.includes('结论：最可能：免运费方案被关掉'));
-  assert.ok(text.endsWith('修复由人来做；这条只是线索。'));
+  assert.ok(text.includes('修复由人来做；这条只是线索。'));
+  // A probe that found a missing shipping option says the store may be at fault.
+  assert.match(text, /店铺可能有问题｜接着上一条看/);
   assert.ok(!/checkout|结账页已/.test(text.replace('不进结账', '').replace('结账页本身', '')));
 
   // Wade asked for the 🔎 even when it finds nothing, so an empty run must still say what to do next.
   const empty = renderInvestigation({ ruleLabel: 'x', address: ADDRESS, results: [], unmatched: ['Home'], snapshotTakenAt: null });
   assert.ok(empty.includes('GA4 的页面标题对不上任何商品：Home'));
   assert.ok(empty.includes('结论：没能锁定商品'));
-  assert.ok(empty.endsWith('修复由人来做；这条只是线索。'));
+  assert.ok(empty.includes('修复由人来做；这条只是线索。'));
+  // Nothing measured is "cannot see", never "the store is fine".
+  assert.match(empty, /店铺状况暂时看不到/);
   assert.ok(renderInvestigation({ ruleLabel: 'x', address: ADDRESS, results: [], unmatched: [], snapshotTakenAt: null }).includes('GA4 最近 30 分钟没有回报任何加购页面'));
 });
 

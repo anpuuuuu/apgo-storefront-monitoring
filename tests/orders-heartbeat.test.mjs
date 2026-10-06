@@ -7,6 +7,9 @@ import {
   formatMinutes,
   orderGapMinutesAt,
   orderAlertText,
+  orderGapAlert,
+  orderPushAlert,
+  orderRecoveryAlert,
   orderSourceCategory,
   parseOrderEvent,
   percentile,
@@ -120,13 +123,40 @@ test('the alert says how long, against what, and where to look', () => {
   assert.equal(formatMinutes(192), '3h12m');
   assert.equal(formatMinutes(45), '45m');
   const traffic = { checkedAt: new Date(NOW - 5 * 60_000).toISOString(), current: { view_item: 120 }, baseline: { view_item: 130 } };
-  const text = orderAlertText({ label: 'APGO MY' }, { severity: 'warning', ageMinutes: 430, thresholdMinutes: 420 }, NOW - 430 * 60_000, TZ, traffic, NOW);
-  assert.match(text, /^🟡 \[APGO MY\]\[Layer 4 · Orders\] 已经 7h10m 没有订单（超过 7h00m 就提醒）/);
-  assert.match(text, /上一单：Tue 06:50/);
-  assert.match(text, /流量正常/);
-  const critical = orderAlertText({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 900, thresholdMinutes: 420 }, NOW - 900 * 60_000, TZ, null, NOW);
-  assert.match(critical, /^🔴 /);
-  assert.match(critical, /同时段流量：读不到/);
+  const warning = orderGapAlert({ label: 'APGO MY' }, { severity: 'warning', ageMinutes: 430, thresholdMinutes: 420 }, NOW - 430 * 60_000, TZ, traffic, NOW);
+  assert.match(warning.text, /^🔴 已经 7 小时 10 分没有订单\n/);
+  assert.match(warning.text, /APGO MY · 店铺可能有问题｜要你马上处理/);
+  assert.match(warning.text, /上一单是 09\/08 06:50。平时很少超过 7 小时没单/);
+  assert.match(warning.text, /流量正常/);
+  // The owner was explicit that a stop in orders must reach him: both
+  // severities ring, which is why the warning level is red too.
+  assert.equal(warning.silent, false);
+
+  const critical = orderGapAlert({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 900, thresholdMinutes: 420 }, NOW - 900 * 60_000, TZ, null, NOW);
+  assert.match(critical.text, /^🔴 已经 15 小时没有订单/);
+  assert.match(critical.text, /同时段流量：读不到/);
+  assert.equal(critical.silent, false);
+  // orderAlertText is the same message as plain text.
+  assert.equal(orderAlertText({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 900, thresholdMinutes: 420 }, NOW - 900 * 60_000, TZ, null, NOW), critical.text);
+});
+
+test('order recovery says how long the gap was, and does not ring', () => {
+  const alert = orderRecoveryAlert({ label: 'APGO MY' }, NOW, NOW - 8 * 60 * 60_000, TZ, NOW);
+  assert.match(alert.text, /^✅ 订单恢复了/);
+  assert.match(alert.text, /刚进来一单（09\/08 14:00），之前 8 小时没有订单/);
+  assert.equal(alert.silent, true);
+});
+
+test('a silent order push is reported as "cannot see orders", never as no sales', () => {
+  const missing = orderPushAlert({ label: 'APGO MY' }, 'missing', { nowMs: NOW });
+  assert.match(missing.text, /^🟡 订单通知还没接上/);
+  assert.match(missing.text, /看不到订单｜有空看一下/);
+  assert.match(missing.text, /Shopify Flow/);
+  assert.equal(missing.silent, true);
+
+  const stale = orderPushAlert({ label: 'APGO MY' }, 'stale', { ageMinutes: 26 * 60, nowMs: NOW });
+  assert.match(stale.text, /^🟡 订单通知 26 小时没进来/);
+  assert.match(stale.text, /也可能是推送（Shopify Flow）断了/);
 });
 
 test('parseOrderEvent validates the platform-agnostic payload', () => {

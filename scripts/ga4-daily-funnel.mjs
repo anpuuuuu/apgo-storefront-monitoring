@@ -8,10 +8,11 @@ import {
   median,
   mytDate,
   requireEnv,
+  site,
   telegram,
 } from './monitor-lib.mjs';
 import { dailyPublicStatus } from './ga4-public-status.mjs';
-import { persistentDailyAnomalies, splitDailyAnomalies } from './ga4-daily-alert-lib.mjs';
+import { dailyFunnelAlert, dailyQualityAlert, persistentDailyAnomalies, splitDailyAnomalies } from './ga4-daily-alert-lib.mjs';
 import { coverageForDate, isDailyStageFresh } from './ga4-anomaly-lib.mjs';
 
 requireEnv();
@@ -316,14 +317,13 @@ if (stage === 'primary') {
   }
   if (split.armed.length) {
     await logAlert('layer4', 'business_alert', { ...summary, persistent: split.armed });
-    const lines = split.armed.slice(0, 8).map((item) => `${item.label}: ${item.issues.join(', ')}`);
-    await telegram(`APGO GA4 daily funnel alert (${targetDate})\n${lines.join('\n')}\n${process.env.RUN_URL || ''}`);
+    await telegram(dailyFunnelAlert({ site: site.alertLabel || site.name || site.id, targetDate, armed: split.armed, runUrl: process.env.RUN_URL || '' }));
   }
   if (summary.persistentDataQualityIssues.length) {
     const kind = mode === 'armed' ? 'data_quality_alert' : 'would_alert';
     await logAlert('layer4', kind, summary);
     if (mode === 'armed') {
-      await telegram(`APGO GA4 data quality alert (${targetDate})\n${summary.persistentDataQualityIssues.map((item) => item.message).join('\n')}\n${process.env.RUN_URL || ''}`, { silent: true });
+      await telegram(dailyQualityAlert({ site: site.alertLabel || site.name || site.id, targetDate, issues: summary.persistentDataQualityIssues, runUrl: process.env.RUN_URL || '' }));
     }
   }
   await setState(confirmedKey, {

@@ -1,5 +1,33 @@
 import { MONITOR_SITES } from '../site-catalog.generated.mjs';
 import { runSchedulerTick } from './scheduler.mjs';
+import { buildAlert } from '../alert-format.mjs';
+
+/* A theme was published but the check that should verify it could not be
+   started. The storefront may well be fine; what is missing is the evidence. */
+export function postDeployFailureAlert(site, deliveryId, error, nowMs = Date.now()) {
+  return buildAlert({
+    level: 'watch',
+    title: '主题更新后的自动检查没能启动',
+    site: site?.label || '',
+    store: '这次更新没被检查',
+    lines: ['刚才的主题更新没有自动跑购物流程测试。有空用手机打开网站，试一次加入购物车，确认更新没把东西弄坏。'],
+    atMs: nowMs,
+    details: [`post-deploy dispatch failed · delivery ${deliveryId}`, String(error?.message || error)],
+  });
+}
+
+/* One scheduler tick failing is the monitor's own plumbing; the next tick is
+   five minutes away and a lasting problem shows up as stale monitoring. */
+export function tickFailureAlert(error, nowMs = Date.now()) {
+  return buildAlert({
+    level: 'ignore',
+    title: '监控排程这一轮出错了',
+    store: '店铺不受影响',
+    lines: ['5 分钟后会自动重试。如果一直失败，会以「部分监控暂时停了」另外通知你。'],
+    atMs: nowMs,
+    details: [`scheduler tick failed: ${String(error?.message || error)}`],
+  });
+}
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DELIVERY_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -162,18 +190,22 @@ async function dispatchLayer2(env, push, deliveryId) {
   });
 }
 
-async function sendTelegram(env, text) {
+async function sendTelegram(env, alert) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    // Dispatcher failures are monitoring health: on the record, no ring.
-    body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true, disable_notification: true }),
+    body: JSON.stringify({
+      chat_id: env.TELEGRAM_CHAT_ID,
+      text: String(alert.text).slice(0, 3900),
+      disable_web_page_preview: true,
+      disable_notification: Boolean(alert.silent),
+    }),
   });
 }
 
 async function notifyFailure(env, site, deliveryId, error) {
-  await sendTelegram(env, `🔴 [${site?.label || 'MONITOR'}][Dispatcher] Post-deploy dispatch failed\nDelivery: ${deliveryId}\n${String(error?.message || error).slice(0, 900)}`);
+  await sendTelegram(env, postDeployFailureAlert(site, deliveryId, error));
 }
 
 /* A Worker fetching another Worker's workers.dev hostname on the same
@@ -211,7 +243,7 @@ async function scheduledTick(env, scheduledTime) {
     dispatch: async (workflow, inputs) => dispatchWorkflow(env, await withToken(), workflow, inputs),
     kvGet: (key) => env.DELIVERIES.get(key),
     kvPut: (key, value, options) => env.DELIVERIES.put(key, value, options),
-    notify: (error) => sendTelegram(env, `🔴 [MONITOR][Dispatcher] Scheduler tick failed\n${String(error?.message || error).slice(0, 900)}`),
+    notify: (error) => sendTelegram(env, tickFailureAlert(error)),
   });
 }
 

@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildAlert } from '../workers/alert-format.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const defaultConfigPath = path.join(here, '..', 'config', 'sites.json');
@@ -162,15 +163,32 @@ export function retiredLandingTraffic(rows, config, siteId = '') {
   return [...found.values()].sort((a, b) => b.latestDate.localeCompare(a.latestDate) || b.sessions - a.sessions);
 }
 
-export function formatRetiredLandingAlert(items, label = 'APGO') {
-  const lines = (items || []).slice(0, 5).map((item) => (
-    `${item.landingPath}：${item.latestDate} 仍有付费 sessions=${item.sessions}, add-to-cart=${item.addToCarts}, checkouts=${item.checkouts}`
-  ));
-  return [
-    `🟡 [${label}][Layer 2 · Retired Landing] 已下架网址重新出现付费流量`,
-    ...lines,
-    '该网址不会加入浏览器故障批次；请检查广告目的地或取消下架登记。',
-  ].join('\n');
+/* A page registered as retired is still receiving paid traffic: somewhere an
+   ad, or a link in a post, is spending money on it. The 2026-10 Merdeka set
+   was this exact case before the registry existed. */
+export function retiredLandingAlert(items, label = 'APGO', nowMs = Date.now()) {
+  const shown = (items || []).slice(0, 5);
+  const day = (value) => {
+    const match = String(value || '').match(/^(\d{4})-?(\d{2})-?(\d{2})$/);
+    return match ? `${match[2]}/${match[3]}` : String(value || '');
+  };
+  return buildAlert({
+    level: 'watch',
+    title: '已下架的网址还在吃广告流量',
+    site: label,
+    store: '广告钱可能在白花',
+    lines: [
+      '这些网址已经登记为下架，但最近还有付费流量进来，顾客点进去可能看到错误页或已结束的活动：',
+      ...shown.map((item) => `· ${item.landingPath}：${day(item.latestDate)} 有 ${item.sessions} 次访问、${item.addToCarts} 次加购、${item.checkouts} 次进结账`),
+      '请把指向它的广告改到还在的页面，或在 Shopify 后台「在线商店 → 导航 → URL 重定向」把旧网址转到新商品。如果它其实又上架了，告诉我把它从下架名单拿掉。',
+    ],
+    atMs: nowMs,
+    details: ['该网址不会加入浏览器故障批次（下架登记）', ...shown.map((item) => `${item.landingPath} sessions=${item.sessions} atc=${item.addToCarts} checkouts=${item.checkouts}`)],
+  });
+}
+
+export function formatRetiredLandingAlert(items, label = 'APGO', nowMs = Date.now()) {
+  return retiredLandingAlert(items, label, nowMs).text;
 }
 
 export async function fetchAdReport({ accessToken, propertyId, lookbackDays = 3, fetchImpl = fetch }) {

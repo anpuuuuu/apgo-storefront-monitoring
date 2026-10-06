@@ -2,6 +2,25 @@ import { LIMITS, STORE_ORIGINS, siteForOrigin, siteKey } from './config.mjs';
 import { getState, logAlert, setState, writeHeartbeat } from './db.mjs';
 import { bearerToken, cleanPath, cleanSource, secretMatches, sha256Hex } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
+import { STORE, buildAlert } from '../alert-format.mjs';
+
+/* A real shopper's browser got a server error back from Shopify's cart.
+   That is the one Layer 3 signal that can mean people cannot buy right now. */
+export function criticalCartAlert(detail, nowMs = Date.now()) {
+  const page = detail.page_url || '某个页面';
+  return buildAlert({
+    level: 'act',
+    title: '顾客加购物车时出错',
+    site: detail.siteLabel,
+    store: STORE.maybe,
+    lines: [
+      `真实顾客在 ${page} 操作购物车时，Shopify 返回了服务器错误（HTTP ${detail.status}）。如果一直这样，顾客会加不了购物车。`,
+      '请用手机打开这个页面，试一次加入购物车。',
+    ],
+    atMs: nowMs,
+    details: [`${detail.action || detail.stage}: ${detail.message}`, `Signature: ${detail.signature}`],
+  });
+}
 
 export function originAllowed(origin) {
   return Boolean(siteForOrigin(origin));
@@ -276,7 +295,8 @@ async function alertCriticalCartError(env, detail) {
   const key = siteKey(detail.siteId, `critical-cart:${detail.signature}`);
   const state = (await getState(env.DB, key)) || { lastAlertMs: 0 };
   if (Date.now() - state.lastAlertMs < LIMITS.criticalCartRealertMs) return;
-  await sendTelegram(env, `🔴 [${detail.siteLabel}][Layer 3 Critical Cart Error]\n${detail.action || detail.stage}: ${detail.message}\nHTTP ${detail.status}\nPage: ${detail.page_url}\nSignature: ${detail.signature}`);
+  const alert = criticalCartAlert(detail);
+  await sendTelegram(env, alert.text, { silent: alert.silent });
   await logAlert(env.DB, siteKey(detail.siteId, 'layer3'), 'critical-cart', detail);
   await setState(env.DB, key, { lastAlertMs: Date.now() });
 }
@@ -361,7 +381,8 @@ export async function digestBrowserErrors(env) {
   if (!pending.length) return { alerted: 0, eligible: 0 };
 
   const selected = pending.slice(0, LIMITS.errorDigestMaxItems);
-  await sendTelegram(env, buildBrowserDigest(selected, pending.length), { silent: true });
+  const digest = browserDigestAlert(selected, pending.length);
+  await sendTelegram(env, digest.text, { silent: digest.silent });
   await logAlert(env.DB, 'multi-site:layer3', 'browser-digest', {
     signatures: selected.map((row) => row.signature),
     omitted: Math.max(0, pending.length - selected.length),
@@ -385,12 +406,43 @@ export async function digestBrowserErrors(env) {
   return { alerted: selected.length, eligible: pending.length };
 }
 
-export function buildBrowserDigest(rows, eligibleCount = rows.length) {
+/* The digest leads with what the owner needs — roughly how many shoppers,
+   on which pages, and whether it touches the cart — and keeps the full
+   per-signature evidence underneath, unchanged, for whoever debugs it. */
+export function browserDigestAlert(rows, eligibleCount = rows.length, nowMs = Date.now()) {
   const labels = [...new Set(rows.map((row) => row.site_id === 'apgo-my' ? 'APGO MY' : row.site_id).filter(Boolean))];
-  const sections = [[
-    `🟠 [${labels.join(', ') || 'UNKNOWN SITE'}][Layer 3 Browser Error Digest]`,
-    `${eligibleCount} eligible signatures / 10 min`,
-  ].join('\n')];
+  const shoppers = rows.reduce((sum, row) => sum + Number(row.sessions || 0), 0);
+  const pageCounts = new Map();
+  for (const row of rows) {
+    for (const page of String(row.pages || row.page_url || '').split(',').map((entry) => entry.trim()).filter(Boolean)) {
+      pageCounts.set(page, (pageCounts.get(page) || 0) + Number(row.sessions || 1));
+    }
+  }
+  const topPages = [...pageCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([page]) => page);
+  const touchesCart = rows.some((row) => row.kind === 'cart');
+  return buildAlert({
+    level: 'watch',
+    title: `顾客浏览器里出现错误（${eligibleCount} 种）`,
+    site: labels.join('、'),
+    store: touchesCart ? STORE.maybe : '店铺多半正常',
+    lines: [
+      `过去 10 分钟约 ${shoppers} 位顾客的浏览器报错${topPages.length ? `，主要在 ${topPages.join('、')}` : ''}。`,
+      touchesCart
+        ? '其中有购物车相关的错误，请用手机打开上面的页面试一次加购。'
+        : '多数是浏览器、广告追踪或第三方插件的问题，不一定影响购买；同一个错误连续几天出现，再一起处理。',
+    ],
+    atMs: nowMs,
+    details: browserDigestDetails(rows, eligibleCount),
+    detailsBudget: 2_800,
+  });
+}
+
+export function buildBrowserDigest(rows, eligibleCount = rows.length, nowMs = Date.now()) {
+  return browserDigestAlert(rows, eligibleCount, nowMs).text;
+}
+
+function browserDigestDetails(rows, eligibleCount) {
+  const sections = [`${eligibleCount} eligible signatures / 10 min`];
 
   rows.forEach((row, index) => {
     const stage = row.stage ? `/${String(row.stage).toUpperCase()}` : '';
@@ -428,11 +480,13 @@ export function buildBrowserDigest(rows, eligibleCount = rows.length) {
     }
     if (row.source) lines.push(`Source: ${String(row.source).slice(0, 220)}`);
     lines.push(`Signature: ${row.signature}`);
-    sections.push(lines.join('\n'));
+    // One detail entry per line: the formatter keeps lines whole, but would
+    // squash a multi-line block into a single truncated one.
+    sections.push(...lines);
   });
 
   if (eligibleCount > rows.length) {
     sections.push(`+ ${eligibleCount - rows.length} more signatures retained in D1`);
   }
-  return sections.join('\n\n');
+  return sections;
 }

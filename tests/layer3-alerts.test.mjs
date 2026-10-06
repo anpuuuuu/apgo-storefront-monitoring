@@ -80,7 +80,12 @@ test('browser digest combines signatures and reports omitted evidence', () => {
     },
   ], 3);
 
-  assert.match(message, /Browser Error Digest/);
+  // The owner reads the first lines: what happened, whether to worry, where.
+  assert.match(message, /^🟡 顾客浏览器里出现错误（3 种）/);
+  assert.match(message, /有空看一下/);
+  assert.match(message, /主要在 \/pages\/golden-bull-award、\/cart/);
+  // The evidence for whoever debugs it is all still there, below the line.
+  assert.match(message, /—— 技术细节 ——/);
   assert.match(message, /THEME · 4 sessions · 3 networks · 7 events/);
   assert.match(message, /Required ref not found/);
   assert.match(message, /Pages \(2\): \/pages\/golden-bull-award \| \/cart/);

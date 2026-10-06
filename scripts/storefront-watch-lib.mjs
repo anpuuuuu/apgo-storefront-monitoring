@@ -17,6 +17,8 @@
    for 30 minutes" is evidence; "the cart returned no shipping method" is a
    fact, and a fact does not need two hours of settling to be believed. */
 
+import { STORE, buildAlert } from '../workers/alert-format.mjs';
+
 /* 2026-09-15 is the failure this exists for: free shipping was switched off
    on an advertised product, add_to_cart stayed healthy, begin_checkout went
    to zero. A shopper reaching shipping saw nothing they could pick. GA4
@@ -144,42 +146,58 @@ const rateText = (rate) => `${rate.name} ${Number(rate.price) === 0 ? '免运' :
 
 /* The message says what a shopper would have hit, and names the product, so
    the first thing the owner does is open that page rather than ask which. */
-export function watchMessage({ results, verdict, alertCount = 1, brokenSince = null, nowMs = Date.now(), siteLabel = '', runUrl = '' }) {
-  const header = alertCount > 1
-    ? `🔴 [结账探测] 仍然结不了账（第 ${alertCount} 次提醒）`
-    : `🔴 [结账探测] 机器人走不完结账流程${siteLabel ? ` · ${siteLabel}` : ''}`;
-  const lines = [header];
-  if (brokenSince) {
-    const minutes = Math.round((nowMs - Date.parse(brokenSince)) / 60_000);
-    if (Number.isFinite(minutes) && minutes > 0) lines.push(`已持续约 ${minutes} 分钟`);
+function productLine(entry) {
+  const name = entry.title || entry.handle;
+  if (entry.judgement.status === OK) {
+    return `✔ ${name}：正常${entry.probe?.rates?.length ? `，运费 ${entry.probe.rates.map(rateText).join('、')}` : ''}`;
   }
-  for (const entry of results) {
-    const mark = entry.judgement.status === BROKEN ? '✖' : entry.judgement.status === OK ? '✔' : '—';
-    lines.push(`${mark} ${entry.title || entry.handle}`);
-    for (const reason of entry.judgement.reasons) lines.push(`    ${reason}`);
-    if (entry.judgement.status === OK && entry.probe?.rates?.length) {
-      lines.push(`    运费：${entry.probe.rates.map(rateText).join(' · ')}`);
-    }
-  }
-  if (verdict.status === BROKEN) {
-    lines.push('');
-    lines.push('先查：运费区域与免运门槛、结账设置、库存，以及主题或 app 最近有没有更新。');
-    lines.push('这是机器人真的走了一遍：加入购物车 → 查运费。它没有、也不会打开结账页或付款。');
-  }
-  if (runUrl) lines.push(runUrl);
-  return lines.join('\n');
+  const mark = entry.judgement.status === BROKEN ? '✖' : '—';
+  return `${mark} ${name}：${entry.judgement.reasons.join('；') || '没测到'}`;
 }
 
-export function recoveryMessage({ results, brokenSince, nowMs = Date.now(), runUrl = '' }) {
+export function watchAlert({ results, verdict, alertCount = 1, brokenSince = null, nowMs = Date.now(), siteLabel = '', runUrl = '' }) {
   const minutes = brokenSince ? Math.round((nowMs - Date.parse(brokenSince)) / 60_000) : null;
-  const ok = results.filter((entry) => entry.judgement.status === OK);
-  const lines = [`🟢 [结账探测] 又能结账了${Number.isFinite(minutes) && minutes > 0 ? `，坏了约 ${minutes} 分钟` : ''}`];
-  for (const entry of ok.slice(0, 3)) {
-    lines.push(`✔ ${entry.title || entry.handle}${entry.probe?.rates?.length ? ` · ${entry.probe.rates.map(rateText).join(' · ')}` : ''}`);
-  }
-  if (runUrl) lines.push(runUrl);
-  return lines.join('\n');
+  return buildAlert({
+    level: 'act',
+    title: alertCount > 1 ? `仍然结不了账（第 ${alertCount} 次提醒）` : '机器人加购后结不了账',
+    site: siteLabel,
+    store: STORE.broken,
+    lines: [
+      `${Number.isFinite(minutes) && minutes > 0 ? `已持续约 ${minutes} 分钟。` : ''}机器人真的走了一遍「加入购物车 → 查运费」，走不下去：`,
+      ...results.map(productLine),
+      verdict.status === BROKEN ? '请先查运费区域与免运门槛、结账设置、库存，以及主题或 app 最近有没有更新。' : '',
+      '（机器人只加购和查运费，不会打开结账页或付款。）',
+    ],
+    atMs: nowMs,
+    details: [`watch verdict=${verdict.status} measured=${verdict.measured ?? ''} broken=${verdict.broken ?? ''}`],
+    link: runUrl,
+  });
 }
+
+export function watchMessage(options) {
+  return watchAlert(options).text;
+}
+
+export function watchRecoveryAlert({ results, brokenSince, nowMs = Date.now(), siteLabel = '', runUrl = '' }) {
+  const minutes = brokenSince ? Math.round((nowMs - Date.parse(brokenSince)) / 60_000) : null;
+  return buildAlert({
+    level: 'ok',
+    title: '机器人又能结账了',
+    site: siteLabel,
+    store: STORE.fine,
+    lines: [
+      Number.isFinite(minutes) && minutes > 0 ? `坏了约 ${minutes} 分钟。` : '',
+      ...results.filter((entry) => entry.judgement.status === OK).slice(0, 3).map(productLine),
+    ],
+    atMs: nowMs,
+    link: runUrl,
+  });
+}
+
+export function recoveryMessage(options) {
+  return watchRecoveryAlert(options).text;
+}
+
 
 /* A short rolling log of what the probe found, so a Layer 4 alert about a
    window two hours old can answer the question that actually matters: was the

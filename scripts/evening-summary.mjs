@@ -13,7 +13,7 @@ import { minuteToMs, propertyMinuteNow, settledWindow } from './ga4-anomaly-lib.
 import { fetchAbandonedCount } from '../workers/error-monitor/shopify-abandoned.mjs';
 import {
   eventCountsThrough,
-  formatEveningSummary,
+  eveningSummaryAlert,
   orderStatsForDate,
   reportDateForEvening,
   summarizeHealth,
@@ -120,7 +120,7 @@ if (!healthPayload?.sites) throw new Error(`Worker health unreadable: HTTP ${hea
 const counts = eventCountsThrough(report, reportDate, cutoffStamp, events);
 const orders = orderStatsForDate(orderLog, reportDate, timeZone);
 const health = summarizeHealth(healthPayload);
-const text = formatEveningSummary({
+const summaryAlert = eveningSummaryAlert({
   label: site.alertLabel || site.name || site.id,
   reportDate,
   cutoffLabel,
@@ -133,7 +133,7 @@ const text = formatEveningSummary({
   timeZone,
 });
 
-await telegram(text);
+await telegram(summaryAlert);
 await setState(dedupeKey, {
   sentAt: new Date(nowMs).toISOString(), reportDate, cutoffStamp,
   monitoringOperational: health.monitoringOperational, checksPassing: health.checksPassing,
