@@ -7,6 +7,7 @@ workspaces/
 ad-targets.json
 layer2-aggregate.json
 layer2-heartbeat-detail.json
+layer2-alert.json
 results.json
 *.trace.zip
 *.har

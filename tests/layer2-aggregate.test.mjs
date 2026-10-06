@@ -39,6 +39,7 @@ function runAggregate(result, { planResult = 'success', batchResult = 'success',
       MONITOR_EXPECTED_MATRIX: JSON.stringify({ include: expected }),
       MONITOR_AGGREGATE_FILE: path.join(temp, 'aggregate.json'),
       MONITOR_HEARTBEAT_DETAIL_FILE: path.join(temp, 'heartbeat.json'),
+      MONITOR_ALERT_FILE: path.join(temp, 'alert.json'),
       GITHUB_OUTPUT: githubOutput,
     },
   });

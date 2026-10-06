@@ -113,7 +113,13 @@ export async function workerHealthy() {
   return response.ok && payload.ok && layer1 && !layer1.stale;
 }
 
-export async function telegram(text, { silent = false } = {}) {
+/* Accepts either an alert from workers/alert-format.mjs ({ text, silent }) or
+   plain text. With an alert the ringing comes from its colour, so a caller
+   cannot pair a red message with a silent send or the other way round. */
+export async function telegram(message, { silent: silentOption = false } = {}) {
+  const isAlert = message && typeof message === 'object' && 'text' in message;
+  const text = isAlert ? message.text : message;
+  const silent = isAlert ? Boolean(message.silent) : silentOption;
   if (monitorMode !== 'live') {
     console.log(JSON.stringify({ shadow: true, telegramSuppressed: true, siteId, textSuppressed: true }));
     return;
@@ -122,7 +128,9 @@ export async function telegram(text, { silent = false } = {}) {
   const chatId = process.env.TELEGRAM_CHAT_ID || '';
   if (!token || !chatId) throw new Error('Telegram secrets are not configured');
   const label = site.alertLabel || site.name || site.id;
-  const namespacedText = String(text).includes(`[${label}]`) ? String(text) : `[${label}] ${text}`;
+  // The new format names the store on its second line; only prefix messages
+  // that do not mention it at all, so the colour stays the first character.
+  const namespacedText = String(text).includes(label) ? String(text) : `[${label}] ${text}`;
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

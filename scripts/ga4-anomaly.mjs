@@ -7,6 +7,7 @@ import {
   heartbeat,
   median,
   requireEnv,
+  site,
   telegram,
   workerHealthy,
 } from './monitor-lib.mjs';
@@ -14,9 +15,13 @@ import {
   appendCoverage,
   baselineForRollingWindow,
   baselineForSlot,
+  businessAlert,
+  businessRecoveryAlert,
   countsForWindow,
   durationText,
+  emptyWindowAlert,
   evaluateCheckoutCompletion,
+  RULE_COPY,
   hoursForWindow,
   isEmptyWindow,
   nextEmptyState,
@@ -94,24 +99,8 @@ function funnelQuery() {
    beside were retired on 2026-09-21; see the note above the rule list. */
 const dropSettings = settings.drop || {};
 
-/* What to check first. Store-side changes (shipping, discounts, stock,
-   checkout settings, app/theme updates) cause most real hits; the 2026-09-15
-   checkout incident was a free-shipping rule switched off by mistake. */
-const RULE_ADVICE = {
-  ga4_collection_zero: '先查：GA4 / Web Pixel 设置最近有没有改；主题或 app 有没有更新',
-  add_to_cart_zero: '先查：广告商品的变体 / 库存 / 加购按钮；主题或 app 有没有更新',
-  begin_checkout_zero: '先查：广告商品的运费（free shipping）、折扣、库存、结账设置最近有没有改',
-  checkout_completion_drop: '先查：Shopify 后台 abandoned checkouts、付款方式、折扣、地址验证和库存；这条规则不预设是哪一个支付网关',
-  purchase_tracking_gap: '先查：Web Pixel / GA4 结账事件设置',
-};
-
-const RULE_TEXT = {
-  ga4_collection_zero: 'GA4 完全收不到流量事件（网站巡检正常 → 大概率是 GA4 采集断了,广告数据正在缺失）',
-  add_to_cart_zero: '「加入购物车」连续为 0（① 加购坏了→对照第1/2层巡检 ② GA4 采集断了）',
-  begin_checkout_zero: '有人加购但「进入结账」连续为 0（结账入口可能坏了,建议手机实测走一遍结账）',
-  checkout_completion_drop: '进入结账仍有量，但完成购买比例明显下降（abandoned checkout 可能正在增加）',
-  purchase_tracking_gap: 'Shopify 刚收到订单但 GA4 连续两个窗口收不到 purchase（生意没坏，是结账追踪断了 → 检查 Web Pixel / GA4 结账事件）',
-};
+/* What each rule means and what to check first now lives with the message
+   builders in ga4-anomaly-lib.mjs (RULE_COPY), so it can be tested. */
 
 /* The tracking cross-check confirms over more windows than the zero rules:
    a single window with an order but no GA4 purchase is ordinary timing. */
@@ -144,7 +133,8 @@ async function screensEvidence(eventName) {
   const report = await screensPromise;
   if (report?.error) return '';
   const top = topScreensForEvent(report, eventName);
-  return top.length ? `${eventName} 来自: ${top.map((row) => `${row.screen} (${row.count})`).join(' · ')}` : '';
+  const what = eventName === 'add_to_cart' ? '加入购物车' : '看商品';
+  return top.length ? `${what}主要来自：${top.map((row) => `${row.screen}（${row.count}）`).join('、')}` : '';
 }
 
 async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings = settings, ruleWindow = window) {
@@ -164,38 +154,47 @@ async function updateRule(rule, abnormal, detail, ruleMode = mode, ruleSettings 
     const kind = ruleMode === 'armed' ? 'business_alert' : 'would_alert';
     await logAlert('layer4', kind, { rule, mode: ruleMode, alertCount: next.alertCount, abnormalSince: next.abnormalSince, ...detail });
     if (ruleMode === 'armed') {
-      const ruleText = RULE_TEXT[rule] || rule;
-      const since = durationText(next.abnormalSince, now);
-      const header = next.alertCount > 1 ? `🟠 [第4层·业务指标] 仍在持续（第 ${next.alertCount} 次提醒，已持续 ${since}）` : `🟡 [第4层·业务指标] ${ruleText}`;
-      const lines = [header];
-      if (next.alertCount > 1) lines.push(ruleText);
-      lines.push(`时段 ${ruleWindow.startStamp.slice(8, 10)}:${ruleWindow.startStamp.slice(10)}–${ruleWindow.endStamp.slice(8, 10)}:${ruleWindow.endStamp.slice(10)}（已结算，约 ${Math.round((now - ruleWindow.endMs) / 60_000)} 分钟前）`);
-      lines.push(`当前: ${JSON.stringify(detail.current)} / 平时同时段中位数: ${JSON.stringify(detail.baseline)}`);
       const evidenceEvent = rule.startsWith('begin_checkout') || rule === 'checkout_completion_drop' || rule === 'purchase_tracking_gap' ? 'add_to_cart' : 'view_item';
-      const screens = await screensEvidence(evidenceEvent);
-      if (screens) lines.push(screens);
+      const screensLine = await screensEvidence(evidenceEvent);
       /* Never gates the alert, only the wording -- the same rule the order
          heartbeat follows for traffic. A probe with nothing to say must not
          be able to keep a real alert quiet. */
-      lines.push(watchVerdictLine(await getState('probe:watch:log'), ruleWindow, { nowMs: now }));
-      if (RULE_ADVICE[rule]) lines.push(RULE_ADVICE[rule]);
-      lines.push(process.env.RUN_URL || '');
-      await telegram(lines.join('\n'));
+      const probeLine = watchVerdictLine(await getState('probe:watch:log'), ruleWindow, { nowMs: now });
+      await telegram(businessAlert({
+        rule,
+        site: site.alertLabel || site.name || site.id,
+        alertCount: next.alertCount,
+        abnormalSince: next.abnormalSince,
+        nowMs: now,
+        window: ruleWindow,
+        detail,
+        screensLine,
+        probeLine,
+        runUrl: process.env.RUN_URL || '',
+      }));
       // First page only: walk the products shoppers are adding right now
-      // through cart + shipping rates and post the evidence (silent 🔎).
+      // through cart + shipping rates and post the evidence.
       // Never throws; a slow store cannot delay the alert itself.
       if (next.alertCount === 1) {
         const report = await screensPromise;
-        await investigate({ rule, ruleLabel: ruleText.split('（')[0], screens: report?.error ? [] : topScreensForEvent(report, evidenceEvent, 10) });
+        await investigate({ rule, ruleLabel: RULE_COPY[rule]?.title || rule, screens: report?.error ? [] : topScreensForEvent(report, evidenceEvent, 10) });
       }
     }
   }
 
   if (!abnormal && previous.active) {
-    const lasted = durationText(previous.abnormalSince || previous.firstAlertedAt, now);
+    const startedAt = previous.abnormalSince || previous.firstAlertedAt;
+    const lasted = durationText(startedAt, now);
     await logAlert('layer4', 'recovery', { rule, lasted, ...detail });
     if (ruleMode === 'armed') {
-      await telegram(`🟢 [第4层·业务指标] 已恢复：${RULE_TEXT[rule] ? RULE_TEXT[rule].split('（')[0] : rule}\n持续了 ${lasted || '不到一个窗口'}\n当前: ${JSON.stringify(detail.current)}\n${process.env.RUN_URL || ''}`, { silent: true });
+      await telegram(businessRecoveryAlert({
+        rule,
+        site: site.alertLabel || site.name || site.id,
+        lastedMs: now - Date.parse(startedAt || ''),
+        nowMs: now,
+        detail,
+        runUrl: process.env.RUN_URL || '',
+      }));
     }
     next.alertCount = 0;
     next.firstAlertedAt = null;
@@ -284,14 +283,13 @@ if (emptyWindow) {
      real one. */
   const need = Number(settings.empty_window_notify_after) || 6;
   if (consecutive === need) {
-    await telegram([
-      `🟠 [第4层·数据质量] GA4 连续 ${consecutive} 个时段一条数据都没有`,
-      `最近判断的时段 ${window.clock.slice(0, 2)}:${window.clock.slice(2)}，平时这个时段约 ${baseline.page_view} 次浏览`,
-      '**这不是店坏了**：店铺是否正常由第1层和结账探测负责，它们没有报警。',
-      '常见原因：GA4 处理积压（等等就会补上）、或者主题/app 更新把埋点拿掉了。',
-      '要确认埋点：打开任一商品页，看 dataLayer 里还有没有 page_view 事件。',
-      process.env.RUN_URL || '',
-    ].join('\n'), { silent: true });
+    await telegram(emptyWindowAlert({
+      site: site.alertLabel || site.name || site.id,
+      consecutive,
+      window,
+      baselinePageView: baseline.page_view,
+      runUrl: process.env.RUN_URL || '',
+    }));
   }
 
   await heartbeat('layer4', { status: 'ok', window: window.key, note: 'window empty, not judged', consecutive });

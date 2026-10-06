@@ -1,3 +1,5 @@
+import { STORE, buildAlert, localTime } from '../workers/alert-format.mjs';
+
 import { propertyMinuteNow } from './ga4-anomaly-lib.mjs';
 
 export function reportDateForEvening(nowMs, timeZone) {
@@ -40,57 +42,81 @@ export function summarizeHealth(payload) {
 }
 
 function percent(value) {
-  return Number.isFinite(value) ? `${Math.round(value * 1000) / 10}%` : '无足够数据';
+  return Number.isFinite(value) ? `${Math.round(value * 1000) / 10}%` : '数据不够';
 }
 
-function localClock(ms, timeZone) {
-  if (!Number.isFinite(ms)) return '无记录';
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).format(new Date(ms));
-}
+const PART_NAMES = {
+  layer1: '网站检查',
+  layer2: '购物流程测试',
+  layer3: '网页错误收集',
+  layer4: '业务指标',
+  watch: '结账探测',
+};
 
+/* Wording rules carried over from the first version, because they are what
+   keep the report honest: a figure that could not be read is never shown as
+   zero, an aggregate count says it never read customer details, and Layer 1
+   being throttled by Shopify is the monitor being limited, not the site
+   failing. */
 export function formatAbandonedCount(abandoned, cutoffLabel) {
   if (!abandoned || abandoned.status === 'disabled') return null;
   if (abandoned?.status === 'ok') {
     const qualifier = abandoned.precision === 'EXACT' ? '' : '至少 ';
-    return `Shopify abandoned（已结算至 ${cutoffLabel}）：未恢复 ${qualifier}${abandoned.count} 个（聚合计数，不读取顾客名单）`;
+    return `弃单：到 ${cutoffLabel} 为止有 ${qualifier}${abandoned.count} 个还没付款（只读总数，不读顾客资料）`;
   }
-  if (abandoned?.status === 'error') return 'Shopify abandoned：读取失败（不按 0 计算）';
-  return 'Shopify abandoned：尚未接通只读 Admin API';
+  if (abandoned?.status === 'error') return '弃单：这次读取失败（不当作 0）';
+  return '弃单：还没接上 Shopify 后台的数据';
 }
 
 export function formatLayer1ProbeSummary(probes) {
-  if (probes === null) return 'Layer 1 探针：汇总读取失败（不按 0 计算）';
+  if (probes === null) return '网站检查：汇总读取失败（不当作 0）';
   const homepage = probes?.homepage;
   const cart = probes?.['cart-api'];
-  if (!homepage && !cart) return 'Layer 1 探针：今天没有样本';
+  if (!homepage && !cart) return '网站检查：今天没有记录';
   const homepageText = homepage
-    ? `主页成功 ${homepage.successes}/${homepage.samples}${homepage.throttles ? `，被限流 ${homepage.throttles} 次` : '，没有被限流'}`
-    : '主页没有样本';
-  const cartText = cart ? `/cart.js 成功 ${cart.successes}/${cart.samples}` : '/cart.js 没有样本';
-  return `Layer 1 探针：${homepageText}；${cartText}`;
+    ? `首页 ${homepage.successes}/${homepage.samples} 次正常${homepage.throttles ? `（被 Shopify 限流 ${homepage.throttles} 次，是限制监控，不是网站坏了）` : ''}`
+    : '首页没有记录';
+  const cartText = cart ? `购物车 ${cart.successes}/${cart.samples} 次正常` : '购物车没有记录';
+  return `网站检查：${homepageText}；${cartText}`;
 }
 
-export function formatEveningSummary({ label, reportDate, cutoffLabel, counts, orders, health, completionState, abandoned, layer1Probes, timeZone }) {
+/* The 22:00 report. It is a report, not an alarm, so it never rings: green
+   when the day was clean, yellow when something deserves a look tomorrow.
+   It used to ring every evening, which is exactly how a phone learns to be
+   ignored. */
+export function eveningSummaryAlert({ label, reportDate, cutoffLabel, counts, orders, health, completionState, abandoned, layer1Probes, timeZone, nowMs = Date.now() }) {
   const checkout = Number(counts.begin_checkout || 0);
   const purchase = Number(counts.purchase || 0);
   const completion = checkout > 0 ? purchase / checkout : Number.NaN;
-  const notCompleted = Math.max(0, checkout - purchase);
-  const layerText = health.layers.map((row) => {
-    const icon = row.status === 'ok' ? '✅' : row.status === 'failed' ? '❌' : '⏱️';
-    return `${icon} ${row.layer}`;
-  }).join(' · ');
+  const failedParts = health.layers.filter((row) => row.status === 'failed').map((row) => PART_NAMES[row.layer] || row.layer);
+  const latePart = health.layers.filter((row) => row.status === 'delayed').map((row) => PART_NAMES[row.layer] || row.layer);
   const healthy = health.monitoringOperational && health.checksPassing && !completionState?.active;
-  return [
-    `${healthy ? '🟢' : '🟠'} [${label}][22:00 每日报告] ${reportDate.slice(0, 4)}-${reportDate.slice(4, 6)}-${reportDate.slice(6, 8)}`,
-    `监控自身：${health.monitoringOperational ? '正常运行' : '有心跳延迟'}；检查结果：${health.checksPassing ? '全部通过' : '有失败项'}`,
-    `分层：${layerText || '读不到健康状态'}`,
-    formatLayer1ProbeSummary(layer1Probes),
-    `订单：今天 ${orders.count} 单；最后一单 ${localClock(orders.lastAt, timeZone)} ${timeZone}`,
-    `GA4（已结算至 ${cutoffLabel}）：进入结账 ${checkout}，购买 ${purchase}，完成率 ${percent(completion)}`,
-    `GA4 未完成估算：${notCompleted} 次（${percent(checkout > 0 ? notCompleted / checkout : Number.NaN)}）`,
-    formatAbandonedCount(abandoned, cutoffLabel),
-    `快速完成率规则：${completionState?.active ? '异常仍在持续' : '未触发'}`,
-  ].filter(Boolean).join('\n');
+  const store = !health.checksPassing
+    ? '有检查没通过'
+    : completionState?.active
+      ? '付款完成率偏低还在持续'
+      : !health.monitoringOperational ? '店铺正常，部分监控晚了' : STORE.fine;
+  const day = `${reportDate.slice(4, 6)}/${reportDate.slice(6, 8)}`;
+  return buildAlert({
+    level: healthy ? 'ok' : 'watch',
+    title: `今天的店铺总结（${day}）`,
+    site: label,
+    store,
+    action: healthy ? '不用处理' : '明天有空看一下',
+    lines: [
+      `订单：今天 ${orders.count} 单${Number.isFinite(orders.lastAt) ? `，最后一单 ${localTime(orders.lastAt, timeZone)}` : ''}。`,
+      `购买：进结账 ${checkout} 次、付款成功 ${purchase} 次，完成率 ${percent(completion)}（GA4 的数据算到 ${cutoffLabel}）。`,
+      formatAbandonedCount(abandoned, cutoffLabel),
+      formatLayer1ProbeSummary(layer1Probes),
+      `监控：${health.monitoringOperational ? '都在正常运行' : `${latePart.join('、') || '部分'}晚了`}；检查：${health.checksPassing ? '全部通过' : `没通过的有 ${failedParts.join('、') || '（读不到是哪一项）'}`}。`,
+      completionState?.active ? '「付款完成率偏低」的提醒还在持续。' : '',
+    ],
+    atMs: nowMs,
+    timeZone,
+    details: health.layers.map((row) => `${row.layer}: ${row.status}${row.ageSeconds === null ? '' : ` (${Math.round(row.ageSeconds / 60)} min)`}`),
+  });
+}
+
+export function formatEveningSummary(options) {
+  return eveningSummaryAlert(options).text;
 }

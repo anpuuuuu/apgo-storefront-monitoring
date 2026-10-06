@@ -1,6 +1,8 @@
 /* Pure helpers for the Layer 4 realtime/daily scripts. No env or network
    access here so `node --test` can import them directly. */
 
+import { buildAlert, duration } from '../workers/alert-format.mjs';
+
 /* GA4 reports dateHourMinute as a wall clock in the property's reporting
    timezone. Read that zone's offset from the zone itself rather than assuming
    one, so the maths stays right if the property moves and so a zone with DST
@@ -403,7 +405,7 @@ export function watchVerdictLine(log, window, { nowMs = Date.now(), maxAgeMinute
     if (!measured) return `🤖 结账探测：覆盖该时段跑了 ${covering.length} 次，但都没测准（限流或超时），说明不了什么`;
     if (!broken) {
       const how = measured === 1 ? '一次，成功加购并拿到运费' : `${measured} 次，全部成功加购并拿到运费`;
-      return `🤖 结账探测：**覆盖该时段跑了 ${how}** → 那时店铺能买，优先查 GA4 埋点而不是店铺`;
+      return `🤖 结账探测：覆盖该时段跑了 ${how} → 那时店铺能买，优先查 GA4 埋点而不是店铺`;
     }
     return `🤖 结账探测：覆盖该时段 ${broken}/${measured} 次走不完结账 → 这很可能是真的故障，先按下面的清单查`;
   }
@@ -415,4 +417,147 @@ export function watchVerdictLine(log, window, { nowMs = Date.now(), maxAgeMinute
   if (ageMinutes > maxAgeMinutes) return `🤖 结账探测：最近一次是 ${ageMinutes} 分钟前，太旧，不作数`;
   const word = latest.status === 'ok' ? '成功加购并拿到运费' : latest.status === 'unmeasured' ? '没测准' : '走不完结账';
   return `🤖 结账探测：该时段前后没有记录；最近一次是 ${ageMinutes} 分钟前，${word}`;
+}
+
+/* ---------------------------------------------------------------------- *
+   What each Layer 4 rule means, in the owner's words.
+
+   On 2026-09-24 an alert read
+     当前: {"add_to_cart":0} / 平时同时段中位数: {"add_to_cart":12.5}
+   and on 10-06 the owner said he no longer understood the notifications.
+   Each rule now says what happened, why it might matter, and what to do with
+   his own hands, in that order. The numbers are still there, as sentences.
+ * ---------------------------------------------------------------------- */
+
+const EVENT_WORDS = {
+  page_view: '浏览',
+  view_item: '看商品',
+  add_to_cart: '加入购物车',
+  begin_checkout: '进入结账',
+  purchase: '购买',
+  checkout_to_purchase: '结账完成率',
+  estimated_abandonment: '估计弃单率',
+};
+const RATIO_KEYS = new Set(['checkout_to_purchase', 'estimated_abandonment']);
+
+export const RULE_COPY = {
+  add_to_cart_zero: {
+    level: 'act',
+    store: '店铺可能有问题',
+    title: '加入购物车突然没了',
+    meaning: '这半小时没有任何人加入购物车，平时这个时段是有的。可能是加购按钮坏了，也可能只是 GA4 没记录到。',
+    advice: '请用手机打开正在投广告的商品页，试一次加入购物车；也看看主题或 app 最近有没有更新。',
+  },
+  begin_checkout_zero: {
+    level: 'act',
+    store: '店铺可能有问题',
+    title: '有人加购，但没人进结账',
+    meaning: '顾客在加入购物车，可是这半小时没有任何人进入结账页。9/15 免运费被误关时就是这个样子。',
+    advice: '请用手机走一遍「加入购物车 → 结账」，看卡在哪一步；先查运费（免运费）、折扣、库存和结账设置最近有没有改。',
+  },
+  checkout_completion_drop: {
+    level: 'act',
+    store: '店铺可能有问题',
+    title: '进了结账，但付款成功的人明显变少',
+    meaning: '进入结账的人数正常，但最后付款成功的比例比平时低很多，弃单可能在增加。',
+    advice: '请看 Shopify 后台的弃单（abandoned checkouts），并检查付款方式、折扣、地址验证和库存。',
+  },
+  ga4_collection_zero: {
+    level: 'watch',
+    store: '店铺多半正常',
+    title: 'GA4 收不到任何流量',
+    meaning: '网站是好的，但 GA4 这半小时一次浏览都没记录到。生意不一定受影响，但广告会因为缺数据而越投越差。',
+    advice: '请检查 GA4 / Web Pixel 设置，以及主题或 app 最近有没有更新。',
+  },
+  purchase_tracking_gap: {
+    level: 'watch',
+    store: '店铺正常',
+    title: '有订单，但 GA4 没记到购买',
+    meaning: 'Shopify 刚收到订单，可是 GA4 连续两个时段都没记到购买。生意没坏，是购买追踪断了，广告会因此少算成交。',
+    advice: '请检查 Web Pixel / GA4 的结账事件设置。',
+  },
+};
+
+function figure(key, value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return RATIO_KEYS.has(key) ? `${Math.round(number * 100)}%` : `${Math.round(number * 10) / 10}`;
+}
+
+/* "加入购物车 0 次（平时这个时段约 12.5 次）" from the rule's own detail. */
+export function describeCounts(current = {}, baseline = {}) {
+  return Object.keys(current || {})
+    .filter((key) => EVENT_WORDS[key])
+    .map((key) => {
+      const now = figure(key, current[key]);
+      const usual = baseline && key in baseline ? figure(key, baseline[key]) : '';
+      const unit = RATIO_KEYS.has(key) ? '' : ' 次';
+      return `${EVENT_WORDS[key]} ${now}${unit}${usual ? `（平时这个时段约 ${usual}${unit}）` : ''}`;
+    })
+    .join('；');
+}
+
+function windowSentence(window, nowMs) {
+  if (!window?.startStamp) return '';
+  const clock = (stamp) => `${stamp.slice(8, 10)}:${stamp.slice(10, 12)}`;
+  const minutes = Math.round((nowMs - window.endMs) / 60_000);
+  return `看的是 ${clock(window.startStamp)}–${clock(window.endStamp)} 这半小时（GA4 的数据要约 2 小时才完整，所以这是 ${minutes} 分钟前的情况）。`;
+}
+
+export function businessAlert({ rule, site = '', alertCount = 1, abnormalSince = null, nowMs = Date.now(), window = null, detail = {}, screensLine = '', probeLine = '', runUrl = '' }) {
+  const copy = RULE_COPY[rule] || { level: 'watch', store: '店铺状况暂时看不到', title: rule, meaning: '', advice: '' };
+  const ongoing = alertCount > 1;
+  const sinceMs = Date.parse(abnormalSince || '');
+  const lasted = Number.isFinite(sinceMs) ? duration(nowMs - sinceMs) : '';
+  return buildAlert({
+    level: copy.level,
+    title: ongoing ? `仍在持续：${copy.title}（第 ${alertCount} 次提醒${lasted ? `，已 ${lasted}` : ''}）` : copy.title,
+    site,
+    store: copy.store,
+    lines: [
+      ongoing ? '' : copy.meaning,
+      describeCounts(detail.current, detail.baseline),
+      windowSentence(window, nowMs),
+      screensLine,
+      probeLine,
+      copy.advice,
+    ],
+    atMs: nowMs,
+    details: [`rule=${rule}`, `current=${JSON.stringify(detail.current || {})}`, `baseline=${JSON.stringify(detail.baseline || {})}`],
+    link: runUrl,
+  });
+}
+
+export function businessRecoveryAlert({ rule, site = '', lastedMs = null, nowMs = Date.now(), detail = {}, runUrl = '' }) {
+  const copy = RULE_COPY[rule] || { title: rule };
+  return buildAlert({
+    level: 'ok',
+    title: `恢复了：${copy.title}`,
+    site,
+    store: '店铺正常',
+    lines: [
+      Number.isFinite(lastedMs) && lastedMs > 0 ? `持续了 ${duration(lastedMs)}。` : '',
+      describeCounts(detail.current, detail.baseline),
+    ],
+    atMs: nowMs,
+    details: [`rule=${rule}`],
+    link: runUrl,
+  });
+}
+
+export function emptyWindowAlert({ site = '', consecutive, window = null, baselinePageView, nowMs = Date.now(), runUrl = '' }) {
+  return buildAlert({
+    level: 'ignore',
+    title: `GA4 连续 ${consecutive} 个时段没有数据`,
+    site,
+    store: '店铺多半正常',
+    lines: [
+      `GA4 回来的数据全是 0（平时这个时段约 ${baselinePageView} 次浏览）。店铺本身由第 1 层和结账探测在看，它们没有报警。`,
+      '通常是 Google 那边处理积压，等等就会补上；如果明天还这样，可能是主题或 app 更新把 GA4 埋点拿掉了。',
+      windowSentence(window, nowMs),
+    ],
+    atMs: nowMs,
+    details: [`window_empty consecutive=${consecutive}`],
+    link: runUrl,
+  });
 }

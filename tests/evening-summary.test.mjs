@@ -19,18 +19,19 @@ test('a delayed early-morning run still reports the intended previous evening', 
 
 test('Shopify abandoned reporting distinguishes counts, missing setup, and read failures', () => {
   assert.equal(formatAbandonedCount({ status: 'disabled' }, '20:00'), null);
-  assert.match(formatAbandonedCount({ status: 'ok', count: 7, precision: 'EXACT' }, '20:00'), /未恢复 7 个/);
+  assert.match(formatAbandonedCount({ status: 'ok', count: 7, precision: 'EXACT' }, '20:00'), /有 7 个还没付款/);
   assert.match(formatAbandonedCount({ status: 'ok', count: 10_000, precision: 'AT_LEAST' }, '20:00'), /至少 10000 个/);
-  assert.match(formatAbandonedCount({ status: 'not_configured' }, '20:00'), /尚未接通/);
-  assert.match(formatAbandonedCount({ status: 'error' }, '20:00'), /读取失败.*不按 0/);
+  assert.match(formatAbandonedCount({ status: 'not_configured' }, '20:00'), /还没接上/);
+  // A figure that could not be read is never shown as zero.
+  assert.match(formatAbandonedCount({ status: 'error' }, '20:00'), /读取失败.*不当作 0/);
 });
 
 test('Layer 1 throttling is reported in the 22:00 summary instead of a standalone alert', () => {
   assert.equal(formatLayer1ProbeSummary({
     homepage: { samples: 33, successes: 20, throttles: 13 },
     'cart-api': { samples: 73, successes: 73, throttles: 0 },
-  }), 'Layer 1 探针：主页成功 20/33，被限流 13 次；/cart.js 成功 73/73');
-  assert.match(formatLayer1ProbeSummary(null), /读取失败.*不按 0/);
+  }), '网站检查：首页 20/33 次正常（被 Shopify 限流 13 次，是限制监控，不是网站坏了）；购物车 73/73 次正常');
+  assert.match(formatLayer1ProbeSummary(null), /读取失败.*不当作 0/);
 });
 
 test('the normal report omits the optional Shopify Admin line when it is disabled', () => {
@@ -40,7 +41,7 @@ test('the normal report omits the optional Shopify Admin line when it is disable
     health: { monitoringOperational: true, checksPassing: true, layers: [] },
     completionState: { active: false }, abandoned: { status: 'disabled' }, timeZone: TZ,
   });
-  assert.doesNotMatch(text, /Shopify abandoned/);
+  assert.doesNotMatch(text, /弃单/);
 });
 
 test('event counts stop at the settled cutoff', () => {
@@ -72,7 +73,23 @@ test('order and health summaries distinguish a running monitor from a failed che
     counts: { begin_checkout: 20, purchase: 10 }, orders: { count: 10, lastAt: log.entries[0].at },
     health, completionState: { active: false }, abandoned: { status: 'ok', count: 4, precision: 'EXACT' }, timeZone: TZ,
   });
-  assert.match(text, /监控自身：正常运行；检查结果：有失败项/);
+  // A monitor that is running but reporting a failed check is a different
+  // thing from a monitor that has stopped, and the report keeps them apart.
+  assert.match(text, /监控：都在正常运行；检查：没通过的有 购物流程测试/);
   assert.match(text, /完成率 50%/);
-  assert.match(text, /Shopify abandoned.*未恢复 4 个.*不读取顾客名单/);
+  assert.match(text, /弃单：.*有 4 个还没付款.*不读顾客资料/);
+  // A day with a failed check is yellow and silent; a report never rings.
+  assert.match(text, /^🟡 今天的店铺总结（10\/04）/);
+});
+
+test('a clean day is green, and the report never rings', async () => {
+  const { eveningSummaryAlert } = await import('../scripts/evening-summary-lib.mjs');
+  const clean = eveningSummaryAlert({
+    label: 'APGO MY', reportDate: '20261004', cutoffLabel: '20:00',
+    counts: { begin_checkout: 20, purchase: 14 }, orders: { count: 40, lastAt: Date.parse('2026-10-04T13:30:00Z') },
+    health: { monitoringOperational: true, checksPassing: true, layers: [] },
+    completionState: { active: false }, abandoned: { status: 'disabled' }, timeZone: TZ,
+  });
+  assert.match(clean.text, /^✅ 今天的店铺总结（10\/04）\nAPGO MY · 店铺正常｜不用处理/);
+  assert.equal(clean.silent, true);
 });

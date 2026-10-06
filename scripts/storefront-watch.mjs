@@ -25,8 +25,8 @@ import {
   judgeRun,
   nextWatchState,
   pickHandles,
-  recoveryMessage,
-  watchMessage,
+  watchAlert,
+  watchRecoveryAlert,
 } from './storefront-watch-lib.mjs';
 import { config, getState, heartbeat, logAlert, requireEnv, setState, site, telegram } from './monitor-lib.mjs';
 
@@ -183,7 +183,7 @@ if (shouldAlert) {
     results: summary.results,
   });
   if (mode === 'armed') {
-    await telegram(watchMessage({
+    await telegram(watchAlert({
       results,
       verdict,
       alertCount: next.alertCount,
@@ -196,7 +196,7 @@ if (shouldAlert) {
 } else if (recovered) {
   await logAlert('layer4', 'recovery', { rule: 'synthetic_checkout_broken', results: summary.results });
   if (mode === 'armed') {
-    await telegram(recoveryMessage({ results, brokenSince: previous?.brokenSince, nowMs, runUrl: process.env.RUN_URL || '' }), { silent: true });
+    await telegram(watchRecoveryAlert({ results, brokenSince: previous?.brokenSince, nowMs, siteLabel: site.alertLabel || site.name || '', runUrl: process.env.RUN_URL || '' }));
   }
 }
 

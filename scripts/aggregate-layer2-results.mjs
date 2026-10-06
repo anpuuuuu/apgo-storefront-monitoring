@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { layer2Alert } from './layer2-alert-lib.mjs';
 
 const root = path.resolve(process.env.MONITOR_RESULTS_ROOT || 'layer2-results');
+// The owner-facing message, prepared here because only this step knows which
+// journey failed and whether the storefront or the monitor was at fault.
+const alertPath = path.resolve(process.env.MONITOR_ALERT_FILE || 'layer2-alert.json');
 const outputPath = path.resolve(process.env.MONITOR_AGGREGATE_FILE || 'layer2-aggregate.json');
 const heartbeatPath = path.resolve(process.env.MONITOR_HEARTBEAT_DETAIL_FILE || 'layer2-heartbeat-detail.json');
 const planResult = process.env.MONITOR_PLAN_RESULT || 'success';
@@ -124,6 +128,28 @@ fs.writeFileSync(heartbeatPath, `${JSON.stringify({
   })),
 }, null, 2)}\n`);
 console.log(JSON.stringify({ status, detail, expected: expected.length, received: results.length, failed: failed.length, transient: transient.length, missing }));
+
+/* The store's name for the message, from the same catalogue every other part
+   of the monitoring reads, so a second site would be named correctly too. */
+function siteLabel(siteId) {
+  try {
+    const catalog = JSON.parse(fs.readFileSync(new URL('../config/sites.json', import.meta.url), 'utf8'));
+    const entry = (catalog.sites || []).find((candidate) => candidate.id === siteId);
+    return entry?.alertLabel || entry?.name || siteId || '';
+  } catch {
+    return siteId || '';
+  }
+}
+
+const prepared = layer2Alert({
+  cancelled,
+  planningFailed,
+  planError,
+  missing,
+  failed,
+  site: siteLabel(process.env.MONITOR_SITE_ID || ''),
+});
+if (prepared) fs.writeFileSync(alertPath, `${JSON.stringify(prepared, null, 2)}\n`);
 
 if (process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${status}\n`);

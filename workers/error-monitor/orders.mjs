@@ -32,6 +32,7 @@ import { readLimitedText } from './errors.mjs';
 import { bearerToken, secretMatches } from './security.mjs';
 import { sendTelegram } from './telegram.mjs';
 import { shouldAlertHeartbeat } from './uptime.mjs';
+import { STORE, buildAlert, duration, localTime } from '../alert-format.mjs';
 
 function round(value, digits = 0) {
   const factor = 10 ** digits;
@@ -110,11 +111,6 @@ export function formatMinutes(minutes) {
   return hours ? `${hours}h${String(rest).padStart(2, '0')}m` : `${rest}m`;
 }
 
-function localClock(ms, timeZone) {
-  if (!Number.isFinite(ms)) return 'none on record';
-  return new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
-}
-
 /* Traffic never suppresses the alert; it changes what the alert tells the
    owner to look at. Orders stopped while people are still shopping points at
    checkout. Orders stopped while traffic stopped too points at the ads. */
@@ -133,13 +129,61 @@ export function trafficNote(traffic, nowMs, { maxAgeMinutes = 40 } = {}) {
   return `同时段流量也只有平时的 ${Math.round(ratio * 100)}%（看商品 ${current}，平时 ${baseline}）→ 可能是广告停了或淡时段`;
 }
 
+/* Both severities ring. The owner was explicit that a stop in orders must
+   reach him promptly, so the warning level is red too; the critical level
+   only changes how long the title says it has been. */
+export function orderGapAlert(site, evaluation, lastOrderAtMs, timeZone, traffic = null, nowMs = Date.now()) {
+  return buildAlert({
+    level: 'act',
+    title: `已经 ${duration(evaluation.ageMinutes * 60_000)}没有订单`,
+    site: site.label,
+    store: STORE.maybe,
+    lines: [
+      Number.isFinite(lastOrderAtMs)
+        ? `上一单是 ${localTime(lastOrderAtMs, timeZone)}。平时很少超过 ${duration(evaluation.thresholdMinutes * 60_000)}没单。`
+        : '还没有收到过任何订单记录。',
+      trafficNote(traffic, nowMs),
+      '请用手机走一遍下单流程（到付款页为止），看看卡在哪一步。',
+    ],
+    atMs: nowMs,
+    timeZone,
+    details: [`orders_gap severity=${evaluation.severity} age=${formatMinutes(evaluation.ageMinutes)} threshold=${formatMinutes(evaluation.thresholdMinutes)}`],
+  });
+}
+
 export function orderAlertText(site, evaluation, lastOrderAtMs, timeZone, traffic = null, nowMs = Date.now()) {
-  const icon = evaluation.severity === 'critical' ? '🔴' : '🟡';
-  return [
-    `${icon} [${site.label}][Layer 4 · Orders] 已经 ${formatMinutes(evaluation.ageMinutes)} 没有订单（超过 ${formatMinutes(evaluation.thresholdMinutes)} 就提醒）`,
-    `上一单：${localClock(lastOrderAtMs, timeZone)} ${timeZone}`,
-    trafficNote(traffic, nowMs),
-  ].join('\n');
+  return orderGapAlert(site, evaluation, lastOrderAtMs, timeZone, traffic, nowMs).text;
+}
+
+export function orderRecoveryAlert(site, lastOrderAtMs, previousOrderAtMs, timeZone, nowMs = Date.now()) {
+  const gap = Number.isFinite(previousOrderAtMs) ? lastOrderAtMs - previousOrderAtMs : null;
+  return buildAlert({
+    level: 'ok',
+    title: '订单恢复了',
+    site: site.label,
+    store: STORE.fine,
+    lines: [`刚进来一单（${localTime(lastOrderAtMs, timeZone)}）${gap ? `，之前 ${duration(gap)}没有订单` : ''}。`],
+    atMs: nowMs,
+    timeZone,
+  });
+}
+
+/* The push from Shopify is how this monitor sees orders at all. When it is
+   silent, "no orders" and "nothing is being sent to us" look identical, so
+   say which one it might be instead of letting it pose as a sales problem. */
+export function orderPushAlert(site, kind, { ageMinutes = null, nowMs = Date.now() } = {}) {
+  const never = kind === 'missing';
+  return buildAlert({
+    level: 'watch',
+    title: never ? '订单通知还没接上' : `订单通知 ${duration(ageMinutes * 60_000)}没进来`,
+    site: site.label,
+    store: '看不到订单',
+    lines: never
+      ? ['Shopify 还没有把任何订单推送给监控，可能是 Shopify Flow 没设置好。接上之前，「多久没订单」这条监控是看不到的。']
+      : ['可能真的没有订单，也可能是推送（Shopify Flow）断了。请先确认 Shopify Flow 在正常运行，再判断是不是没生意。'],
+    atMs: nowMs,
+    details: [`orders push ${never ? 'never received' : `last received ${formatMinutes(ageMinutes)} ago`}`],
+  });
 }
 
 /* ---- push endpoint --------------------------------------------------- */
@@ -223,12 +267,12 @@ export async function receiveOrderEvent(request, env) {
 
 /* ---- scheduled evaluation -------------------------------------------- */
 
-async function notifyThrottled(env, site, key, text, nowMs, mode) {
+async function notifyThrottled(env, site, key, alert, nowMs, mode) {
   const stateKey = siteKey(site.id, `orders:throttle:${key}`);
   const state = (await getState(env.DB, stateKey)) || {};
   if (nowMs < Number(state.untilMs || 0)) return false;
-  await setState(env.DB, stateKey, { untilMs: nowMs + ORDER_LIMITS.failureNotifyMs, text: String(text).slice(0, 200) });
-  if (mode === 'armed') await sendTelegram(env, text, { silent: true });
+  await setState(env.DB, stateKey, { untilMs: nowMs + ORDER_LIMITS.failureNotifyMs, text: String(alert.text).slice(0, 200) });
+  if (mode === 'armed') await sendTelegram(env, alert.text, { silent: alert.silent });
   return true;
 }
 
@@ -246,7 +290,7 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
   if (!entries.length) {
     // Nothing pushed yet: the site is catalogued but the platform side is not
     // wired. Record it (throttled), do not claim "no orders".
-    if (await notifyThrottled(env, site, 'push-missing', `🟠 [${site.label}][Layer 4 · Orders] No order events have ever been received — the platform push (Shopify Flow) is not wired yet`, nowMs, mode)) {
+    if (await notifyThrottled(env, site, 'push-missing', orderPushAlert(site, 'missing', { nowMs }), nowMs, mode)) {
       await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_push_missing', { siteId: site.id, mode });
     }
     return { ok: true, mode, status: 'awaiting_first_push' };
@@ -277,11 +321,17 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
   const resumed = state.open && Number.isFinite(Number(state.lastOrderAtMs)) && lastOrderAtMs > Number(state.lastOrderAtMs);
   if (shouldAlertHeartbeat(evaluation.severity, state, nowMs, ORDER_LIMITS.realertMs)) {
     await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_gap' : 'would_alert', { rule: 'orders_gap', ...detail });
-    if (mode === 'armed') await sendTelegram(env, orderAlertText(site, evaluation, lastOrderAtMs, timeZone, traffic, nowMs));
+    if (mode === 'armed') {
+      const alert = orderGapAlert(site, evaluation, lastOrderAtMs, timeZone, traffic, nowMs);
+      await sendTelegram(env, alert.text, { silent: alert.silent });
+    }
     await setState(env.DB, alertKey, { open: true, severity: evaluation.severity, lastAlertMs: nowMs, lastOrderAtMs });
   } else if (resumed) {
     await logAlert(env.DB, siteKey(site.id, 'layer4'), mode === 'armed' ? 'orders_recovery' : 'would_recover', { rule: 'orders_gap', ...detail });
-    if (mode === 'armed') await sendTelegram(env, `🟢 [${site.label}][Layer 4 · Orders] 订单恢复了\n这一单：${localClock(lastOrderAtMs, timeZone)} ${timeZone}`, { silent: true });
+    if (mode === 'armed') {
+      const alert = orderRecoveryAlert(site, lastOrderAtMs, Number(state.lastOrderAtMs), timeZone, nowMs);
+      await sendTelegram(env, alert.text, { silent: alert.silent });
+    }
     await setState(env.DB, alertKey, { open: false, severity: null, lastAlertMs: state.lastAlertMs, lastOrderAtMs });
   }
 
@@ -290,7 +340,7 @@ export async function runOrderHeartbeat(env, site, nowMs = Date.now()) {
   const receivedMs = Date.parse(push.lastReceivedAt || '');
   if (Number.isFinite(receivedMs) && nowMs - receivedMs > ORDER_LIMITS.pushStaleMs) {
     await logAlert(env.DB, siteKey(site.id, 'self-health'), 'orders_push_stale', { siteId: site.id, lastReceivedAt: push.lastReceivedAt, ageMinutes: round((nowMs - receivedMs) / 60_000) });
-    await notifyThrottled(env, site, 'push-stale', `🟠 [${site.label}][Layer 4 · Orders] No order events received for ${formatMinutes((nowMs - receivedMs) / 60_000)} — check the platform push (Shopify Flow) before reading this as zero sales`, nowMs, mode);
+    await notifyThrottled(env, site, 'push-stale', orderPushAlert(site, 'stale', { ageMinutes: (nowMs - receivedMs) / 60_000, nowMs }), nowMs, mode);
   }
   return { ok: true, mode, ...evaluation, orderCount: observed.orderCount, observedMaxGapMinutes: observed.maxGapMinutes };
 }

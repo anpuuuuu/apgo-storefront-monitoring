@@ -15,6 +15,8 @@
 
    Pure functions plus an injectable fetch so every branch is unit-testable. */
 
+import { STORE, buildAlert } from '../workers/alert-format.mjs';
+
 export const PROBE_USER_AGENT = 'APGO-Investigator/1.0 (storefront probe; no checkout)';
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -340,28 +342,41 @@ export function diffProbe(previous, current) {
 
 /* The verdict is deliberately a short list of rules of thumb; the message
    shows the evidence so the reader can disagree. */
-export function verdict(results) {
-  if (!results.length) return '没能锁定商品：GA4 的页面标题对不上商品目录，探测没跑起来。请自己打开正在跑的广告落地页看一眼加购到结账。';
+/* The conclusion and the store verdict on the message's second line come from
+   this one function. They were computed separately at first, and the test
+   caught the result: a conclusion reading "free shipping was switched off"
+   above a store line reading "the robot found no store problem". */
+function investigationOutcome(results) {
+  if (!results.length) return { store: STORE.unknown, text: '没能锁定商品：GA4 的页面标题对不上商品目录，探测没跑起来。请自己打开正在跑的广告落地页看一眼加购到结账。' };
   const usable = results.filter((entry) => !entry.probe.rateLimited);
   const throttled = results.filter((entry) => entry.probe.rateLimited);
-  if (!usable.length) return `探测被 Shopify 限流（HTTP 429），${throttled.map((entry) => entry.handle).join('、')} 都没测到。被限流的是监控自己，不代表店铺有问题；请自己打开广告落地页走一次加购到结账。`;
+  if (!usable.length) return { store: STORE.unknown, text: `探测被 Shopify 限流（HTTP 429），${throttled.map((entry) => entry.handle).join('、')} 都没测到。被限流的是监控自己，不代表店铺有问题；请自己打开广告落地页走一次加购到结账。` };
   const throttledNote = throttled.length ? `（${throttled.map((entry) => entry.handle).join('、')} 被限流没测到）` : '';
   const failing = usable.filter((entry) => entry.probe.add?.error || entry.probe.error);
-  if (failing.length) return `最可能：加购本身失败（${failing.map((entry) => `${entry.handle}: ${entry.probe.add?.error || entry.probe.error}`).join('；')}）。先查商品是否下架/售罄。${throttledNote}`;
+  if (failing.length) return { store: STORE.maybe, text: `最可能：加购本身失败（${failing.map((entry) => `${entry.handle}: ${entry.probe.add?.error || entry.probe.error}`).join('；')}）。先查商品是否下架/售罄。${throttledNote}` };
   const noRates = usable.filter((entry) => !Array.isArray(entry.probe.rates) || entry.probe.rates.length === 0);
-  if (noRates.length) return `最可能：结账拿不到运费方案（${noRates.map((entry) => `${entry.handle}: ${entry.probe.ratesError || '没有任何选项'}`).join('；')}）。先查 Shopify 后台 Settings → Shipping and delivery 的方案与商品所属 profile。${throttledNote}`;
+  if (noRates.length) return { store: STORE.maybe, text: `最可能：结账拿不到运费方案（${noRates.map((entry) => `${entry.handle}: ${entry.probe.ratesError || '没有任何选项'}`).join('；')}）。先查 Shopify 后台 Settings → Shipping and delivery 的方案与商品所属 profile。${throttledNote}` };
   const freeGone = usable.filter((entry) => entry.changes.some((change) => change.includes('免运费选项消失')));
-  if (freeGone.length) return `最可能：免运费方案被关掉或改了条件（${freeGone.map((entry) => entry.handle).join('、')}）。这正是 2026-09-15 那次的模式。${throttledNote}`;
+  if (freeGone.length) return { store: STORE.maybe, text: `最可能：免运费方案被关掉或改了条件（${freeGone.map((entry) => entry.handle).join('、')}）。这正是 2026-09-15 那次的模式。${throttledNote}` };
   const edited = usable.filter((entry) => entry.changes.some((change) => change.includes('被修改过')));
-  if (edited.length) return `商品在快照之后被后台修改过（${edited.map((entry) => entry.handle).join('、')}），先看那次修改改了什么（价格、库存、运费 profile、赠品规则）。${throttledNote}`;
+  if (edited.length) return { store: STORE.maybe, text: `商品在快照之后被后台修改过（${edited.map((entry) => entry.handle).join('、')}），先看那次修改改了什么（价格、库存、运费 profile、赠品规则）。${throttledNote}` };
   const changed = usable.filter((entry) => entry.changes.length);
-  if (changed.length) return `探测到变化（${changed.map((entry) => entry.handle).join('、')}），见上面各条；加购和运费本身仍可用。${throttledNote}`;
-  return `探测没发现异常：加购、购物车、运费方案都正常。原因可能在结账页本身（付款方式、折扣码、地址校验）或流量端（广告落地页、GA4 采集），本探测覆盖不到这些。${throttledNote}`;
+  if (changed.length) return { store: '店铺能买，但有变化', text: `探测到变化（${changed.map((entry) => entry.handle).join('、')}），见下面各条；加购和运费本身仍可用。${throttledNote}` };
+  return { store: '机器人没发现店铺问题', text: `探测没发现异常：加购、购物车、运费方案都正常。原因可能在结账页本身（付款方式、折扣码、地址校验）或流量端（广告落地页、GA4 采集），本探测覆盖不到这些。${throttledNote}` };
 }
 
-export function renderInvestigation({ ruleLabel, address, results, unmatched = [], snapshotTakenAt = null, siteLabel = '' }) {
-  const lines = [`🔎 [第4层·调查员] ${ruleLabel || ''} 自动排查`.trim()];
-  lines.push(`对象：GA4 最近 30 分钟加购最多的商品页，各加 1 件试走到运费（邮编 ${address?.zip || '?'}，不进结账）`);
+export function verdict(results) {
+  return investigationOutcome(results).text;
+}
+
+/* The conclusion comes first. It used to be the last line, so the owner had
+   to read every product's cart and shipping detail before learning what any
+   of it meant. The detail is all still there, underneath. */
+export function investigationAlert({ ruleLabel, address, results, unmatched = [], snapshotTakenAt = null, siteLabel = '', nowMs = Date.now() }) {
+  const lines = [
+    `结论：${verdict(results)}`,
+    `怎么查的：GA4 最近 30 分钟加购最多的商品页，各加 1 件试走到运费（邮编 ${address?.zip || '?'}，不进结账）`,
+  ];
   if (!results.length) {
     lines.push(unmatched.length ? `GA4 的页面标题对不上任何商品：${unmatched.slice(0, 3).join(' | ')}` : 'GA4 最近 30 分钟没有回报任何加购页面');
   }
@@ -386,10 +401,21 @@ export function renderInvestigation({ ruleLabel, address, results, unmatched = [
     else changes.forEach((change) => lines.push(`   ⚠ ${change}`));
   });
   if (results.length && unmatched.length) lines.push(`对不上商品的页面：${unmatched.slice(0, 3).join(' | ')}`);
-  lines.push(`结论：${verdict(results)}`);
   lines.push('修复由人来做；这条只是线索。');
-  return lines.join('\n');
+  return buildAlert({
+    level: 'followup',
+    title: `排查结果：${ruleLabel || '业务指标异常'}`,
+    site: siteLabel,
+    store: investigationOutcome(results).store,
+    lines,
+    atMs: nowMs,
+  });
 }
+
+export function renderInvestigation(options) {
+  return investigationAlert(options).text;
+}
+
 
 /* Which handles the nightly snapshot covers: the site's fixture products
    (the advertised promo, the gift picker, the bundle, the plain product) plus
