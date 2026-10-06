@@ -188,6 +188,36 @@ function addResponseVariantIds(body) {
     .filter(Boolean);
 }
 
+/* Does tapping this button on a phone open a confirm sheet before anything is
+   added? Runs inside the page through button.evaluate, so it must stay
+   self-contained: no closures, only window, document and the element.
+
+   The v3 buy bar has two behaviours, and the theme picks between them in
+   assets/apgo-cc-pdp-picker.js openConfirmModal(): a buy bar carrying
+   data-apgo-cc-direct-add commits the variant chosen on the page straight
+   away, with no sheet — unless a free-gift picker is active, because on
+   phones the gifts are chosen inside the sheet. This mirrors that condition
+   exactly, gift-modal exclusions included, rather than approximating it.
+
+   2026-10-06: Pocket-Friendly Deals (the top paid landing page that day, 3,674
+   sessions in three days) runs in direct-add, and the journey failed twice
+   waiting for a sheet the theme deliberately never opens. Tapping the same
+   button by hand added the item at once. The add itself is still verified
+   below against /cart/add.js and the selected variant, so skipping a sheet
+   that does not exist cannot let a real failure through. */
+function waitsForMobileConfirm(element) {
+  if (window.innerWidth > 1023) return false;
+  const isV3BuyBar = element.hasAttribute('data-apgo-cc-buybar-add')
+    || element.hasAttribute('data-apgo-cc-buybar-checkout');
+  if (isV3BuyBar) {
+    const directAdd = Boolean(document.querySelector('[data-apgo-cc-buybar][data-apgo-cc-direct-add]'));
+    const giftPickerActive = Array.from(document.querySelectorAll('[data-apgo-cc-gift-picker]'))
+      .some((picker) => !picker.closest('[data-apgo-cart-gift-modal]') && !picker.closest('[data-apgo-event-gift-modal]'));
+    return !(directAdd && !giftPickerActive);
+  }
+  return element.hasAttribute('data-apgo-add') || element.hasAttribute('data-apgo-buy-now');
+}
+
 async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_000 } = {}) {
   const waits = [0, 15_000, 45_000, 90_000];
   let lastStatus = 0;
@@ -199,14 +229,7 @@ async function clickCartAdd(page, button, { expectedVariantId, timeoutMs = 20_00
     await expect(button).toBeEnabled({ timeout: timeoutMs });
 
     let commitButton = button;
-    const opensMobileConfirm = await button.evaluate((element) => (
-      window.innerWidth <= 1023 && (
-        element.hasAttribute('data-apgo-cc-buybar-add')
-        || element.hasAttribute('data-apgo-cc-buybar-checkout')
-        || element.hasAttribute('data-apgo-add')
-        || element.hasAttribute('data-apgo-buy-now')
-      )
-    )).catch(() => false);
+    const opensMobileConfirm = await button.evaluate(waitsForMobileConfirm).catch(() => false);
 
     if (opensMobileConfirm) {
       const isV3 = await button.evaluate((element) => (
@@ -371,6 +394,7 @@ module.exports = {
   cartJson,
   addItems,
   clickCartAdd,
+  waitsForMobileConfirm,
   waitForCartStable,
   setMarket,
   navigateToCart,

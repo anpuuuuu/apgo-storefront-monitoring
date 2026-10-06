@@ -31,6 +31,7 @@
 - 没有付费 Landing Page 时仍执行一条 Android 核心购买流程和一条 iPhone 只读 UI 流程，不会产生空的绿色结果。
 - Theme Contract 改为结构校验：确认 Tab/Offer/Promotion 字段和引用有效，但不再复制保存每个后台 Block 的固定预期。
 - 广告 Journey 在运行时发现页面上的 Promotion、Gift Picker、Cart Offer 和限购状态，验证选项不会被重新渲染清空，并逐项比对 Cart Snapshot 与 Checkout。
+- 手机购买栏有两种行为，测试按主题的同一条件判断（`tests/monitor-fixture.js` 的 `waitsForMobileConfirm`，对照主题 `assets/apgo-cc-pdp-picker.js` 的 `openConfirmModal`）：购买栏带 `data-apgo-cc-direct-add` 的商品**一点直接加购、不弹确认框**——除非页面有免费赠品选择器，因为手机上赠品是在弹窗里选的。2026-10-06 Pocket-Friendly Deals（当天最大的广告落地页）就是直接加购，旧测试死等一个不存在的弹窗，连失败两次；同一时间手动点，商品当场进了购物车。跳过弹窗不会放过真故障：加购之后照样核对 `/cart/add.js` 成功、加的是选中的规格。
 - 第一次失败保存证据，等待 60 秒后以全新 Browser Context 复测；第二次成功记为 `transient/flaky` 且不发正式告警，两次失败才告警。Cloudflare 持续挑战与 Fixture 过期有独立分类。
 - 所有 Journey 在一个 Batch Runner 内严格串行；先完成全部只读检查，再执行 Android 购物车写入。Chromium 与 WebKit 各安装一次，每个 Journey 使用全新 Browser Context 并保留独立证据。只有每日完整结果写 Layer 2 Heartbeat；Post-deploy 不能掩盖漏跑的 Daily。
 - `/cart`、`/checkout`、`/account` 等系统 Landing Page 使用专用 Smoke，不会被误当作商品页执行加购。
