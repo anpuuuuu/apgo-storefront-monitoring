@@ -397,6 +397,41 @@ if (dist.ok) {
   console.log('  加购为 0 的窗口少，说明那次事故里加购是好的——这也正是 begin_checkout_zero 抓到它、');
   console.log('  而加购类规则抓不到的原因。两条规则管的是两种故障，不能互相替代。');
 
+  /* ---------------------------------------------------------------- *
+     How low does page_view fall, against its own slot's median, on
+     data that has finished arriving?
+
+     2026-10-06 22:00 MYT: add_to_cart_zero paged at midnight on a slot
+     whose page_view was 2 against a median of 189 — 1%. Seven orders
+     came in during that hour; GA4 simply had not delivered the data.
+     The empty-window guard only skipped windows where every event was
+     exactly zero, and two stray page views were enough to get past it.
+
+     A storefront cannot reduce its own page views to almost nothing
+     while Layer 1 says it is up: ads keep sending people. So a window
+     far below its usual traffic is missing data, not a broken store —
+     but how far below is a number to measure, not to guess.
+   * ---------------------------------------------------------------- */
+  const traffic = ordered.map((slot) => {
+    const history = (byClock.get(slot.clock) || []).filter((other) => other.key < slot.key).slice(-28);
+    if (history.length < 4) return null;
+    const usual = medianOf(history.map((other) => other.page_view));
+    if (usual < Number(settings.page_view_min_median || 10)) return null;
+    return { key: slot.key, ratio: slot.page_view / usual, pageView: slot.page_view, usual };
+  }).filter(Boolean).sort((a, b) => a.ratio - b.ratio);
+  if (traffic.length) {
+    const at = (q) => traffic[Math.min(traffic.length - 1, Math.floor(q * traffic.length))].ratio;
+    const pct = (value) => `${Math.round(value * 100)}%`;
+    console.log(`\n=== 已补齐的数据里，浏览量最低会掉到平时的几成（${traffic.length} 个时段）===`);
+    console.log(`  最低 ${pct(traffic[0].ratio)}  p0.5 ${pct(at(0.005))}  p1 ${pct(at(0.01))}  p5 ${pct(at(0.05))}  中位 ${pct(at(0.5))}`);
+    for (const line of [0.05, 0.1, 0.2, 0.3]) {
+      console.log(`  低于平时 ${pct(line)} 的时段：${traffic.filter((entry) => entry.ratio < line).length} 个`);
+    }
+    console.log('  最低的几个时段（日期-时段：浏览/平时）：');
+    for (const entry of traffic.slice(0, 8)) console.log(`    ${entry.key}  ${entry.pageView}/${entry.usual}  ${pct(entry.ratio)}`);
+    console.log('  守卫的门槛要明显低于正常数据会掉到的最低点；最低几个时段若对得上已知故障，要单独看。');
+  }
+
 
 
   /* How close is a quiet-but-healthy window to the line? A rule that
