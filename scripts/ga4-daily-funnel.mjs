@@ -12,7 +12,7 @@ import {
   telegram,
 } from './monitor-lib.mjs';
 import { dailyPublicStatus } from './ga4-public-status.mjs';
-import { dailyFunnelAlert, dailyQualityAlert, persistentDailyAnomalies, splitDailyAnomalies } from './ga4-daily-alert-lib.mjs';
+import { dailyFunnelAlert, dailyIssues, dailyQualityAlert, persistentDailyAnomalies, splitDailyAnomalies } from './ga4-daily-alert-lib.mjs';
 import { coverageForDate, isDailyStageFresh } from './ga4-anomaly-lib.mjs';
 
 requireEnv();
@@ -155,17 +155,7 @@ function baselineFor(samples) {
 }
 
 function anomaliesFor(label, current, baseline) {
-  const threshold = config.ga4.daily.ratio_to_baseline;
-  const issues = [];
-  if (current.add_to_cart >= config.ga4.daily.atc_min
-      && baseline.view_to_atc > 0
-      && rates(current).view_to_atc < baseline.view_to_atc * threshold) issues.push('view_to_atc');
-  if (current.add_to_cart >= config.ga4.daily.atc_min
-      && baseline.atc_to_checkout > 0
-      && rates(current).atc_to_checkout < baseline.atc_to_checkout * threshold) issues.push('atc_to_checkout');
-  if (current.begin_checkout >= config.ga4.daily.checkout_min
-      && baseline.checkout_to_purchase > 0
-      && rates(current).checkout_to_purchase < baseline.checkout_to_purchase * threshold) issues.push('checkout_to_purchase');
+  const issues = dailyIssues(current, baseline, config.ga4.daily);
   /* Absolute revenue is deliberately report-only. Traffic, promotions,
      product mix and AOV can all move it without a storefront failure; using
      it as an anomaly made nearly every replayed day look broken. */
