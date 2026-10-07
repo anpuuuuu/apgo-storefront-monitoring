@@ -353,13 +353,29 @@ export function isDailyStageFresh(prior, stage, targetDate, nowMs, rerunMs) {
 
    storefrontHealthy gates it deliberately. If Layer 1 is unhappy too the
    zeros may be real, and the rules should still be allowed to speak. */
-export function isEmptyWindow(current, baseline, eventNames, { storefrontHealthy, pageViewMinMedian = 10 } = {}) {
+/* "Nearly empty" as well as empty.
+
+   2026-10-06 22:00 MYT: add_to_cart_zero paged at midnight, red, on a slot
+   whose page_view was 2 against a median of 189. Seven orders came in that
+   hour. GA4 had delivered 1% of the slot; sixteen minutes later it had
+   delivered 13%. The all-zero test let it through on two stray page views.
+
+   The floor is measured, not guessed. Across 1,488 settled slots (35 days
+   to 2026-10-06) page_view never fell below 5% of its own slot median; the
+   lowest was 8%, at 02:00 with three views against thirty-six. The two
+   false alarms were 0% and 1%. So 5% catches both, and would not have held
+   back a single real slot in that month. */
+export const NEARLY_EMPTY_RATIO = 0.05;
+
+export function isEmptyWindow(current, baseline, eventNames, { storefrontHealthy, pageViewMinMedian = 10, nearlyEmptyRatio = NEARLY_EMPTY_RATIO } = {}) {
   if (!storefrontHealthy) return false;
-  const total = (eventNames || []).reduce((sum, name) => sum + (Number(current?.[name]) || 0), 0);
-  if (total !== 0) return false;
+  const usual = Number(baseline?.page_view);
   // Without a baseline worth the name this is just a quiet night, and quiet
   // nights are not worth suppressing anything over.
-  return Number(baseline?.page_view) >= pageViewMinMedian;
+  if (!(usual >= pageViewMinMedian)) return false;
+  const total = (eventNames || []).reduce((sum, name) => sum + (Number(current?.[name]) || 0), 0);
+  if (total === 0) return true;
+  return (Number(current?.page_view) || 0) < nearlyEmptyRatio * usual;
 }
 
 /* Consecutive empty windows, keyed on slot identity like the rule streaks, so
@@ -545,14 +561,15 @@ export function businessRecoveryAlert({ rule, site = '', lastedMs = null, nowMs 
   });
 }
 
-export function emptyWindowAlert({ site = '', consecutive, window = null, baselinePageView, nowMs = Date.now(), runUrl = '' }) {
+export function emptyWindowAlert({ site = '', consecutive, window = null, baselinePageView, currentPageView = 0, nowMs = Date.now(), runUrl = '' }) {
+  const seen = Number(currentPageView) || 0;
   return buildAlert({
     level: 'ignore',
-    title: `GA4 连续 ${consecutive} 个时段没有数据`,
+    title: `GA4 连续 ${consecutive} 个时段几乎没有数据`,
     site,
     store: '店铺多半正常',
     lines: [
-      `GA4 回来的数据全是 0（平时这个时段约 ${baselinePageView} 次浏览）。店铺本身由第 1 层和结账探测在看，它们没有报警。`,
+      `${seen ? `GA4 只回来 ${seen} 次浏览` : 'GA4 回来的数据全是 0'}（平时这个时段约 ${baselinePageView} 次）。店铺本身由第 1 层和结账探测在看，它们没有报警。`,
       '通常是 Google 那边处理积压，等等就会补上；如果明天还这样，可能是主题或 app 更新把 GA4 埋点拿掉了。',
       windowSentence(window, nowMs),
     ],

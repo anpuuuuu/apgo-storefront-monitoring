@@ -421,17 +421,21 @@ test('a window where every event is zero is missing data, not a dead store', () 
   assert.equal(isEmptyWindow(zero, busy, EVENTS, { storefrontHealthy: true, pageViewMinMedian: 10 }), true);
 });
 
-test('one event surviving means the data did arrive, so judge it', () => {
-  // A storefront cannot stop its own page views. Anything above zero
-  // anywhere means the pipeline delivered, and the rules should speak.
+test('a trickle is not arrival: the window is judged once page views are normal', () => {
+  /* This test used to say "anything above zero anywhere means the pipeline
+     delivered". 2026-10-06 proved it wrong: GA4 delivered two page views of
+     a usual 189 first and the rest later, and the alert that assumption let
+     through rang at midnight. What says the data has arrived is page views
+     at a normal level — and then the rules must speak, even if every other
+     event is zero, because that is exactly what a broken add-to-cart looks
+     like. */
   for (const name of EVENTS) {
-    const current = { ...zero, [name]: 1 };
-    assert.equal(
-      isEmptyWindow(current, busy, EVENTS, { storefrontHealthy: true }),
-      false,
-      `${name} > 0 must not be suppressed`,
-    );
+    if (name === 'page_view') continue;
+    const trickle = { ...zero, [name]: 1 };
+    assert.equal(isEmptyWindow(trickle, busy, EVENTS, { storefrontHealthy: true }), true, `${name}=1 with no page views is still missing data`);
   }
+  const arrived = { ...zero, page_view: 160 };
+  assert.equal(isEmptyWindow(arrived, busy, EVENTS, { storefrontHealthy: true }), false, 'normal traffic and no adds is a real signal');
 });
 
 test('a quiet night is not suppressed, because there is nothing to suppress', () => {
@@ -544,4 +548,37 @@ test('the probe line is only ever a line, never a gate', () => {
     assert.equal(typeof line, 'string');
     assert.ok(line.length > 0);
   }
+});
+
+/* ---------------------------------------------------------------- *
+   "Nearly empty", from the 2026-10-06 midnight false alarm.
+ * ---------------------------------------------------------------- */
+
+test('a window at 1% of its usual traffic is missing data, not a broken store', () => {
+  /* The exact 2026-10-06 22:00 MYT slot: page_view 2 against a median of
+     189, everything else zero. Seven orders came in that hour. The all-zero
+     test let it through on those two page views and it paged, red, at
+     midnight. */
+  const usual = { page_view: 189, view_item: 133, add_to_cart: 12.5, begin_checkout: 4, purchase: 1 };
+  const slot = { page_view: 2, view_item: 0, add_to_cart: 0, begin_checkout: 0, purchase: 0 };
+  assert.equal(isEmptyWindow(slot, usual, EVENTS, { storefrontHealthy: true }), true);
+});
+
+test('the lowest real slot in a month of settled data is still judged', () => {
+  /* 2026-09-26 02:00: 3 page views against 36, 8% — the lowest of 1,488
+     settled slots. Real data, so it must not be held back. */
+  assert.equal(isEmptyWindow({ page_view: 3, add_to_cart: 0 }, { page_view: 36 }, EVENTS, { storefrontHealthy: true }), false);
+  // And the same slot sixteen minutes later on 10-06, at 13%, is judged too:
+  // by then enough had arrived for the rules to read it.
+  assert.equal(isEmptyWindow({ page_view: 24, add_to_cart: 1 }, { page_view: 189 }, EVENTS, { storefrontHealthy: true }), false);
+});
+
+test('nearly empty never hides a real outage', () => {
+  // With Layer 1 unhappy, near-zero traffic may be genuine.
+  assert.equal(isEmptyWindow({ page_view: 2 }, { page_view: 189 }, EVENTS, { storefrontHealthy: false }), false);
+});
+
+test('the floor can be tuned from config without touching code', () => {
+  assert.equal(isEmptyWindow({ page_view: 15 }, { page_view: 189 }, EVENTS, { storefrontHealthy: true, nearlyEmptyRatio: 0.1 }), true);
+  assert.equal(isEmptyWindow({ page_view: 15 }, { page_view: 189 }, EVENTS, { storefrontHealthy: true }), false, '8% is above the default 5%');
 });
