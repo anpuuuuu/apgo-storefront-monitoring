@@ -263,6 +263,7 @@ if (truncated) {
 const emptyWindow = isEmptyWindow(current, baseline, EVENT_NAMES, {
   storefrontHealthy,
   pageViewMinMedian: Number(settings.page_view_min_median) || 10,
+  nearlyEmptyRatio: Number(settings.nearly_empty_ratio) || undefined,
 });
 
 if (emptyWindow) {
@@ -273,6 +274,8 @@ if (emptyWindow) {
     rule: 'window_empty',
     window: window.key,
     consecutive,
+    // Kept so the nearly-empty threshold can be re-measured from real skips.
+    current: { page_view: current.page_view },
     baseline: { page_view: baseline.page_view },
   });
 
@@ -288,12 +291,13 @@ if (emptyWindow) {
       consecutive,
       window,
       baselinePageView: baseline.page_view,
+      currentPageView: current.page_view,
       runUrl: process.env.RUN_URL || '',
     }));
   }
 
   await heartbeat('layer4', { status: 'ok', window: window.key, note: 'window empty, not judged', consecutive });
-  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, consecutive, baselinePageView: baseline.page_view }));
+  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, consecutive, pageView: current.page_view, baselinePageView: baseline.page_view }));
   process.exit(0);
 }
 await setState('ga4:realtime:empty', { consecutive: 0, windowKey: window.key, checkedAt: new Date().toISOString() });
