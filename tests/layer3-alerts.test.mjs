@@ -14,6 +14,7 @@ import {
   normalizeSignatureText,
   normalizedBrowserSignatureInput,
   originAllowed,
+  shopifyRequester,
   shouldAlertDigestRow,
 } from '../workers/error-monitor/errors.mjs';
 import { cleanPath, cleanSource } from '../workers/error-monitor/security.mjs';
@@ -178,6 +179,58 @@ test('social crawlers are ignored without excluding real Facebook in-app shopper
   assert.equal(isIgnoredUserAgent('Mozilla/5.0 (compatible; Facebot/1.0)'), true);
   assert.equal(isIgnoredUserAgent('Mozilla/5.0 (Linux; Android 16) [FB_IAB/FB4A;FBAV/526.0.0.0.0;]'), false);
   assert.equal(isIgnoredUserAgent('Mozilla/5.0 (Linux; Android 15; Device Build/AP3A; wv) Version/4.0 Chrome/138 Mobile Safari/537.36'), false);
+});
+
+test('search and AI crawlers that render the page are ignored; shoppers, Cubot phones and the self-test are not', () => {
+  // User agents as they reached js_errors between 09-09 and 10-09.
+  for (const crawler of [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 (compatible; meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler))',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 (compatible; meta-webindexer/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler))',
+    'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/116.0.1938.76 Safari/537.36',
+    'Mozilla/5.0 (compatible; YandexRenderResourcesBot/1.0; +http://yandex.com/bots) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 (compatible; OAI-AdsBot/1.0; +https://openai.com/adsbot)',
+    'Mozilla/5.0 (X11; Linux x86_64; Storebot-Google/1.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)',
+  ]) assert.equal(isIgnoredUserAgent(crawler), true, crawler);
+  for (const visitor of [
+    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 13; CUBOT KINGKONG 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+    'APGO-Layer3-SelfTest/2.0',
+  ]) assert.equal(isIgnoredUserAgent(visitor), false, visitor);
+});
+
+/* Real stacks from 10-09 and 10-07. The theme snippet's fetch wrapper is the
+   inline frame at line 61; Shopify's web pixels manager and shop events
+   listener wrap fetch too, so the request's sender sits below them. */
+const WRAPPER = 'TypeError: Failed to fetch     at window.fetch (https://apgo.my/products/pocket-friendly-deals?ad_id=120248700155890157&campaign_id=120248700155880157:61:44)';
+const SHOP_JS = 'https://cdn.shopify.com/shopifycloud/shop-js/modules/v2/chunk.utils_CY1J4tRu.esm.js';
+const SHOP_JS_FRAMES = `at N.exportTo (${SHOP_JS}:1:6189)     at N.exportBatches (${SHOP_JS}:1:7014)     at N.exportMetrics (${SHOP_JS}:1:5401)`;
+
+test("a failed fetch Shopify sent is filed under Shopify, past the theme's wrapper and Shopify's own", () => {
+  const throughPixels = `${WRAPPER}     at https://apgo.my/cdn/wpm/b7ec887c8w14f9f074p854094e1m1370c602m.js:1:82932     ${SHOP_JS_FRAMES}`;
+  const throughEvents = `${WRAPPER}     at window2.fetch (https://apgo.my/cdn/shopifycloud/storefront/assets/shop_events_listener-4e26a9ce.js:1:7379)     ${SHOP_JS_FRAMES}`;
+  for (const stack of [throughPixels, throughEvents]) {
+    const source = cleanSource(shopifyRequester(stack));
+    assert.equal(source, SHOP_JS);
+    assert.equal(classifyBrowserSignal({ kind: 'rejection', message: 'Unhandled rejection: Failed to fetch', source }), 'shopify-platform');
+  }
+  assert.equal(
+    normalizedBrowserSignatureInput({ siteId: 'apgo-my', kind: 'rejection', message: 'Unhandled rejection: Failed to fetch', source: cleanSource(shopifyRequester(throughPixels)) }),
+    normalizedBrowserSignatureInput({ siteId: 'apgo-my', kind: 'rejection', message: 'Unhandled rejection: Failed to fetch', source: cleanSource(shopifyRequester(throughEvents)) }),
+  );
+});
+
+test('a failed fetch for the theme, or with no wrapper on top, stays a theme error', () => {
+  // 10-07: Shopify's module loader fetching the theme's own predictive-search.js.
+  assert.equal(shopifyRequester(
+    'TypeError: Unable to fetch https://apgo.my/cdn/shop/t/6/assets/predictive-search.js?v=80834049983509743631770714317 - see network log for details. Failed to fetch     at window.fetch (https://apgo.my/products/warehouse-clearance-sale-bundle?ad_id=120248613474600157:61:44)     at doFetch (https://apgo.my/cdn/shopifycloud/importmap-polyfill/es-modules-shim.2.4.0.js:1:38242)     at fetchModule (https://apgo.my/cdn/shopifycloud/importmap-polyfill/es-modules-shim.2.4.0.js:1:38683)',
+  ), '');
+  // /cart: the theme's compiled scripts.js sits between Shopify's wrappers and shop-js.
+  assert.equal(shopifyRequester(
+    `TypeError: Failed to fetch     at window.fetch (https://apgo.my/cart:61:44)     at https://apgo.my/cdn/wpm/b7ec887c8w14f9f074p854094e1m1370c602m.js:1:82932     at https://apgo.my/cdn/shop/t/6/compiled_assets/scripts.js?v=3:1:2048     ${SHOP_JS_FRAMES}`,
+  ), '');
+  assert.equal(shopifyRequester(`TypeError: Failed to fetch     ${SHOP_JS_FRAMES}`), '');
+  assert.equal(shopifyRequester(''), '');
 });
 
 test('social apps and generic WebViews are classified separately', () => {
