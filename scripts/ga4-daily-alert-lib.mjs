@@ -26,6 +26,45 @@ export function persistentDailyAnomalies(primary, confirmation) {
   });
 }
 
+/* Which buying steps were genuinely worse on one day, for one segment.
+   A step counts only when all of these hold:
+
+     1. the segment had enough volume today to compute a rate;
+     2. it NORMALLY has that much volume too, or the usual rate it is
+        compared with is itself noise;
+     3. the step's outcome actually fell: fewer add-to-carts, checkouts or
+        purchases than usual. A failing store loses something. A rate that
+        drops while the count holds means more people arrived, not that
+        fewer got through.
+
+   On 2026-10-07 checkout_to_purchase paged red for desktop on 10-06:
+   3 purchases from 13 checkouts against a usual 3 from 5. Not one purchase
+   was missing. Replayed over every flag since 09-03, conditions 2 and 3
+   remove 8 of 18, all desktop or tablet, including the three desktop
+   checkout_to_purchase flags (usual checkouts 4 to 7.5). All five
+   checkout_to_purchase drops in large segments stay, among them laundry
+   products on 09-14 (9 purchases against a usual 42.5) and Singapore on
+   09-15 (1 against 10.5). The price: desktop and tablet usually have fewer
+   than ten checkouts a day, below the checkout floor, so a payment failure
+   on those devices alone has to show up in another layer. */
+const DAILY_STEPS = [
+  { issue: 'view_to_atc', outcome: 'add_to_cart', from: 'view_item', volume: 'add_to_cart', floor: 'atc_min' },
+  { issue: 'atc_to_checkout', outcome: 'begin_checkout', from: 'add_to_cart', volume: 'add_to_cart', floor: 'atc_min' },
+  { issue: 'checkout_to_purchase', outcome: 'purchase', from: 'begin_checkout', volume: 'begin_checkout', floor: 'checkout_min' },
+];
+
+export function dailyIssues(current, baseline, settings) {
+  return DAILY_STEPS.filter((step) => {
+    const floor = settings[step.floor];
+    const rate = current[step.from] ? current[step.outcome] / current[step.from] : 0;
+    return current[step.volume] >= floor
+      && baseline[step.volume] >= floor
+      && baseline[step.issue] > 0
+      && rate < baseline[step.issue] * settings.ratio_to_baseline
+      && current[step.outcome] < baseline[step.outcome];
+  }).map((step) => step.issue);
+}
+
 /* The daily funnel compares a whole day with the same weekday on earlier
    weeks, and only alerts once both the morning and the afternoon run agree.
    These say what was found the way the owner would: which part of the store,

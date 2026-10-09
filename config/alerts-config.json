@@ -74,7 +74,7 @@
       }
     },
     "daily": {
-      "_readme": "Settled previous-day funnel. Revenue remains in the report but is never an anomaly: absolute sales volume is not a storefront failure signal.",
+      "_readme": "Settled previous-day funnel. Revenue remains in the report but is never an anomaly: absolute sales volume is not a storefront failure signal. atc_min / checkout_min must hold both for the day and for the segment's usual same-weekday median, and a step only counts when its own count (add-to-carts, checkouts, purchases) fell below usual: see dailyIssues in scripts/ga4-daily-alert-lib.mjs.",
       "mode": "observe",
       "issue_modes": { "checkout_to_purchase": "armed" },
       "checkout_to_purchase_armed_since": "2026-10-03",
