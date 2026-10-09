@@ -51,9 +51,15 @@ export function isIgnoredBrowserNoise({ kind, message }) {
 }
 
 export function isIgnoredUserAgent(userAgent) {
-  // These are link-preview/ad crawlers, not shoppers. Keep FB_IAB/FB4A and
-  // ordinary Android WebViews because they represent real customer sessions.
-  return /(?:meta-externalads\/|facebookexternalhit\/|\bFacebot\b)/i.test(String(userAgent || ''));
+  // These are crawlers, not shoppers. Keep FB_IAB/FB4A and ordinary Android
+  // WebViews because they represent real customer sessions. The search and
+  // AI crawlers render the page and run the theme, so they report errors
+  // like a browser. From 09-09 to 10-09 meta-externalagent alone sent 8,016
+  // of 24,730 events, and crawlers by themselves were behind 22 of the 50
+  // error families the digest sent, every Shopify-platform one included;
+  // a bingbot visit was the second "network" on 10-09 15:55 MYT. Name them
+  // exactly: a bare "bot" would also match phones such as Cubot.
+  return /(?:meta-external(?:ads|agent)\/|meta-webindexer\/|facebookexternalhit\/|\bFacebot\b|bingbot\/|Googlebot\/|AdsBot-Google|Storebot-Google\/|Google-InspectionTool\/|Yandex\w*Bot\/|OAI-AdsBot\/|GPTBot\/|AhrefsBot\/|SemrushBot\/|PetalBot|Applebot\/|Bytespider)/i.test(String(userAgent || ''));
 }
 
 export function classifyClientType(userAgent) {
@@ -92,6 +98,39 @@ export function classifyBrowserSignal({ kind, message, source, stage }) {
   }
   if ((kind === 'resource' || stage === 'style') && /\/cdn\/fonts\//i.test(evidence)) return 'font-resource';
   return 'theme';
+}
+
+/* The theme snippet wraps window.fetch to watch cart requests, so its own
+   inline frame sits on top of every failed fetch on the page, Shopify's
+   included. The snippet keeps a rejection whenever its stack touches the
+   store, which that frame always does, and sends no source, so every failed
+   Shopify request was filed as a theme error. Observed 2026-10-09 15:55 MYT:
+   Shopify's shop-js metrics export failing for one Android phone (and
+   bingbot) paged as a website error; 348 shopper rejections from 09-09 to
+   10-09 had that shape, behind five of the digests sent.
+
+   Shopify also interposes on fetch (web pixels manager, shop events
+   listener), so the requester is the first frame below the snippet's that
+   is not one of those. Only a Shopify requester moves the rejection out of
+   "theme": when Shopify's module loader fetches the theme's own files, as
+   with predictive-search.js on 10-07, the failure stays ours. */
+const FETCH_INTERPOSERS = /\/cdn\/wpm\/|\/shop_events_listener-/i;
+
+export function shopifyRequester(stack, origins = STORE_ORIGINS) {
+  const frames = [...String(stack || '').matchAll(/(https?:\/\/[^\s()@]+?):\d+:\d+/g)].map((match) => match[1]);
+  if (!frames.length || !isInlinePageFrame(frames[0], origins)) return '';
+  const below = frames.slice(1);
+  const requester = below.find((url) => !FETCH_INTERPOSERS.test(url)) || below[0] || '';
+  return requester && classifyBrowserSignal({ kind: 'rejection', source: requester }) === 'shopify-platform' ? requester : '';
+}
+
+function isInlinePageFrame(frameUrl, origins) {
+  try {
+    const url = new URL(frameUrl);
+    return origins.includes(url.origin) && !url.pathname.startsWith('/cdn/') && !/\.m?js$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function platformFamily(evidence) {
@@ -228,10 +267,10 @@ export async function receiveError(request, env) {
   const day = new Date().toISOString().slice(0, 10);
   const ipHash = (await sha256Hex(`${request.headers.get('cf-connecting-ip') || ''}|${day}`)).slice(0, 32);
   const message = cleanText(data.m, 300);
-  const source = cleanSource(data.src);
+  const kind = ['error', 'rejection', 'resource', 'cart', 'selftest'].includes(data.kind) ? data.kind : 'error';
+  const source = cleanSource(data.src) || (kind === 'rejection' ? cleanSource(shopifyRequester(cleanText(data.stack, 1000))) : '');
   const line = Number.isFinite(Number(data.line)) ? Math.trunc(Number(data.line)) : 0;
   const col = Number.isFinite(Number(data.col)) ? Math.trunc(Number(data.col)) : 0;
-  const kind = ['error', 'rejection', 'resource', 'cart', 'selftest'].includes(data.kind) ? data.kind : 'error';
   const action = cleanText(data.action, 80);
   const stage = cleanText(data.stage, 80);
   const status = Number.isFinite(Number(data.status)) ? Math.trunc(Number(data.status)) : 0;
