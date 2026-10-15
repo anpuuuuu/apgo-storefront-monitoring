@@ -195,10 +195,17 @@ test('recovery names how long it was broken', () => {
   assert.match(text, /60 分钟/);
 });
 
-test('the watch ships in observe and the probe address is the investigator one', async () => {
+test('the watch was armed on evidence, and the probe address is the investigator one', async () => {
   const config = JSON.parse(await readFile(new URL('../config/alerts-config.json', import.meta.url), 'utf8'));
   const watch = config.storefront_watch;
-  assert.equal(watch.mode, 'observe', 'arm it on evidence, not on the day it was written');
+  // Armed 2026-10-15 after 24 days and 1,759 observed runs without one
+  // confirmed failure: arm it on evidence, not on the day it was written.
+  if (watch.mode === 'armed') {
+    const observedDays = (Date.parse(watch.armed_since) - Date.parse(watch.observe_since)) / 86_400_000;
+    assert.ok(observedDays >= 14, `armed after only ${observedDays} days in observe`);
+  } else {
+    assert.equal(watch.mode, 'observe');
+  }
   assert.equal(watch.consecutive_failures, 2);
   // It shares the investigator's address rather than defining a second one:
   // two postcodes drifting apart would make the two probes disagree.
