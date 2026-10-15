@@ -144,6 +144,27 @@ const adminResponse = await fetch(`https://analyticsadmin.googleapis.com/v1beta/
   headers: { authorization: `Bearer ${process.env.GOOGLE_OAUTH_ACCESS_TOKEN}` },
 }).catch((error) => ({ ok: false, statusText: String(error?.message || error) }));
 const adminProperty = adminResponse.ok ? await adminResponse.json().catch(() => ({})) : {};
+/* Every half hour of today, all five events. The frontier margin was measured
+   on page_view; checkout and purchase come from Shopify's checkout pixel and
+   may arrive on their own schedule, which would make a settled slot look
+   like nobody checked out. */
+if (events.ok) {
+  const slots = new Map();
+  for (const row of events.report.rows || []) {
+    const stamp = row.dimensionValues?.[0]?.value || '';
+    if (stamp.length !== 12) continue;
+    const key = `${stamp.slice(8, 10)}:${Number(stamp.slice(10, 12)) < 30 ? '00' : '30'}`;
+    if (!slots.has(key)) slots.set(key, Object.fromEntries(EVENT_NAMES.map((name) => [name, 0])));
+    const name = row.dimensionValues?.[1]?.value;
+    if (name in slots.get(key)) slots.get(key)[name] += Number(row.metricValues?.[0]?.value || 0);
+  }
+  console.log('\n=== 今天每半小时（标准接口）===');
+  console.log(`${pad('时段', 6)} ${EVENT_NAMES.map((name) => pad(name, 15)).join(' ')}`);
+  for (const key of [...slots.keys()].sort()) {
+    console.log(`${pad(key, 6)} ${EVENT_NAMES.map((name) => pad(slots.get(key)[name], 15)).join(' ')}`);
+  }
+}
+
 console.log(`\n=== 数据停在哪里 ===`);
 console.log(`GA4 property 自己的报表时区: ${adminProperty.timeZone || `(读不到: ${adminResponse.status || ''} ${adminResponse.statusText || ''})`}；规则假设的: ${timeZone}`);
 
