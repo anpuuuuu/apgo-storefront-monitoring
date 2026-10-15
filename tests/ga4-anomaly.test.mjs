@@ -10,6 +10,8 @@ import {
   evaluateCheckoutCompletion,
   evaluateDropRules,
   baselineForRollingWindow,
+  emptyWindowAlert,
+  gaDate,
   hoursForWindow,
   isDailyStageFresh,
   isEmptyWindow,
@@ -19,6 +21,7 @@ import {
   propertyMinuteNow,
   realertDelayHours,
   rollingWindowEndingAt,
+  settledLagMinutes,
   settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
@@ -136,6 +139,67 @@ test('rolling checkout completion uses a settled two-hour cohort', () => {
   assert.equal(rolling.startStamp, '202610041830');
   assert.equal(rolling.endStamp, '202610042030');
   assert.deepEqual(hoursForWindow(rolling, 'Asia/Kuala_Lumpur'), ['18', '19', '20']);
+});
+
+test('hour filter values carry no leading zero, the way GA4 reports them', () => {
+  // 2026-10-15, yesterday's data: ["08","09"] matched no rows, ["8","9"] 4,599 page views.
+  const morning = settledWindow(Date.parse('2026-10-15T03:30:00Z'), { timeZone: 'Asia/Kuala_Lumpur', lagMinutes: 120, slotMinutes: 30 });
+  assert.equal(morning.key, '202610150930');
+  const cohort = rollingWindowEndingAt(morning, { durationMinutes: 120, timeZone: 'Asia/Kuala_Lumpur' });
+  assert.deepEqual(hoursForWindow(cohort, 'Asia/Kuala_Lumpur'), ['8', '9']);
+  const midnight = settledWindow(Date.parse('2026-10-14T18:30:00Z'), { timeZone: 'Asia/Kuala_Lumpur', lagMinutes: 120, slotMinutes: 30 });
+  const across = rollingWindowEndingAt(midnight, { durationMinutes: 120, timeZone: 'Asia/Kuala_Lumpur' });
+  assert.deepEqual(hoursForWindow(across, 'Asia/Kuala_Lumpur'), ['0', '23']);
+});
+
+test("the judged slot follows GA4's frontier, within a floor and a ceiling", () => {
+  const timeZone = 'Asia/Kuala_Lumpur';
+  const settings = { timeZone, minLag: 120, margin: 120, maxLag: 480 };
+  // 10-15 17:03 MYT: the newest minute GA4 had was 13:55, three hours back.
+  const now = Date.parse('2026-10-15T09:03:00Z');
+  const lag = settledLagMinutes(now, '202610151355', settings);
+  assert.equal(lag, 187 + 120);
+  // 13:55 minus 120 is 11:55, so the 11:30-12:00 slot, ending 115 minutes before the frontier.
+  assert.equal(settledWindow(now, { timeZone, lagMinutes: lag, slotMinutes: 30 }).key, '202610151130');
+  // The old fixed lag read 15:00, which GA4 did not have yet.
+  assert.equal(settledWindow(now, { timeZone, lagMinutes: 120, slotMinutes: 30 }).key, '202610151500');
+  // GA4 quick again: the floor holds.
+  assert.equal(settledLagMinutes(now, '202610151702', settings), 120);
+  // A stalled frontier (a removed tag looks like one) stops at the ceiling.
+  assert.equal(settledLagMinutes(now, '202610150500', settings), 480);
+  // Frontier unknown: the floor, and the empty-window path takes it from there.
+  assert.equal(settledLagMinutes(now, null, settings), 120);
+});
+
+test('empty reports say whether GA4 is late or the tag is gone, from realtime', () => {
+  const window = settledWindow(Date.parse('2026-10-15T07:26:00Z'), { timeZone: 'Asia/Kuala_Lumpur', lagMinutes: 120, slotMinutes: 30 });
+  const common = { site: 'APGO MY', consecutive: 6, window, baselinePageView: 161, nowMs: Date.parse('2026-10-15T07:26:00Z') };
+  // 10-15 16:58 MYT: reports empty for three hours, realtime 205 page views.
+  const late = emptyWindowAlert({ ...common, realtimePageView: 205 });
+  assert.match(late.text, /^⚪/);
+  assert.equal(late.silent, true);
+  assert.match(late.text, /实时接口这半小时有 205 次浏览，所以埋点是好的/);
+  assert.doesNotMatch(late.text, /明天/);
+  const gone = emptyWindowAlert({ ...common, realtimePageView: 0 });
+  assert.match(gone.text, /^🟡 GA4 收不到网站的数据/);
+  assert.match(gone.text, /埋点拿掉了/);
+  const unknown = emptyWindowAlert({ ...common, realtimePageView: null });
+  assert.match(unknown.text, /^⚪/);
+  assert.match(unknown.text, /realtime_page_view=unknown/);
+});
+
+test('dates sent to runReport are YYYY-MM-DD, and no script sends a bare stamp again', async () => {
+  assert.equal(gaDate('202610141200'), '2026-10-14');
+  assert.equal(gaDate('20261014'), '2026-10-14');
+  // The 22:00 summary sent startDate "20261014" and got HTTP 400 every night from 10-04.
+  const { readdir } = await import('node:fs/promises');
+  const scripts = (await readdir(new URL('../scripts/', import.meta.url))).filter((name) => name.endsWith('.mjs'));
+  for (const name of scripts) {
+    const source = await readFile(new URL(`../scripts/${name}`, import.meta.url), 'utf8');
+    for (const [, value] of source.matchAll(/(?:startDate|endDate):\s*(`[^`]*`|'[^']*'|[^,}\n]+)/g)) {
+      assert.match(value.trim(), /^(?:'(?:today|yesterday|\d+daysAgo|\d{4}-\d{2}-\d{2})'|`\$\{[^`]+\}daysAgo`|gaDate\()/, `${name}: ${value.trim()}`);
+    }
+  }
 });
 
 test('checkout completion requires volume, relative drop and absolute drop', () => {

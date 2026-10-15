@@ -29,7 +29,7 @@
    Usage: mode `diagnose-ga4` in monitor-alerts.yml, or run directly with the
    same GA4 environment the other Layer 4 scripts use. */
 import { config, ga } from './monitor-lib.mjs';
-import { evaluateDropRules } from './ga4-anomaly-lib.mjs';
+import { evaluateDropRules, settledLagMinutes, settledWindow } from './ga4-anomaly-lib.mjs';
 import { EVENT_NAMES, WINDOWS, bucketByWindow, minutesAgo, propertyMinuteNow } from './ga4-diagnose-lib.mjs';
 
 const timeZone = config.ga4.timezone;
@@ -128,6 +128,81 @@ if (itemIds.ok) {
   if (!rows.length) console.log('（今天没有加购）');
   for (const row of rows) console.log(`  ${pad(row.count, 4)}  item_id=${pad(row.id, 18)}  ${row.name}`);
   console.log('\n判读：item_id 若能对上 /products.json 的 product id 或 variant id，标题匹配整套可删。');
+}
+
+/* ------------------------------------------------------------------ *
+   Where today's data stops, and on which clock.
+
+   From 2026-10-08 every slot the rules read from 10:00 MYT onwards came back
+   empty while realtime showed normal traffic, and a 09:30 read returned no
+   rows at all, its 28-day baseline included. Either GA4 has fallen hours
+   behind, or the stamps are no longer on the clock the rules assume, or the
+   `hour` filter no longer matches. Each of those prints differently here.
+ * ------------------------------------------------------------------ */
+
+const adminResponse = await fetch(`https://analyticsadmin.googleapis.com/v1beta/properties/${process.env.GA4_PROPERTY_ID}`, {
+  headers: { authorization: `Bearer ${process.env.GOOGLE_OAUTH_ACCESS_TOKEN}` },
+}).catch((error) => ({ ok: false, statusText: String(error?.message || error) }));
+const adminProperty = adminResponse.ok ? await adminResponse.json().catch(() => ({})) : {};
+console.log(`\n=== 数据停在哪里 ===`);
+console.log(`GA4 property 自己的报表时区: ${adminProperty.timeZone || `(读不到: ${adminResponse.status || ''} ${adminResponse.statusText || ''})`}；规则假设的: ${timeZone}`);
+
+if (events.ok) {
+  const stamps = (events.report.rows || [])
+    .filter((row) => row.dimensionValues?.[1]?.value === 'page_view' && Number(row.metricValues?.[0]?.value || 0) > 0)
+    .map((row) => row.dimensionValues?.[0]?.value || '')
+    .sort();
+  const newest = stamps.at(-1);
+  console.log(`今天(标准接口)有 page_view 的分钟: ${stamps.length} 个，最早 ${stamps[0] || '-'}，最新 ${newest || '-'}` +
+    (newest ? `（按 ${timeZone} 算是 ${minutesAgo(newest, nowMs, timeZone)} 分钟前）` : ''));
+}
+
+const byHour = await attempt('runReport(date, hour)', 'runReport', {
+  dateRanges: [{ startDate: 'yesterday', endDate: 'today' }],
+  dimensions: [{ name: 'date' }, { name: 'hour' }],
+  metrics: [{ name: 'eventCount' }],
+  dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { value: 'page_view' } } },
+  orderBys: [{ dimension: { dimensionName: 'date' } }, { dimension: { dimensionName: 'hour' } }],
+  limit: '100',
+});
+if (byHour.ok) {
+  console.log('page_view 按 date × hour（hour 原样印出，看有没有补零）:');
+  for (const row of byHour.report.rows || []) {
+    const [date, hour] = (row.dimensionValues || []).map((value) => value.value);
+    console.log(`  ${date} hour=${JSON.stringify(hour)} ${pad(row.metricValues?.[0]?.value || 0, 6)}`);
+  }
+}
+
+/* The exact query and arithmetic the realtime rules now use to pick a slot. */
+const frontierProbe = await attempt('runReport(frontier)', 'runReport', {
+  dateRanges: [{ startDate: 'yesterday', endDate: 'today' }],
+  dimensions: [{ name: 'dateHourMinute' }],
+  metrics: [{ name: 'eventCount' }],
+  dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { value: 'page_view' } } },
+  orderBys: [{ dimension: { dimensionName: 'dateHourMinute' }, desc: true }],
+  limit: '1',
+});
+if (frontierProbe.ok) {
+  const realtimeSettings = config.ga4.realtime;
+  const frontierStamp = frontierProbe.report.rows?.[0]?.dimensionValues?.[0]?.value || null;
+  const lagMinutes = settledLagMinutes(nowMs, frontierStamp, {
+    timeZone,
+    minLag: Number(realtimeSettings.settled_lag_minutes) || 120,
+    margin: Number(realtimeSettings.frontier_margin_minutes) || 120,
+    maxLag: Number(realtimeSettings.max_lag_minutes) || 480,
+  });
+  const slot = settledWindow(nowMs, { timeZone, lagMinutes, slotMinutes: Number(realtimeSettings.window_minutes) || 30 });
+  console.log(`规则会读: frontier=${frontierStamp} → 往回 ${lagMinutes} 分钟 → 时段 ${slot.startStamp}–${slot.endStamp}`);
+}
+
+for (const values of [['08', '09'], ['8', '9'], ['10', '11']]) {
+  const probe = await attempt(`runReport(hour in ${values})`, 'runReport', {
+    dateRanges: [{ startDate: 'yesterday', endDate: 'yesterday' }],
+    dimensions: [{ name: 'hour' }],
+    metrics: [{ name: 'eventCount' }],
+    dimensionFilter: { filter: { fieldName: 'hour', inListFilter: { values } } },
+  });
+  if (probe.ok) console.log(`hour 过滤 ${JSON.stringify(values)} → 昨天 ${(probe.report.rows || []).length} 行 ${JSON.stringify((probe.report.rows || []).map((row) => [row.dimensionValues?.[0]?.value, row.metricValues?.[0]?.value]))}`);
 }
 
 

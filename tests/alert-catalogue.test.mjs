@@ -55,6 +55,8 @@ const CATALOGUE = {
     [`business ${rule} recovered`, businessRecoveryAlert({ rule, site: 'APGO MY', lastedMs: 5_400_000, nowMs: NOW, detail: { current: { add_to_cart: 14 } } })],
   ])),
   'ga4 empty windows': emptyWindowAlert({ site: 'APGO MY', consecutive: 6, window: WINDOW, baselinePageView: 187.5, nowMs: NOW }),
+  'ga4 reports late': emptyWindowAlert({ site: 'APGO MY', consecutive: 6, window: WINDOW, baselinePageView: 161, realtimePageView: 205, nowMs: NOW }),
+  'ga4 tag gone': emptyWindowAlert({ site: 'APGO MY', consecutive: 6, window: WINDOW, baselinePageView: 161, realtimePageView: 0, nowMs: NOW }),
   'daily payment drop': dailyFunnelAlert({ site: 'APGO MY', targetDate: '20261005', armed: [{ label: 'all', issues: ['checkout_to_purchase'] }], nowMs: NOW }),
   'daily mixed drop': dailyFunnelAlert({ site: 'APGO MY', targetDate: '20261005', armed: [{ label: 'device:mobile', issues: ['view_to_atc', 'atc_to_checkout'] }], nowMs: NOW }),
   'daily data quality': dailyQualityAlert({ site: 'APGO MY', targetDate: '2026-10-05', issues: [{ code: 'PURCHASE_REVENUE_MISSING', message: '40 transactions, zero revenue' }], nowMs: NOW }),

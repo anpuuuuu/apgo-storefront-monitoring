@@ -117,6 +117,10 @@ test('traffic changes what the alert points at, and never silences it', () => {
   assert.match(trafficNote(null, NOW), /读不到/);
   assert.match(trafficNote(fresh(10, 0), NOW), /读不到/, "a zero baseline is not a 100% drop");
   assert.match(trafficNote({ checkedAt: "not a date" }, NOW), /读不到/);
+  // The slot is whichever one GA4 has finished, hours older than the order
+  // gap since 2026-10-08, so the note names it rather than saying "same time".
+  const slot = { ...fresh(120, 130), windowStartMs: Date.parse('2026-10-15T05:00:00Z'), windowEndMs: Date.parse('2026-10-15T05:30:00Z') };
+  assert.match(trafficNote(slot, NOW, { timeZone: TZ }), /^GA4 能读到的最近时段（13:00–13:30）流量正常/);
 });
 
 test('the alert says how long, against what, and where to look', () => {
@@ -134,7 +138,7 @@ test('the alert says how long, against what, and where to look', () => {
 
   const critical = orderGapAlert({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 900, thresholdMinutes: 420 }, NOW - 900 * 60_000, TZ, null, NOW);
   assert.match(critical.text, /^🔴 已经 15 小时没有订单/);
-  assert.match(critical.text, /同时段流量：读不到/);
+  assert.match(critical.text, /GA4 流量：读不到/);
   assert.equal(critical.silent, false);
   // orderAlertText is the same message as plain text.
   assert.equal(orderAlertText({ label: 'APGO MY' }, { severity: 'critical', ageMinutes: 900, thresholdMinutes: 420 }, NOW - 900 * 60_000, TZ, null, NOW), critical.text);

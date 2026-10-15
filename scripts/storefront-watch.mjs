@@ -94,6 +94,7 @@ async function watchHandles() {
    information about two products. */
 async function fetchProduct(client, handle) {
   const response = await client.request(`/products/${encodeURIComponent(handle)}.js`);
+  if (response.status === 404) return { missing: true };
   if (!response.ok || !response.json?.variants) return null;
   const product = response.json;
   return {
@@ -122,6 +123,13 @@ if (!handles.length) {
   process.exit(0);
 }
 
+/* The list comes from pages that had ad traffic, so finished promotions stay
+   on it until discovery stops seeing them. On 2026-10-15 three of its ten
+   products returned 404, and a run that drew one of them measured a single
+   product instead of two. A 404 is the store saying the product is gone, so
+   drop it from the cached list at once; anything else (429, timeout, 5xx)
+   is the probe failing to look and is retried next time. */
+const gone = [];
 const results = [];
 for (const handle of handles) {
   if (results.length) await sleep(Number(settings.pause_ms) || 4_000);
@@ -129,8 +137,13 @@ for (const handle of handles) {
   // empty and one product's failure cannot contaminate the next.
   const client = createStorefrontClient({ baseUrl: site.baseUrl });
   const product = await fetchProduct(client, handle);
+  if (product?.missing) {
+    gone.push(handle);
+    results.push({ handle, title: handle, probe: null, judgement: { status: 'unmeasured', reasons: ['这个商品已经不存在（404），从探测清单拿掉'] } });
+    continue;
+  }
   if (!product) {
-    results.push({ handle, title: handle, probe: null, judgement: { status: 'unmeasured', reasons: ['读不到这个商品（可能已下架或改了 handle）'] } });
+    results.push({ handle, title: handle, probe: null, judgement: { status: 'unmeasured', reasons: ['读不到这个商品（被限流、超时或服务器出错）'] } });
     continue;
   }
   const probe = await probeProduct(client, product, address);
@@ -162,6 +175,13 @@ if (dryRun) {
 
 const { shouldAlert, recovered, next, confirmed } = nextWatchState(previous, verdict, nowMs, settings);
 await setState(STATE_KEY, next);
+
+if (gone.length) {
+  const cached = await getState(HANDLES_KEY);
+  if (Array.isArray(cached?.handles)) {
+    await setState(HANDLES_KEY, { ...cached, handles: cached.handles.filter((handle) => !gone.includes(handle)) });
+  }
+}
 
 /* A Layer 4 alert names a window that closed up to two hours ago, so it needs
    to know what the probe found back then, not what it finds now. Keep a short

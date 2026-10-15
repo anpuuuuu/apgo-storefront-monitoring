@@ -21,12 +21,14 @@ import {
   durationText,
   emptyWindowAlert,
   evaluateCheckoutCompletion,
+  gaDate,
   RULE_COPY,
   hoursForWindow,
   isEmptyWindow,
   nextEmptyState,
   nextRuleState,
   rollingWindowEndingAt,
+  settledLagMinutes,
   settledWindow,
   shouldRecordAlert,
   topScreensForEvent,
@@ -59,9 +61,23 @@ function eventFilter() {
 /* The slot being judged, and the only clock this run cares about. Both sides
    of every comparison now come from one runReport over one hour-of-day, so
    current and baseline are the same measurement taken on different days. */
+const frontier = await ga('runReport', {
+  dateRanges: [{ startDate: 'yesterday', endDate: 'today' }],
+  dimensions: [{ name: 'dateHourMinute' }],
+  metrics: [{ name: 'eventCount' }],
+  dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { value: 'page_view' } } },
+  orderBys: [{ dimension: { dimensionName: 'dateHourMinute' }, desc: true }],
+  limit: '1',
+}).then((report) => report.rows?.[0]?.dimensionValues?.[0]?.value || null).catch(() => null);
+const lagMinutes = settledLagMinutes(Date.now(), frontier, {
+  timeZone: config.ga4.timezone,
+  minLag: Number(settings.settled_lag_minutes) || 120,
+  margin: Number(settings.frontier_margin_minutes) || 120,
+  maxLag: Number(settings.max_lag_minutes) || 480,
+});
 const window = settledWindow(Date.now(), {
   timeZone: config.ga4.timezone,
-  lagMinutes: Number(settings.settled_lag_minutes) || 120,
+  lagMinutes,
   slotMinutes: Number(settings.window_minutes) || 30,
 });
 const completionSettings = settings.checkout_completion || {};
@@ -114,7 +130,7 @@ const purchaseTrackingMode = dropSettings.purchase_tracking_mode || 'observe';
 let screensPromise = null;
 async function screensEvidence(eventName) {
   screensPromise ||= ga('runReport', {
-    dateRanges: [{ startDate: window.startStamp.slice(0, 8), endDate: window.startStamp.slice(0, 8) }],
+    dateRanges: [{ startDate: gaDate(window.startStamp), endDate: gaDate(window.startStamp) }],
     dimensions: [{ name: 'eventName' }, { name: 'unifiedScreenName' }, { name: 'dateHourMinute' }],
     metrics: [{ name: 'eventCount' }],
     dimensionFilter: eventFilter(),
@@ -277,6 +293,8 @@ if (emptyWindow) {
     // Kept so the nearly-empty threshold can be re-measured from real skips.
     current: { page_view: current.page_view },
     baseline: { page_view: baseline.page_view },
+    frontier,
+    lagMinutes,
   });
 
   /* Silence is right for a backlog and wrong for a tag that has been removed,
@@ -286,18 +304,24 @@ if (emptyWindow) {
      real one. */
   const need = Number(settings.empty_window_notify_after) || 6;
   if (consecutive === need) {
+    const realtimePageView = await ga('runRealtimeReport', {
+      minuteRanges: [{ startMinutesAgo: 29, endMinutesAgo: 0 }],
+      metrics: [{ name: 'eventCount' }],
+      dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { value: 'page_view' } } },
+    }).then((report) => Number(report.rows?.[0]?.metricValues?.[0]?.value || 0)).catch(() => null);
     await telegram(emptyWindowAlert({
       site: site.alertLabel || site.name || site.id,
       consecutive,
       window,
       baselinePageView: baseline.page_view,
       currentPageView: current.page_view,
+      realtimePageView,
       runUrl: process.env.RUN_URL || '',
     }));
   }
 
   await heartbeat('layer4', { status: 'ok', window: window.key, note: 'window empty, not judged', consecutive });
-  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, consecutive, pageView: current.page_view, baselinePageView: baseline.page_view }));
+  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, consecutive, pageView: current.page_view, baselinePageView: baseline.page_view, frontier, lagMinutes }));
   process.exit(0);
 }
 await setState('ga4:realtime:empty', { consecutive: 0, windowKey: window.key, checkedAt: new Date().toISOString() });
@@ -399,6 +423,7 @@ await setState('ga4:realtime:coverage', { checkedAt: appendCoverage(coverageStat
    purchase_tracking_gap above reads orders:last, which the Worker writes. */
 await setState('ga4:realtime:last', {
   checkedAt: new Date().toISOString(), window: window.key, windowClock: window.clock,
+  windowStartMs: window.startMs, windowEndMs: window.endMs, frontier, lagMinutes,
   current, baseline,
   checkoutCompletion: { window: completionWindow.key, current: completionCurrent, baseline: completionBaseline, abnormal: completion.abnormal },
 });
