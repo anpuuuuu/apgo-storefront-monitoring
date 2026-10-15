@@ -93,6 +93,30 @@ export function settledLagMinutes(nowMs, frontierStamp, { timeZone, minLag = 120
   return Math.min(maxLag, Math.max(minLag, behind + margin));
 }
 
+/* Which slot this run judges: the one after the last slot judged, as long
+   as GA4 has finished it. GA4's frontier moves in uneven jumps (15:35 at
+   18:58 MYT, 17:35 at 21:03 on 2026-10-15), so always taking the newest
+   settled slot skipped every other one: runs read 13:00, 14:00, 15:00 and
+   never 13:30 or 14:30. Worse, with the gap allowance widened to bridge
+   those skips, 13:00 and 14:00 -- two unrelated quiet half hours with no
+   checkout -- counted as two in a row and paged begin_checkout_zero red at
+   19:26, while the 13:30 slot between them held six checkouts and two
+   sales. Walking forward one slot at a time judges every slot and keeps a
+   streak made of neighbours.
+
+   A frontier that slips back leaves the last slot in place (read again, it
+   is a duplicate and moves no streak). A backlog beyond maxBacklogMinutes
+   (runs stopped for hours) jumps to the newest slot and lets the gap
+   restart any streak rather than crawling through stale slots. */
+export function nextSlotToJudge(lastStartMs, newest, { timeZone, slotMinutes = 30, maxBacklogMinutes = 120 }) {
+  const last = Number(lastStartMs);
+  if (!Number.isFinite(last)) return newest;
+  if (newest.startMs <= last) return settledWindow(last, { timeZone, lagMinutes: 0, slotMinutes });
+  const next = last + slotMinutes * 60_000;
+  if (newest.startMs - next > maxBacklogMinutes * 60_000) return newest;
+  return settledWindow(next, { timeZone, lagMinutes: 0, slotMinutes });
+}
+
 /* A wider cohort ending at the newest settled slot. Checkout completion is
    not meaningful in a single 30-minute bucket: somebody can begin at 19:29
    and purchase at 19:34. A two-hour cohort keeps both events together while
