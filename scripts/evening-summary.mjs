@@ -9,7 +9,7 @@ import {
   telegram,
   workerUrl,
 } from './monitor-lib.mjs';
-import { minuteToMs, propertyMinuteNow, settledWindow } from './ga4-anomaly-lib.mjs';
+import { gaDate, minuteToMs, propertyMinuteNow, settledWindow } from './ga4-anomaly-lib.mjs';
 import { fetchAbandonedCount } from '../workers/error-monitor/shopify-abandoned.mjs';
 import {
   eventCountsThrough,
@@ -102,7 +102,7 @@ const reportEndMs = cutoffStamp.endsWith('2400')
 
 const [report, healthResponse, orderLog, completionState, abandoned, layer1Probes] = await Promise.all([
   ga('runReport', {
-    dateRanges: [{ startDate: reportDate, endDate: reportDate }],
+    dateRanges: [{ startDate: gaDate(reportDate), endDate: gaDate(reportDate) }],
     dimensions: [{ name: 'dateHourMinute' }, { name: 'eventName' }],
     metrics: [{ name: 'eventCount' }],
     dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: events } } },

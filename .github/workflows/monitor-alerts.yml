@@ -117,6 +117,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_TOKEN: ${{ github.token }}
           ALERT_TITLE: ${{ matrix.label }} Layer 4 GA4 monitor failed
+          ALERT_DETAIL: mode ${{ needs.plan.outputs.mode }}
+          # Realtime runs every 30 minutes, so its second failure in a row is
+          # the signal. A once-a-day mode never has a "previous" failure of its
+          # own in the run list, only realtime successes, so it waited forever:
+          # the 22:00 summary failed every night from 10-04 to 10-14 unseen.
+          MONITOR_NOTIFY_MIN_CONSECUTIVE: ${{ contains(fromJSON('["daily-primary","daily-confirm","evening-summary"]'), needs.plan.outputs.mode) && '1' || '2' }}
           MONITOR_SITE_LABEL: ${{ matrix.label }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/workflow-failure-notify.mjs

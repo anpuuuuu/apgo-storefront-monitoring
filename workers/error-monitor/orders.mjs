@@ -113,20 +113,29 @@ export function formatMinutes(minutes) {
 
 /* Traffic never suppresses the alert; it changes what the alert tells the
    owner to look at. Orders stopped while people are still shopping points at
-   checkout. Orders stopped while traffic stopped too points at the ads. */
-export function trafficNote(traffic, nowMs, { maxAgeMinutes = 40 } = {}) {
+   checkout. Orders stopped while traffic stopped too points at the ads.
+
+   The GA4 slot is whichever one GA4 has finished, which can be hours older
+   than the order gap (from 2026-10-08 it trailed by four or five), so the
+   note names the slot instead of calling it "the same time". */
+export function trafficNote(traffic, nowMs, { maxAgeMinutes = 40, timeZone } = {}) {
   const checkedAtMs = Date.parse(traffic?.checkedAt || '');
   if (!Number.isFinite(checkedAtMs) || (nowMs - checkedAtMs) / 60_000 > maxAgeMinutes) {
-    return '同时段流量：读不到（GA4 检查太旧或没跑）';
+    return 'GA4 流量：读不到（GA4 检查太旧或没跑）';
   }
   const current = Number(traffic?.current?.view_item);
   const baseline = Number(traffic?.baseline?.view_item);
   if (!Number.isFinite(current) || !Number.isFinite(baseline) || baseline <= 0) {
-    return '同时段流量：读不到（GA4 没给出可比的基线）';
+    return 'GA4 流量：读不到（GA4 没给出可比的基线）';
   }
+  const startMs = Number(traffic?.windowStartMs);
+  const endMs = Number(traffic?.windowEndMs);
+  const slot = Number.isFinite(startMs) && Number.isFinite(endMs)
+    ? `GA4 能读到的最近时段（${localTime(startMs, timeZone).slice(6)}–${localTime(endMs, timeZone).slice(6)}）`
+    : '同时段';
   const ratio = current / baseline;
-  if (ratio >= 0.6) return `同时段流量正常（看商品 ${current}，平时 ${baseline}）→ 重点查结账`;
-  return `同时段流量也只有平时的 ${Math.round(ratio * 100)}%（看商品 ${current}，平时 ${baseline}）→ 可能是广告停了或淡时段`;
+  if (ratio >= 0.6) return `${slot}流量正常（看商品 ${current}，平时 ${baseline}）→ 重点查结账`;
+  return `${slot}流量也只有平时的 ${Math.round(ratio * 100)}%（看商品 ${current}，平时 ${baseline}）→ 可能是广告停了或淡时段`;
 }
 
 /* Both severities ring. The owner was explicit that a stop in orders must
@@ -142,7 +151,7 @@ export function orderGapAlert(site, evaluation, lastOrderAtMs, timeZone, traffic
       Number.isFinite(lastOrderAtMs)
         ? `上一单是 ${localTime(lastOrderAtMs, timeZone)}。平时很少超过 ${duration(evaluation.thresholdMinutes * 60_000)}没单。`
         : '还没有收到过任何订单记录。',
-      trafficNote(traffic, nowMs),
+      trafficNote(traffic, nowMs, { timeZone }),
       '请用手机走一遍下单流程（到付款页为止），看看卡在哪一步。',
     ],
     atMs: nowMs,

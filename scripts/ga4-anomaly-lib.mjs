@@ -69,6 +69,30 @@ export function settledWindow(nowMs, { timeZone, lagMinutes = 120, slotMinutes =
   };
 }
 
+/* How far back to judge, measured from GA4's own progress rather than the
+   clock. The reports fill in behind a frontier, the newest minute that has
+   any data, and a slot is complete only some time after the frontier has
+   passed it: measured on 10-15, an hour was 96% filled an hour after the
+   frontier passed its end and complete after about 95 minutes. The slot read
+   is the one containing frontier minus the margin, so a margin of 120 puts
+   its end 90-120 minutes behind the frontier. Until
+   2026-10-07 the frontier stayed close enough for a fixed two-hour lag. From
+   10-08 it ran three hours behind (at 17:03 MYT on 10-15 the newest minute
+   was 13:55), so every slot from 10:00 on was read before it existed and
+   nothing was judged for a week.
+
+   minLag keeps the old floor when GA4 is quick. maxLag stops a stalled
+   frontier (a removed tag looks like one) from dragging the rules back
+   indefinitely: past it the slot is read anyway, comes back empty, and the
+   empty-window path says whether GA4 is late or the tag is gone. An unknown
+   frontier falls back to minLag for the same reason. */
+export function settledLagMinutes(nowMs, frontierStamp, { timeZone, minLag = 120, margin = 120, maxLag = 480 }) {
+  const frontierMs = minuteToMs(frontierStamp, timeZone);
+  if (!Number.isFinite(frontierMs)) return minLag;
+  const behind = Math.ceil((nowMs - (frontierMs + 60_000)) / 60_000);
+  return Math.min(maxLag, Math.max(minLag, behind + margin));
+}
+
 /* A wider cohort ending at the newest settled slot. Checkout completion is
    not meaningful in a single 30-minute bucket: somebody can begin at 19:29
    and purchase at 19:34. A two-hour cohort keeps both events together while
@@ -90,12 +114,26 @@ export function rollingWindowEndingAt(window, { durationMinutes = 120, timeZone 
   };
 }
 
+/* Values for a filter on GA4's `hour` dimension, which are "0" to "23" with
+   no leading zero. Asked on 2026-10-15 for yesterday, ["08","09"] matched no
+   rows and ["8","9"] matched 4,599 page views. So every slot from 00:00 to
+   09:30 read nothing at all, baseline included, and the rules judged zeros
+   against zeros without noticing; the checkout cohorts of 10:00-11:30 lost
+   the hours they reach back into. */
 export function hoursForWindow(window, timeZone) {
   const values = new Set();
   for (let cursor = window.startMs; cursor < window.endMs; cursor += 30 * 60_000) {
-    values.add(propertyMinuteNow(cursor, timeZone).slice(8, 10));
+    values.add(Number(propertyMinuteNow(cursor, timeZone).slice(8, 10)));
   }
-  return [...values].sort();
+  return [...values].sort((a, b) => a - b).map(String);
+}
+
+/* runReport takes YYYY-MM-DD, NdaysAgo, yesterday or today, and answers a
+   bare YYYYMMDD with HTTP 400. The 22:00 summary sent one from 10-04 and
+   failed every night until 10-15. */
+export function gaDate(stamp) {
+  const text = String(stamp);
+  return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
 }
 
 /* Counts for one slot out of a dateHourMinute report. Half-open on the end so
@@ -516,8 +554,8 @@ export function describeCounts(current = {}, baseline = {}) {
 function windowSentence(window, nowMs) {
   if (!window?.startStamp) return '';
   const clock = (stamp) => `${stamp.slice(8, 10)}:${stamp.slice(10, 12)}`;
-  const minutes = Math.round((nowMs - window.endMs) / 60_000);
-  return `看的是 ${clock(window.startStamp)}–${clock(window.endStamp)} 这半小时（GA4 的数据要约 2 小时才完整，所以这是 ${minutes} 分钟前的情况）。`;
+  const ago = duration(Math.max(0, nowMs - window.endMs));
+  return `看的是 ${clock(window.startStamp)}–${clock(window.endStamp)} 这半小时，也就是 ${ago}前（GA4 报表要等这段补齐才读，所以总是晚一段）。`;
 }
 
 export function businessAlert({ rule, site = '', alertCount = 1, abnormalSince = null, nowMs = Date.now(), window = null, detail = {}, screensLine = '', probeLine = '', runUrl = '' }) {
@@ -561,20 +599,34 @@ export function businessRecoveryAlert({ rule, site = '', lastedMs = null, nowMs 
   });
 }
 
-export function emptyWindowAlert({ site = '', consecutive, window = null, baselinePageView, currentPageView = 0, nowMs = Date.now(), runUrl = '' }) {
+/* GA4's realtime API answers from a different pipeline than the reports the
+   rules read, so it tells the two explanations apart: visitors on realtime
+   mean the tag works and the reports are late; nobody on realtime while
+   Layer 1 says the site is up means the tag itself has gone. Until
+   2026-10-15 the message guessed instead ("probably a backlog; if it is
+   still like this tomorrow, maybe the tag"), and it was still like this
+   every day for a week with the tag working throughout. */
+export function emptyWindowAlert({ site = '', consecutive, window = null, baselinePageView, currentPageView = 0, realtimePageView = null, nowMs = Date.now(), runUrl = '' }) {
   const seen = Number(currentPageView) || 0;
+  const live = realtimePageView === null || realtimePageView === undefined ? null : Number(realtimePageView);
+  const tagGone = live === 0;
+  const explanation = live === null
+    ? '通常是 Google 那边处理积压，等等就会补上。规则在数据回来之前不做判断。'
+    : tagGone
+      ? 'GA4 实时接口这半小时也是 0 次浏览，第 1 层却显示网站正常：多半是主题或 app 更新把 GA4 埋点拿掉了。埋点没了，业务规则就看不到加购和结账。'
+      : `GA4 实时接口这半小时有 ${live} 次浏览，所以埋点是好的，只是 Google 的报表还没处理到这一段。规则在数据回来之前不做判断。`;
   return buildAlert({
-    level: 'ignore',
-    title: `GA4 连续 ${consecutive} 个时段几乎没有数据`,
+    level: tagGone ? 'watch' : 'ignore',
+    title: tagGone ? 'GA4 收不到网站的数据' : `GA4 报表连续 ${consecutive} 个时段还没有数据`,
     site,
     store: '店铺多半正常',
     lines: [
-      `${seen ? `GA4 只回来 ${seen} 次浏览` : 'GA4 回来的数据全是 0'}（平时这个时段约 ${baselinePageView} 次）。店铺本身由第 1 层和结账探测在看，它们没有报警。`,
-      '通常是 Google 那边处理积压，等等就会补上；如果明天还这样，可能是主题或 app 更新把 GA4 埋点拿掉了。',
+      `${seen ? `GA4 报表只回来 ${seen} 次浏览` : 'GA4 报表回来的数据全是 0'}（平时这个时段约 ${baselinePageView} 次）。店铺本身由第 1 层和结账探测在看，它们没有报警。`,
+      explanation,
       windowSentence(window, nowMs),
     ],
     atMs: nowMs,
-    details: [`window_empty consecutive=${consecutive}`],
+    details: [`window_empty consecutive=${consecutive} realtime_page_view=${live ?? 'unknown'}`],
     link: runUrl,
   });
 }
