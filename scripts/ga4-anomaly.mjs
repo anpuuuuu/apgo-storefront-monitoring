@@ -27,6 +27,7 @@ import {
   isEmptyWindow,
   nextEmptyState,
   nextRuleState,
+  nextSlotToJudge,
   rollingWindowEndingAt,
   settledLagMinutes,
   settledWindow,
@@ -75,11 +76,22 @@ const lagMinutes = settledLagMinutes(Date.now(), frontier, {
   margin: Number(settings.frontier_margin_minutes) || 120,
   maxLag: Number(settings.max_lag_minutes) || 480,
 });
-const window = settledWindow(Date.now(), {
+const newest = settledWindow(Date.now(), {
   timeZone: config.ga4.timezone,
   lagMinutes,
   slotMinutes: Number(settings.window_minutes) || 30,
 });
+// Where the previous run stopped; the first run after the cursor existed
+// picks up from the last slot recorded in ga4:realtime:last.
+const cursor = await getState('ga4:realtime:cursor') || await getState('ga4:realtime:last');
+const window = nextSlotToJudge(cursor?.windowStartMs, newest, {
+  timeZone: config.ga4.timezone,
+  slotMinutes: Number(settings.window_minutes) || 30,
+  maxBacklogMinutes: Number(settings.max_backlog_minutes) || 120,
+});
+async function saveCursor() {
+  await setState('ga4:realtime:cursor', { windowStartMs: window.startMs, windowKey: window.key, newestKey: newest.key, checkedAt: new Date().toISOString() });
+}
 const completionSettings = settings.checkout_completion || {};
 const completionWindow = rollingWindowEndingAt(window, {
   durationMinutes: Number(completionSettings.window_minutes) || 120,
@@ -320,8 +332,9 @@ if (emptyWindow) {
     }));
   }
 
+  await saveCursor();
   await heartbeat('layer4', { status: 'ok', window: window.key, note: 'window empty, not judged', consecutive });
-  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, consecutive, pageView: current.page_view, baselinePageView: baseline.page_view, frontier, lagMinutes }));
+  console.log(JSON.stringify({ event: 'ga4_window_empty', window: window.key, newest: newest.key, consecutive, pageView: current.page_view, baselinePageView: baseline.page_view, frontier, lagMinutes }));
   process.exit(0);
 }
 await setState('ga4:realtime:empty', { consecutive: 0, windowKey: window.key, checkedAt: new Date().toISOString() });
@@ -423,10 +436,11 @@ await setState('ga4:realtime:coverage', { checkedAt: appendCoverage(coverageStat
    purchase_tracking_gap above reads orders:last, which the Worker writes. */
 await setState('ga4:realtime:last', {
   checkedAt: new Date().toISOString(), window: window.key, windowClock: window.clock,
-  windowStartMs: window.startMs, windowEndMs: window.endMs, frontier, lagMinutes,
+  windowStartMs: window.startMs, windowEndMs: window.endMs, frontier, lagMinutes, newest: newest.key,
   current, baseline,
   checkoutCompletion: { window: completionWindow.key, current: completionCurrent, baseline: completionBaseline, abnormal: completion.abnormal },
 });
+await saveCursor();
 
 await heartbeat('layer4', { kind: 'realtime', mode, current, baseline, checkoutCompletion: completion, results });
 console.log(JSON.stringify({ ok: true, kind: 'realtime', mode, current, baseline, checkoutCompletion: completion, storefrontHealthy, results }, null, 2));

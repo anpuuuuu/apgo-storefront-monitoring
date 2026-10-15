@@ -18,6 +18,7 @@ import {
   minuteToMs,
   nextEmptyState,
   nextRuleState,
+  nextSlotToJudge,
   propertyMinuteNow,
   realertDelayHours,
   rollingWindowEndingAt,
@@ -169,6 +170,42 @@ test("the judged slot follows GA4's frontier, within a floor and a ceiling", () 
   assert.equal(settledLagMinutes(now, '202610150500', settings), 480);
   // Frontier unknown: the floor, and the empty-window path takes it from there.
   assert.equal(settledLagMinutes(now, null, settings), 120);
+});
+
+test('slots are judged one after another, so a streak is made of neighbours', () => {
+  const timeZone = 'Asia/Kuala_Lumpur';
+  const slot = (key) => settledWindow(minuteToMs(key, timeZone), { timeZone, lagMinutes: 0, slotMinutes: 30 });
+  const options = { timeZone, slotMinutes: 30, maxBacklogMinutes: 120 };
+  // 10-15: after 13:00 the newest settled slot jumped to 14:00; judge 13:30 first.
+  assert.equal(nextSlotToJudge(slot('202610151300').startMs, slot('202610151400'), options).key, '202610151330');
+  assert.equal(nextSlotToJudge(slot('202610151330').startMs, slot('202610151400'), options).key, '202610151400');
+  // A frontier that slipped back re-reads the last slot; a duplicate moves no streak.
+  assert.equal(nextSlotToJudge(slot('202610151400').startMs, slot('202610151330'), options).key, '202610151400');
+  // Hours behind (runs stopped): jump to the newest, and the gap restarts the streak.
+  assert.equal(nextSlotToJudge(slot('202610150900').startMs, slot('202610151400'), options).key, '202610151400');
+  assert.equal(nextSlotToJudge(undefined, slot('202610151400'), options).key, '202610151400');
+});
+
+test('the 10-15 19:26 begin_checkout_zero page does not happen when no slot is skipped', () => {
+  // Real slots that evening: add_to_cart and begin_checkout per half hour.
+  const timeZone = 'Asia/Kuala_Lumpur';
+  const slots = { '202610151300': [11, 0], '202610151330': [16, 6], '202610151400': [15, 0], '202610151430': [15, 1] };
+  const abnormal = ([atc, checkouts]) => atc >= 5 && checkouts === 0;
+  const walk = (keys, settings) => {
+    let state = null;
+    let paged = false;
+    keys.forEach((key, index) => {
+      const window = settledWindow(minuteToMs(key, timeZone), { timeZone, lagMinutes: 0, slotMinutes: 30 });
+      const { next, confirmed } = nextRuleState(state, abnormal(slots[key]), T0 + index * 30 * 60_000, settings, window);
+      state = next;
+      paged ||= confirmed;
+    });
+    return paged;
+  };
+  // What ran: newest slot each time (13:00, 14:00) with a 60-minute allowance. It paged.
+  assert.equal(walk(['202610151300', '202610151400'], { ...SETTINGS, max_gap_minutes: 60 }), true);
+  // Every slot in order, neighbours only: no page.
+  assert.equal(walk(Object.keys(slots), { ...SETTINGS, max_gap_minutes: 45 }), false);
 });
 
 test('empty reports say whether GA4 is late or the tag is gone, from realtime', () => {
